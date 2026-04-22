@@ -103,8 +103,9 @@ func TestMigrate_DetectsLegacyV1(t *testing.T) {
 	if err != nil {
 		t.Fatalf("userVersion: %v", err)
 	}
-	if v != 1 {
-		t.Errorf("legacy db user_version = %d, want 1", v)
+	want := migrations[len(migrations)-1].version
+	if v != want {
+		t.Errorf("legacy db user_version = %d, want %d", v, want)
 	}
 }
 
@@ -358,5 +359,64 @@ func TestOpen_SynchronousNormal(t *testing.T) {
 	}
 	if syncMode != 1 {
 		t.Errorf("synchronous = %d, want 1 (NORMAL)", syncMode)
+	}
+}
+
+func TestMigrate_V2DedupesAndAddsUnique(t *testing.T) {
+	t.Parallel()
+	db := testDB(t)
+
+	// Bring the schema up to v1 only.
+	if _, err := db.Exec(migrations[0].up); err != nil {
+		t.Fatalf("seed v1 schema: %v", err)
+	}
+	if err := setUserVersion(db, 1); err != nil {
+		t.Fatalf("set v1: %v", err)
+	}
+
+	// One event with three duplicate (event_id, key, value) rows in event_meta.
+	if _, err := db.Exec("INSERT INTO events (text) VALUES (?)", "x"); err != nil {
+		t.Fatalf("insert event: %v", err)
+	}
+	for range 3 {
+		if _, err := db.Exec(
+			"INSERT INTO event_meta (event_id, key, value) VALUES (1, 'tag', 'ops')",
+		); err != nil {
+			t.Fatalf("insert duplicate: %v", err)
+		}
+	}
+
+	if err := migrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	var count int
+	if err := db.QueryRow(
+		"SELECT COUNT(*) FROM event_meta WHERE event_id=1 AND key='tag' AND value='ops'",
+	).Scan(&count); err != nil {
+		t.Fatalf("count after dedupe: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("got %d rows after dedupe, want 1", count)
+	}
+
+	if _, err := db.Exec(
+		"INSERT INTO event_meta (event_id, key, value) VALUES (1, 'tag', 'ops')",
+	); err == nil {
+		t.Error("expected UNIQUE constraint error on duplicate insert")
+	}
+
+	if _, err := db.Exec(
+		"INSERT INTO event_meta (event_id, key, value) VALUES (1, 'tag', 'ops') ON CONFLICT DO NOTHING",
+	); err != nil {
+		t.Errorf("ON CONFLICT DO NOTHING raised error: %v", err)
+	}
+
+	v, err := userVersion(db)
+	if err != nil {
+		t.Fatalf("userVersion: %v", err)
+	}
+	if v != 2 {
+		t.Errorf("user_version = %d, want 2", v)
 	}
 }
