@@ -32,7 +32,7 @@ func TestParse_FullFormats(t *testing.T) {
 
 func TestParse_TimeOnlyFillsToday(t *testing.T) {
 	t.Parallel()
-	for _, input := range []string{"09:30", "9:30AM", "2:15PM"} {
+	for _, input := range []string{"21:30", "9.30PM", "9:30PM", "9:30 PM", "9.30pm", "9:30pm", "9:30 pm"} {
 		t.Run(input, func(t *testing.T) {
 			t.Parallel()
 			got, err := Parse(input)
@@ -72,5 +72,33 @@ func TestParseDate_RejectsNonDate(t *testing.T) {
 	t.Parallel()
 	if _, err := ParseDate("not-a-date"); err == nil {
 		t.Error("expected error")
+	}
+}
+
+func TestFormatRelative(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 18, 14, 30, 0, 0, time.Local)
+	tests := []struct {
+		name string
+		t    time.Time
+		want string
+	}{
+		{"same instant", now, "2.30pm"},
+		{"earlier today", time.Date(2026, 4, 18, 9, 32, 0, 0, time.Local), "9.32am"},
+		{"later today", time.Date(2026, 4, 18, 21, 30, 0, 0, time.Local), "9.30pm"},
+		{"yesterday this year", time.Date(2026, 4, 17, 23, 59, 0, 0, time.Local), "Apr 17 11.59pm"},
+		{"earlier this year", time.Date(2026, 1, 5, 8, 5, 0, 0, time.Local), "Jan 05 8.05am"},
+		{"prior year", time.Date(2024, 12, 9, 21, 32, 0, 0, time.Local), "Dec 09 2024 9.32pm"},
+		{"midnight today", time.Date(2026, 4, 18, 0, 0, 0, 0, time.Local), "12.00am"},
+		{"midnight yesterday", time.Date(2026, 4, 17, 0, 0, 0, 0, time.Local), "Apr 17 12.00am"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := FormatRelative(tt.t, now); got != tt.want {
+				t.Errorf("FormatRelative(%v, %v) = %q, want %q", tt.t, now, got, tt.want)
+			}
+		})
 	}
 }
