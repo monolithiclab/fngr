@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -34,6 +35,18 @@ func testDBWithSchema(t *testing.T) *sql.DB {
 		t.Fatalf("migrate: %v", err)
 	}
 	return db
+}
+
+// migrationSQL returns the SQL body for the migration at the given 1-based
+// index. It re-invokes loadMigrations each call so the io.Reader is fresh.
+func migrationSQL(t *testing.T, index int) string {
+	t.Helper()
+	migrations := loadMigrations()
+	body, err := io.ReadAll(migrations[index].up)
+	if err != nil {
+		t.Fatalf("load migration %d: %v", index, err)
+	}
+	return string(body)
 }
 
 func TestMigrate_CreatesAllTables(t *testing.T) {
@@ -79,6 +92,7 @@ func TestMigrate_BumpsUserVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("userVersion: %v", err)
 	}
+	migrations := loadMigrations()
 	want := migrations[len(migrations)-1].version
 	if v != want {
 		t.Errorf("user_version = %d, want %d", v, want)
@@ -91,8 +105,11 @@ func TestMigrate_DetectsLegacyV1(t *testing.T) {
 
 	// Simulate a database created before the migration framework: schema
 	// matches v1 but PRAGMA user_version is still 0.
-	if _, err := db.Exec(migrations[0].up); err != nil {
+	if _, err := db.Exec(migrationSQL(t, 0)); err != nil {
 		t.Fatalf("seed legacy schema: %v", err)
+	}
+	if err := setUserVersion(db, 0); err != nil {
+		t.Fatalf("reset user_version: %v", err)
 	}
 
 	if err := migrate(db); err != nil {
@@ -103,6 +120,7 @@ func TestMigrate_DetectsLegacyV1(t *testing.T) {
 	if err != nil {
 		t.Fatalf("userVersion: %v", err)
 	}
+	migrations := loadMigrations()
 	want := migrations[len(migrations)-1].version
 	if v != want {
 		t.Errorf("legacy db user_version = %d, want %d", v, want)
@@ -367,7 +385,7 @@ func TestMigrate_V2DedupesAndAddsUnique(t *testing.T) {
 	db := testDB(t)
 
 	// Bring the schema up to v1 only.
-	if _, err := db.Exec(migrations[0].up); err != nil {
+	if _, err := db.Exec(migrationSQL(t, 0)); err != nil {
 		t.Fatalf("seed v1 schema: %v", err)
 	}
 	if err := setUserVersion(db, 1); err != nil {

@@ -2,72 +2,62 @@ package db
 
 import (
 	"database/sql"
+	"embed"
 	"fmt"
+	"io"
+	"path"
+	"sort"
+	"strconv"
+	"strings"
 )
 
 // migration is a single forward step from version N-1 to N.
 type migration struct {
 	version int
-	up      string
+	up      io.Reader
 }
 
-// migrations are applied in order; never edit a published migration. Add new
-// versions at the bottom.
-var migrations = []migration{
-	{
-		version: 1,
-		up: `
-			CREATE TABLE events (
-				id         INTEGER PRIMARY KEY AUTOINCREMENT,
-				parent_id  INTEGER REFERENCES events(id) ON DELETE CASCADE,
-				text       TEXT NOT NULL,
-				created_at DATETIME NOT NULL DEFAULT (datetime('now'))
-			);
+// dbExec accepts either *sql.DB or *sql.Tx.
+type dbExec interface {
+	Exec(string, ...any) (sql.Result, error)
+}
 
-			CREATE TABLE event_meta (
-				event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
-				key      TEXT NOT NULL,
-				value    TEXT NOT NULL
-			);
+//go:embed migrations/*.sql
+var migrationsFS embed.FS
 
-			CREATE INDEX idx_events_parent_id ON events(parent_id);
-			CREATE INDEX idx_events_created_at ON events(created_at);
+// loadMigrations reads every embedded `<N>.sql` file and returns them sorted
+// by version. Never edit a published migration; add new versions by dropping
+// a new `<N>.sql` file into `internal/db/migrations/`.
+func loadMigrations() []migration {
+	entries, err := migrationsFS.ReadDir("migrations")
+	if err != nil {
+		panic(fmt.Sprintf("read embedded migrations: %v", err))
+	}
 
-			CREATE INDEX idx_event_meta_key_value ON event_meta(key, value);
-			CREATE INDEX idx_event_meta_event_id ON event_meta(event_id, key, value);
+	out := make([]migration, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := strings.TrimSuffix(e.Name(), ".sql")
+		v, err := strconv.Atoi(name)
+		if err != nil {
+			panic(fmt.Sprintf("migration filename %q must be <version>.sql: %v", e.Name(), err))
+		}
+		f, err := migrationsFS.Open(path.Join("migrations", e.Name()))
+		if err != nil {
+			panic(fmt.Sprintf("read migration %s: %v", e.Name(), err))
+		}
+		out = append(out, migration{version: v, up: f})
+	}
 
-			CREATE VIRTUAL TABLE events_fts USING fts5(
-				content,
-				tokenize = "unicode61 tokenchars '=/'"
-			);
-
-			CREATE TRIGGER trg_events_fts_delete
-			AFTER DELETE ON events
-			BEGIN
-				DELETE FROM events_fts WHERE rowid = OLD.id;
-			END;
-		`,
-	},
-	{
-		version: 2,
-		up: `
-			-- Pre-emptive dedupe (no-op when Add already deduped via
-			-- parse.CollectMeta, which is the only known insert path).
-			DELETE FROM event_meta
-			 WHERE rowid NOT IN (
-			   SELECT MIN(rowid) FROM event_meta
-			    GROUP BY event_id, key, value
-			 );
-
-			-- Replace the non-unique (key, value) index with a UNIQUE
-			-- index on (key, value, event_id). Same prefix-lookup
-			-- performance for ListMeta / CountMeta plus DB-level
-			-- uniqueness so INSERT ... ON CONFLICT DO NOTHING works.
-			DROP INDEX IF EXISTS idx_event_meta_key_value;
-			CREATE UNIQUE INDEX idx_event_meta_key_value_event_id
-			    ON event_meta(key, value, event_id);
-		`,
-	},
+	sort.Slice(out, func(i, j int) bool { return out[i].version < out[j].version })
+	for i, m := range out {
+		if m.version != i+1 {
+			panic(fmt.Sprintf("migrations must be contiguous starting at 1; got version %d at index %d", m.version, i))
+		}
+	}
+	return out
 }
 
 // migrate applies any pending migrations. Pre-migration databases (created
@@ -93,7 +83,7 @@ func migrate(db *sql.DB) error {
 		}
 	}
 
-	for _, m := range migrations {
+	for _, m := range loadMigrations() {
 		if m.version <= current {
 			continue
 		}
@@ -112,7 +102,7 @@ func userVersion(db *sql.DB) (int, error) {
 	return v, nil
 }
 
-func setUserVersion(db *sql.DB, v int) error {
+func setUserVersion(db dbExec, v int) error {
 	if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", v)); err != nil { // #nosec G201 -- v is an internal int constant
 		return fmt.Errorf("set user_version: %w", err)
 	}
@@ -137,10 +127,14 @@ func applyMigration(db *sql.DB, m migration) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := tx.Exec(m.up); err != nil {
+	sql, err := io.ReadAll(m.up)
+	if err != nil {
+		return fmt.Errorf("read migration: %w", err)
+	}
+	if _, err := tx.Exec(string(sql)); err != nil {
 		return fmt.Errorf("apply: %w", err)
 	}
-	if _, err := tx.Exec(fmt.Sprintf("PRAGMA user_version = %d", m.version)); err != nil { // #nosec G201 -- m.version is an internal int constant
+	if err := setUserVersion(tx, m.version); err != nil {
 		return fmt.Errorf("bump user_version: %w", err)
 	}
 	return tx.Commit()

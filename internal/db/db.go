@@ -37,24 +37,19 @@ func Open(path string, create bool) (*sql.DB, error) {
 		return nil, fmt.Errorf("cannot open database: %w", err)
 	}
 
-	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("cannot enable foreign keys: %w", err)
+	pragmas := []struct{ key, value string }{
+		{"foreign_keys", "ON"},
+		{"journal_mode", "WAL"},
+		{"busy_timeout", "5000"},
+		{"synchronous", "NORMAL"},
 	}
 
-	if _, err := db.Exec("PRAGMA journal_mode = WAL"); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("cannot enable WAL mode: %w", err)
-	}
-
-	if _, err := db.Exec("PRAGMA busy_timeout = 5000"); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("cannot set busy timeout: %w", err)
-	}
-
-	if _, err := db.Exec("PRAGMA synchronous = NORMAL"); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("cannot set synchronous mode: %w", err)
+	for _, p := range pragmas {
+		query := fmt.Sprintf("PRAGMA %s = %s", p.key, p.value)
+		if _, err := db.Exec(query); err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("cannot set pragma %s: %w", p.key, err)
+		}
 	}
 
 	if err := migrate(db); err != nil {
