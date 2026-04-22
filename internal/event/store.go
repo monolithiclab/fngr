@@ -3,6 +3,7 @@ package event
 import (
 	"context"
 	"database/sql"
+	"iter"
 	"time"
 
 	"github.com/monolithiclab/fngr/internal/parse"
@@ -39,6 +40,10 @@ func (s *Store) HasChildren(ctx context.Context, id int64) (bool, error) {
 
 func (s *Store) List(ctx context.Context, opts ListOpts) ([]Event, error) {
 	return List(ctx, s.DB, opts)
+}
+
+func (s *Store) ListSeq(ctx context.Context, opts ListOpts) iter.Seq2[Event, error] {
+	return ListSeq(ctx, s.DB, opts)
 }
 
 func (s *Store) GetSubtree(ctx context.Context, rootID int64) ([]Event, error) {

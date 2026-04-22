@@ -2,6 +2,7 @@ package event
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -256,5 +257,28 @@ func TestStore_AddWithCreatedAtRoundTrips(t *testing.T) {
 	}
 	if !ev.CreatedAt.Equal(want) {
 		t.Errorf("created_at = %v, want %v", ev.CreatedAt, want)
+	}
+}
+
+func TestStore_ListSeq(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+
+	for i := range 3 {
+		if _, err := s.Add(ctx, fmt.Sprintf("e%d", i), nil, nil, nil); err != nil {
+			t.Fatalf("Add %d: %v", i, err)
+		}
+	}
+
+	var got []string
+	for ev, err := range s.ListSeq(ctx, ListOpts{Ascending: true}) {
+		if err != nil {
+			t.Fatalf("ListSeq: %v", err)
+		}
+		got = append(got, ev.Text)
+	}
+	want := []string{"e0", "e1", "e2"}
+	if len(got) != 3 || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+		t.Errorf("got %v, want %v", got, want)
 	}
 }
