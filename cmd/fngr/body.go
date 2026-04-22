@@ -33,7 +33,11 @@ func resolveBody(args []string, useEditor bool, io ioStreams) (string, error) {
 	case hasArgs && useEditor:
 		return launchEditor(strings.Join(args, " "))
 	case hasArgs:
-		return strings.Join(args, " "), nil
+		body := strings.Join(args, " ")
+		if strings.TrimSpace(body) == "" {
+			return "", fmt.Errorf("event text cannot be empty")
+		}
+		return body, nil
 	case useEditor:
 		return launchEditor("")
 	case piped:

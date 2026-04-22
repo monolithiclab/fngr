@@ -175,6 +175,8 @@ func TestResolveBody(t *testing.T) {
 		{name: "edit-flag-piped-error", useEditor: true, isTTY: false, stdin: "y", wantErr: "--edit conflicts"},
 		// Editor cancel (empty save) propagates errCancel.
 		{name: "editor-cancel", useEditor: true, isTTY: true, stubErr: errCancel, wantInit: "", wantErr: "cancelled"},
+		{name: "empty-arg-rejected", args: []string{""}, isTTY: true, wantErr: "event text cannot be empty"},
+		{name: "whitespace-only-arg-rejected", args: []string{" ", "\t"}, isTTY: true, wantErr: "event text cannot be empty"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

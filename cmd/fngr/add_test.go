@@ -219,6 +219,23 @@ func TestAddCmd_ArgsAndStdinError(t *testing.T) {
 	}
 }
 
+func TestAddCmd_EmptyArgRejected(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, _ := newTestIO("")
+
+	cmd := &AddCmd{Args: []string{""}, Author: "alice"}
+	err := cmd.Run(s, io)
+	if err == nil || !strings.Contains(err.Error(), "event text cannot be empty") {
+		t.Errorf("err = %v, want 'event text cannot be empty'", err)
+	}
+
+	events, _ := s.List(context.Background(), event.ListOpts{})
+	if len(events) != 0 {
+		t.Errorf("created %d events, want 0 (empty arg should reject)", len(events))
+	}
+}
+
 func TestAddCmd_EditFlagPipedError(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
