@@ -62,8 +62,7 @@ func main() {
 	}
 	defer database.Close()
 
-	store := event.NewStore(database)
-	io := ioStreams{In: os.Stdin, Out: os.Stdout}
-	err = ctx.Run(eventStore(store), io)
-	ctx.FatalIfErrorf(err)
+	ctx.BindTo(event.NewStore(database), (*eventStore)(nil))
+	ctx.Bind(ioStreams{In: os.Stdin, Out: os.Stdout})
+	ctx.FatalIfErrorf(ctx.Run())
 }
