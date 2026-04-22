@@ -72,6 +72,8 @@ func TestKongDispatch_AllCommands(t *testing.T) {
 		{name: "event-show", argv: []string{"event", "show", "1"}, isTTY: true, want: ""},
 		{name: "event-show-tree", argv: []string{"event", "show", "1", "--tree"}, isTTY: true, want: ""},
 		{name: "event-show-json", argv: []string{"event", "show", "1", "--format", "json"}, isTTY: true, want: ""},
+		{name: "list-md", argv: []string{"list", "--format", "md"}, isTTY: true, want: ""},
+		{name: "event-show-md", argv: []string{"event", "show", "1", "--format", "md"}, isTTY: true, want: ""},
 		{name: "event-text", argv: []string{"event", "text", "1", "x"}, isTTY: true, want: ""},
 		{name: "event-time", argv: []string{"event", "time", "1", "09:30"}, isTTY: true, want: ""},
 		{name: "event-date", argv: []string{"event", "date", "1", "2026-05-01"}, isTTY: true, want: ""},

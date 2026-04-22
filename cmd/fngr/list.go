@@ -13,7 +13,7 @@ import (
 type ListCmd struct {
 	From    string `help:"Start date (inclusive)." placeholder:"YYYY-MM-DD"`
 	To      string `help:"End date (inclusive)." placeholder:"YYYY-MM-DD"`
-	Format  string `help:"Output format: tree (default), flat, json, csv." enum:"${LIST_FORMATS}" default:"${LIST_FORMAT_DEFAULT}"`
+	Format  string `help:"Output format: tree (default), flat, json, csv, md." enum:"${LIST_FORMATS}" default:"${LIST_FORMAT_DEFAULT}"`
 	Limit   int    `help:"Maximum events to return (0 = no limit)." short:"n" default:"0"`
 	Reverse bool   `help:"Sort oldest first (default is newest first)." short:"r"`
 	NoPager bool   `help:"Disable the pager even when stdout is a TTY."`

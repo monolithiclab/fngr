@@ -226,6 +226,7 @@ func TestEvents_Dispatch(t *testing.T) {
 		{"flat", func(s string) bool { return strings.Contains(s, "1   Apr 10 2026 12.00am  nicolas  hi") }},
 		{"json", func(s string) bool { return strings.HasPrefix(s, "[\n") }},
 		{"csv", func(s string) bool { return strings.HasPrefix(s, "id,parent_id,") }},
+		{"md", func(s string) bool { return strings.HasPrefix(s, "## ") }},
 		{"unknown", func(s string) bool { return strings.Contains(s, "1   Apr 10 2026 12.00am  nicolas  hi") }},
 	}
 
@@ -254,6 +255,7 @@ func TestSingleEvent_Dispatch(t *testing.T) {
 		{"text", func(s string) bool { return strings.Contains(s, "ID:     1") }},
 		{"json", func(s string) bool { return strings.HasPrefix(s, "[\n") }},
 		{"csv", func(s string) bool { return strings.HasPrefix(s, "id,parent_id,") }},
+		{"md", func(s string) bool { return strings.HasPrefix(s, "## ") }},
 	}
 
 	for _, tt := range tests {
@@ -545,6 +547,7 @@ func TestEventsStream_Dispatch(t *testing.T) {
 		{"flat", func(s string) bool { return strings.Contains(s, "x") }},
 		{"json", func(s string) bool { return strings.HasPrefix(s, "[") }},
 		{"csv", func(s string) bool { return strings.HasPrefix(s, "id,parent_id,") }},
+		{"md", func(s string) bool { return strings.HasPrefix(s, "## ") }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.format, func(t *testing.T) {

@@ -20,18 +20,19 @@ import (
 // render dispatchers below. cmd/fngr wires these into Kong via kongVars
 // so the flag enum and default stay in lockstep with this package.
 const (
-	FormatTree = "tree"
-	FormatFlat = "flat"
-	FormatJSON = "json"
-	FormatCSV  = "csv"
-	FormatText = "text"
+	FormatTree     = "tree"
+	FormatFlat     = "flat"
+	FormatJSON     = "json"
+	FormatCSV      = "csv"
+	FormatText     = "text"
+	FormatMarkdown = "md"
 )
 
 // ListFormats are the formats accepted by Events and EventsStream.
-var ListFormats = []string{FormatTree, FormatFlat, FormatJSON, FormatCSV}
+var ListFormats = []string{FormatTree, FormatFlat, FormatJSON, FormatCSV, FormatMarkdown}
 
 // EventFormats are the formats accepted by SingleEvent.
-var EventFormats = []string{FormatText, FormatJSON, FormatCSV}
+var EventFormats = []string{FormatText, FormatJSON, FormatCSV, FormatMarkdown}
 
 // nowFunc is the relative-stamp anchor. Production never reassigns it;
 // tests swap it via pinNow inside non-parallel subtests.
@@ -63,7 +64,7 @@ func formatEventLine(id int64, date, author, text string) string {
 }
 
 // Events writes a list of events in the requested format. Supported formats
-// are FormatTree (default), FormatFlat, FormatJSON, FormatCSV.
+// are FormatTree (default), FormatFlat, FormatJSON, FormatCSV, FormatMarkdown.
 func Events(w io.Writer, format string, events []event.Event) error {
 	switch format {
 	case FormatCSV:
@@ -72,19 +73,23 @@ func Events(w io.Writer, format string, events []event.Event) error {
 		return Flat(w, events)
 	case FormatJSON:
 		return JSON(w, events)
+	case FormatMarkdown:
+		return Markdown(w, events)
 	default:
 		return Tree(w, events)
 	}
 }
 
 // SingleEvent writes one event in the requested format. Supported formats
-// are FormatText (default), FormatJSON, FormatCSV.
+// are FormatText (default), FormatJSON, FormatCSV, FormatMarkdown.
 func SingleEvent(w io.Writer, format string, ev *event.Event) error {
 	switch format {
 	case FormatCSV:
 		return CSV(w, []event.Event{*ev})
 	case FormatJSON:
 		return JSON(w, []event.Event{*ev})
+	case FormatMarkdown:
+		return Markdown(w, []event.Event{*ev})
 	default:
 		return Event(w, ev)
 	}
@@ -354,6 +359,8 @@ func EventsStream(w io.Writer, format string, seq iter.Seq2[event.Event, error])
 		return JSONStream(w, seq)
 	case FormatFlat:
 		return FlatStream(w, seq)
+	case FormatMarkdown:
+		return MarkdownStream(w, seq)
 	case FormatTree:
 		return fmt.Errorf("EventsStream: tree format requires the full slice; use Events instead")
 	default:
