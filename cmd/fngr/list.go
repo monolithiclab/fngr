@@ -10,21 +10,21 @@ import (
 )
 
 type ListCmd struct {
-	Filter string `arg:"" optional:"" help:"Filter expression (#tag, @person, key=value, bare words). Operators: & (AND), | (OR), ! (NOT)."`
-	From   string `help:"Start date (inclusive)." placeholder:"YYYY-MM-DD"`
-	To     string `help:"End date (inclusive)." placeholder:"YYYY-MM-DD"`
-	Format string `help:"Output format: tree (default), flat, json, csv." enum:"tree,flat,json,csv" default:"tree"`
-	Limit  int    `help:"Maximum events to return (0 = no limit)." short:"n" default:"0"`
-	Sort   string `help:"Sort order: asc (default, oldest first) or desc (newest first)." enum:"asc,desc" default:"asc"`
+	Filter  string `arg:"" optional:"" help:"Filter expression (#tag, @person, key=value, bare words). Operators: & (AND), | (OR), ! (NOT)."`
+	From    string `help:"Start date (inclusive)." placeholder:"YYYY-MM-DD"`
+	To      string `help:"End date (inclusive)." placeholder:"YYYY-MM-DD"`
+	Format  string `help:"Output format: tree (default), flat, json, csv." enum:"tree,flat,json,csv" default:"tree"`
+	Limit   int    `help:"Maximum events to return (0 = no limit)." short:"n" default:"0"`
+	Reverse bool   `help:"Sort oldest first (default is newest first)." short:"r"`
 }
 
 func (c *ListCmd) Run(s eventStore, io ioStreams) error {
 	ctx := context.Background()
 
 	opts := event.ListOpts{
-		Filter: c.Filter,
-		Limit:  c.Limit,
-		Desc:   c.Sort == "desc",
+		Filter:    c.Filter,
+		Limit:     c.Limit,
+		Ascending: c.Reverse,
 	}
 	if c.From != "" {
 		from, err := timefmt.ParseDate(c.From)

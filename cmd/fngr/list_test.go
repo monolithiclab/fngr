@@ -55,7 +55,7 @@ func TestListCmd_JSON(t *testing.T) {
 	}
 }
 
-func TestListCmd_LimitAndSort(t *testing.T) {
+func TestListCmd_LimitAndDefaultSort(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
 	io, out := newTestIO("")
@@ -68,7 +68,7 @@ func TestListCmd_LimitAndSort(t *testing.T) {
 		}
 	}
 
-	cmd := &ListCmd{Format: "flat", Limit: 1, Sort: "desc"}
+	cmd := &ListCmd{Format: "flat", Limit: 1}
 	if err := cmd.Run(s, io); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -77,7 +77,30 @@ func TestListCmd_LimitAndSort(t *testing.T) {
 		t.Errorf("limit=1 produced %d lines:\n%s", strings.Count(got, "\n"), got)
 	}
 	if !strings.Contains(got, "gamma") {
-		t.Errorf("desc sort: expected gamma first, got:\n%s", got)
+		t.Errorf("default sort: expected gamma first, got:\n%s", got)
+	}
+}
+
+func TestListCmd_Reverse(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, out := newTestIO("")
+
+	for _, text := range []string{"alpha", "beta", "gamma"} {
+		if _, err := s.Add(context.Background(), text, nil, []parse.Meta{
+			{Key: "author", Value: "alice"},
+		}, nil); err != nil {
+			t.Fatalf("Add %s: %v", text, err)
+		}
+	}
+
+	cmd := &ListCmd{Format: "flat", Limit: 1, Reverse: true}
+	if err := cmd.Run(s, io); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "alpha") {
+		t.Errorf("reverse sort: expected alpha first, got:\n%s", got)
 	}
 }
 

@@ -317,11 +317,11 @@ func TestList_NoFilter(t *testing.T) {
 	if len(events) != 2 {
 		t.Fatalf("len(events) = %d, want 2", len(events))
 	}
-	if events[0].Text != "first event #work" {
-		t.Errorf("events[0].Text = %q, want %q", events[0].Text, "first event #work")
+	if events[0].Text != "second event #personal" {
+		t.Errorf("events[0].Text = %q, want %q", events[0].Text, "second event #personal")
 	}
-	if events[1].Text != "second event #personal" {
-		t.Errorf("events[1].Text = %q, want %q", events[1].Text, "second event #personal")
+	if events[1].Text != "first event #work" {
+		t.Errorf("events[1].Text = %q, want %q", events[1].Text, "first event #work")
 	}
 }
 
@@ -691,20 +691,20 @@ func TestList_LimitAndSort(t *testing.T) {
 		}
 	}
 
-	asc, err := List(ctx, database, ListOpts{Limit: 2})
+	desc, err := List(ctx, database, ListOpts{Limit: 2})
 	if err != nil {
-		t.Fatalf("List asc limit: %v", err)
-	}
-	if len(asc) != 2 || asc[0].Text != "evt 0" {
-		t.Errorf("asc limit got %d events, first=%q; want 2 starting with 'evt 0'", len(asc), asc[0].Text)
-	}
-
-	desc, err := List(ctx, database, ListOpts{Limit: 2, Desc: true})
-	if err != nil {
-		t.Fatalf("List desc limit: %v", err)
+		t.Fatalf("List default limit: %v", err)
 	}
 	if len(desc) != 2 || desc[0].Text != "evt 4" {
-		t.Errorf("desc limit got %d events, first=%q; want 2 starting with 'evt 4'", len(desc), desc[0].Text)
+		t.Errorf("default limit got %d events, first=%q; want 2 starting with 'evt 4'", len(desc), desc[0].Text)
+	}
+
+	asc, err := List(ctx, database, ListOpts{Limit: 2, Ascending: true})
+	if err != nil {
+		t.Fatalf("List ascending limit: %v", err)
+	}
+	if len(asc) != 2 || asc[0].Text != "evt 0" {
+		t.Errorf("ascending limit got %d events, first=%q; want 2 starting with 'evt 0'", len(asc), asc[0].Text)
 	}
 }
 

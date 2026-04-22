@@ -281,11 +281,11 @@ func ListMeta(ctx context.Context, db *sql.DB) ([]MetaCount, error) {
 }
 
 type ListOpts struct {
-	Filter string
-	From   *time.Time // inclusive lower bound
-	To     *time.Time // exclusive upper bound (compute end-of-day in caller)
-	Limit  int        // 0 means no limit
-	Desc   bool       // newest first when true; default is oldest first
+	Filter    string
+	From      *time.Time // inclusive lower bound
+	To        *time.Time // exclusive upper bound (compute end-of-day in caller)
+	Limit     int        // 0 means no limit
+	Ascending bool       // oldest first when true; default is newest first
 }
 
 func List(ctx context.Context, db *sql.DB, opts ListOpts) ([]Event, error) {
@@ -323,10 +323,10 @@ func List(ctx context.Context, db *sql.DB, opts ListOpts) ([]Event, error) {
 		args = append(args, opts.To.UTC().Format(timefmt.DateTimeFormat))
 	}
 
-	if opts.Desc {
-		query += " ORDER BY e.created_at DESC"
-	} else {
+	if opts.Ascending {
 		query += " ORDER BY e.created_at ASC"
+	} else {
+		query += " ORDER BY e.created_at DESC"
 	}
 	if opts.Limit > 0 {
 		query += " LIMIT ?"
