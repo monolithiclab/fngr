@@ -165,6 +165,40 @@ func TestFlat(t *testing.T) {
 	}
 }
 
+func TestEvent_DetailIncludesParentAndMeta(t *testing.T) {
+	t.Parallel()
+	parent := int64(1)
+	ev := makeEvent(2, &parent, "child entry", "2026-04-10", "alice")
+
+	var b bytes.Buffer
+	if err := Event(&b, &ev); err != nil {
+		t.Fatalf("Event: %v", err)
+	}
+	got := b.String()
+	for _, want := range []string{"ID:     2", "Parent: 1", "Date:", "Text:   child entry", "Meta:", "author=alice"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("Event output missing %q; got:\n%s", want, got)
+		}
+	}
+}
+
+func TestEvent_DetailWithoutParentOrMeta(t *testing.T) {
+	t.Parallel()
+	ev := event.Event{ID: 7, Text: "lone entry"}
+
+	var b bytes.Buffer
+	if err := Event(&b, &ev); err != nil {
+		t.Fatalf("Event: %v", err)
+	}
+	got := b.String()
+	if strings.Contains(got, "Parent:") {
+		t.Errorf("Event output should omit Parent line; got:\n%s", got)
+	}
+	if strings.Contains(got, "Meta:") {
+		t.Errorf("Event output should omit Meta line; got:\n%s", got)
+	}
+}
+
 func TestEvents_Dispatch(t *testing.T) {
 	t.Parallel()
 	events := []event.Event{makeEvent(1, nil, "hi", "2026-04-10", "nicolas")}

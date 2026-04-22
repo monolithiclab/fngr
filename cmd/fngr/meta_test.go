@@ -145,6 +145,78 @@ func TestMetaDeleteCmd_NoMatch(t *testing.T) {
 	}
 }
 
+func TestMetaDeleteCmd_AbortDoesNotMutate(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, out := newTestIO("n\n")
+
+	if _, err := s.Add(context.Background(), "x", nil, []parse.Meta{
+		{Key: "tag", Value: "keep"},
+	}, nil); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	cmd := &MetaDeleteCmd{Meta: "tag=keep"}
+	if err := cmd.Run(s, io); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if !strings.Contains(out.String(), "Aborted") {
+		t.Errorf("output = %q, want Aborted", out.String())
+	}
+	count, err := s.CountMeta(context.Background(), "tag", "keep")
+	if err != nil {
+		t.Fatalf("CountMeta: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("count after abort = %d, want 1", count)
+	}
+}
+
+func TestMetaDeleteCmd_ConfirmDeletes(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, out := newTestIO("y\n")
+
+	if _, err := s.Add(context.Background(), "x", nil, []parse.Meta{
+		{Key: "tag", Value: "doomed"},
+	}, nil); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	cmd := &MetaDeleteCmd{Meta: "tag=doomed"}
+	if err := cmd.Run(s, io); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.Contains(out.String(), "Deleted 1 occurrence(s)") {
+		t.Errorf("output = %q, want Deleted 1 occurrence(s)", out.String())
+	}
+}
+
+func TestMetaUpdateCmd_BadNewFormat(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, _ := newTestIO("")
+
+	cmd := &MetaUpdateCmd{Old: "tag=ops", New: "bad"}
+	err := cmd.Run(s, io)
+	if err == nil {
+		t.Fatal("expected error for malformed new key")
+	}
+}
+
+func TestMetaDeleteCmd_BadFormat(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, _ := newTestIO("")
+
+	cmd := &MetaDeleteCmd{Meta: "noequals"}
+	err := cmd.Run(s, io)
+	if err == nil {
+		t.Fatal("expected error for malformed meta")
+	}
+}
+
 func TestMetaDeleteCmd_Force(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)

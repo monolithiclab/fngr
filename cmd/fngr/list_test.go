@@ -93,6 +93,18 @@ func TestListCmd_InvalidFromDate(t *testing.T) {
 	}
 }
 
+func TestListCmd_InvalidToDate(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, _ := newTestIO("")
+
+	cmd := &ListCmd{To: "nope"}
+	err := cmd.Run(s, io)
+	if err == nil || !strings.Contains(err.Error(), "--to") {
+		t.Errorf("error = %v, want --to parse error", err)
+	}
+}
+
 func TestListCmd_FilterAndDateRange(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)

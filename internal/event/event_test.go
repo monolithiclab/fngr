@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -432,6 +433,56 @@ func TestCountMeta(t *testing.T) {
 	}
 	if got != 0 {
 		t.Errorf("CountMeta(tag, missing) = %d, want 0", got)
+	}
+}
+
+func TestUpdateMeta_RejectsWellKnownKey(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	if _, err := Add(ctx, database, "x", nil, []parse.Meta{
+		{Key: MetaKeyAuthor, Value: "alice"},
+	}, nil); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	_, err := UpdateMeta(ctx, database, MetaKeyAuthor, "alice", MetaKeyAuthor, "bob")
+	if err == nil || !strings.Contains(err.Error(), "well-known") {
+		t.Errorf("err = %v, want well-known key rejection", err)
+	}
+}
+
+func TestDeleteMeta_RejectsWellKnownKey(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	if _, err := Add(ctx, database, "x", nil, []parse.Meta{
+		{Key: MetaKeyAuthor, Value: "alice"},
+	}, nil); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	_, err := DeleteMeta(ctx, database, MetaKeyAuthor, "alice")
+	if err == nil || !strings.Contains(err.Error(), "well-known") {
+		t.Errorf("err = %v, want well-known key rejection", err)
+	}
+}
+
+func TestHasChildren_False(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	id, err := Add(ctx, database, "lonely", nil, nil, nil)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	has, err := HasChildren(ctx, database, id)
+	if err != nil {
+		t.Fatalf("HasChildren: %v", err)
+	}
+	if has {
+		t.Error("HasChildren = true, want false")
 	}
 }
 
