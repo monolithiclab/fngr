@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
-	"strings"
 )
 
 type AddCmd struct {
@@ -65,22 +64,17 @@ func (c *ListCmd) Run(db *sql.DB) error {
 		return err
 	}
 
-	var output string
 	switch c.Format {
 	case "json":
-		output = RenderJSON(events)
+		return RenderJSON(os.Stdout, events)
 	case "csv":
-		output = RenderCSV(events)
+		return RenderCSV(os.Stdout, events)
 	default:
 		if c.Tree {
-			output = RenderTree(events)
-		} else {
-			output = RenderFlat(events)
+			return RenderTree(os.Stdout, events)
 		}
+		return RenderFlat(os.Stdout, events)
 	}
-
-	fmt.Print(output)
-	return nil
 }
 
 func (c *ShowCmd) Run(db *sql.DB) error {
@@ -89,8 +83,7 @@ func (c *ShowCmd) Run(db *sql.DB) error {
 		if err != nil {
 			return err
 		}
-		fmt.Print(RenderTree(events))
-		return nil
+		return RenderTree(os.Stdout, events)
 	}
 
 	event, err := GetEvent(db, c.ID)
@@ -98,21 +91,7 @@ func (c *ShowCmd) Run(db *sql.DB) error {
 		return err
 	}
 
-	fmt.Printf("ID:     %d\n", event.ID)
-	if event.ParentID != nil {
-		fmt.Printf("Parent: %d\n", *event.ParentID)
-	}
-	fmt.Printf("Date:   %s\n", event.CreatedAt.Format("2006-01-02 15:04:05"))
-	fmt.Printf("Text:   %s\n", event.Text)
-
-	if len(event.Meta) > 0 {
-		fmt.Println("Meta:")
-		for _, m := range event.Meta {
-			fmt.Printf("  %s=%s\n", m.Key, m.Value)
-		}
-	}
-
-	return nil
+	return RenderEvent(os.Stdout, event)
 }
 
 func (c *DeleteCmd) Run(db *sql.DB) error {
@@ -134,7 +113,6 @@ func (c *MetaCmd) Run(db *sql.DB) error {
 		return nil
 	}
 
-	// Find max widths for aligned output.
 	maxKey, maxVal := 0, 0
 	for _, mc := range counts {
 		if len(mc.Key) > maxKey {
@@ -145,11 +123,9 @@ func (c *MetaCmd) Run(db *sql.DB) error {
 		}
 	}
 
-	var b strings.Builder
 	for _, mc := range counts {
-		fmt.Fprintf(&b, "%-*s=%-*s  (%d)\n", maxKey, mc.Key, maxVal, mc.Value, mc.Count)
+		fmt.Fprintf(os.Stdout, "%-*s=%-*s  (%d)\n", maxKey, mc.Key, maxVal, mc.Value, mc.Count)
 	}
-	fmt.Print(b.String())
 
 	return nil
 }

@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -18,12 +19,21 @@ func makeEvent(id int64, parentID *int64, text string, date string, author strin
 	}
 }
 
+func renderTreeString(t *testing.T, events []Event) string {
+	t.Helper()
+	var b bytes.Buffer
+	if err := RenderTree(&b, events); err != nil {
+		t.Fatalf("RenderTree: %v", err)
+	}
+	return b.String()
+}
+
 func TestRenderTree_Empty(t *testing.T) {
 	t.Parallel()
-	if got := RenderTree(nil); got != "" {
+	if got := renderTreeString(t, nil); got != "" {
 		t.Errorf("RenderTree(nil) = %q, want %q", got, "")
 	}
-	if got := RenderTree([]Event{}); got != "" {
+	if got := renderTreeString(t, []Event{}); got != "" {
 		t.Errorf("RenderTree([]) = %q, want %q", got, "")
 	}
 }
@@ -39,7 +49,7 @@ func TestRenderTree_FlatList(t *testing.T) {
 		"1   2026-04-10  nicolas  First event\n" +
 		"2   2026-04-11  nicolas  Second event\n"
 
-	got := RenderTree(events)
+	got := renderTreeString(t, events)
 	if got != want {
 		t.Errorf("RenderTree flat list:\ngot:\n%s\nwant:\n%s", got, want)
 	}
@@ -58,7 +68,7 @@ func TestRenderTree_NestedChildren(t *testing.T) {
 		"\u251c\u2500 2   2026-04-10  nicolas  First child\n" +
 		"\u2514\u2500 3   2026-04-11  nicolas  Second child\n"
 
-	got := RenderTree(events)
+	got := renderTreeString(t, events)
 	if got != want {
 		t.Errorf("RenderTree nested:\ngot:\n%s\nwant:\n%s", got, want)
 	}
@@ -77,7 +87,7 @@ func TestRenderTree_DeepNesting(t *testing.T) {
 		"\u2514\u2500 2   2026-04-10  nicolas  Child\n" +
 		"   \u2514\u2500 3   2026-04-11  nicolas  Grandchild\n"
 
-	got := RenderTree(events)
+	got := renderTreeString(t, events)
 	if got != want {
 		t.Errorf("RenderTree deep nesting:\ngot:\n%s\nwant:\n%s", got, want)
 	}
@@ -100,7 +110,7 @@ func TestRenderTree_MixedRootsAndChildren(t *testing.T) {
 		"\u2514\u2500 3   2026-04-11  nicolas  Deploy v2.0 #ops\n" +
 		"5   2026-04-12  nicolas  Lunch with Sarah\n"
 
-	got := RenderTree(events)
+	got := renderTreeString(t, events)
 	if got != want {
 		t.Errorf("RenderTree mixed:\ngot:\n%s\nwant:\n%s", got, want)
 	}
@@ -117,7 +127,11 @@ func TestRenderFlat(t *testing.T) {
 		"1   2026-04-10  nicolas  Parent event\n" +
 		"2   2026-04-11  nicolas  Child event\n"
 
-	got := RenderFlat(events)
+	var b bytes.Buffer
+	if err := RenderFlat(&b, events); err != nil {
+		t.Fatalf("RenderFlat: %v", err)
+	}
+	got := b.String()
 	if got != want {
 		t.Errorf("RenderFlat:\ngot:\n%s\nwant:\n%s", got, want)
 	}
@@ -150,20 +164,21 @@ func TestRenderJSON(t *testing.T) {
 		makeEvent(1, nil, "Test event", "2026-04-10", "nicolas"),
 	}
 
-	got := RenderJSON(events)
+	var b bytes.Buffer
+	if err := RenderJSON(&b, events); err != nil {
+		t.Fatalf("RenderJSON: %v", err)
+	}
+	got := b.String()
 
-	// Must be valid JSON.
 	var parsed []json.RawMessage
 	if err := json.Unmarshal([]byte(got), &parsed); err != nil {
 		t.Fatalf("RenderJSON produced invalid JSON: %v\noutput:\n%s", err, got)
 	}
 
-	// Must contain exactly 1 item.
 	if len(parsed) != 1 {
 		t.Errorf("RenderJSON produced %d items, want 1", len(parsed))
 	}
 
-	// Must end with a trailing newline.
 	if !strings.HasSuffix(got, "\n") {
 		t.Error("RenderJSON output missing trailing newline")
 	}
@@ -175,15 +190,17 @@ func TestRenderCSV(t *testing.T) {
 		makeEvent(1, nil, "Test event", "2026-04-10", "nicolas"),
 	}
 
-	got := RenderCSV(events)
+	var b bytes.Buffer
+	if err := RenderCSV(&b, events); err != nil {
+		t.Fatalf("RenderCSV: %v", err)
+	}
+	got := b.String()
 	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
 
-	// Must have header + 1 data row = 2 lines total.
 	if len(lines) != 2 {
 		t.Errorf("RenderCSV produced %d lines, want 2; output:\n%s", len(lines), got)
 	}
 
-	// Header must be correct.
 	wantHeader := "id,parent_id,created_at,author,text"
 	if lines[0] != wantHeader {
 		t.Errorf("RenderCSV header = %q, want %q", lines[0], wantHeader)
@@ -198,7 +215,11 @@ func TestRenderCSV_Sanitization(t *testing.T) {
 		makeEvent(3, nil, "@malicious", "2026-04-10", "nicolas"),
 	}
 
-	got := RenderCSV(events)
+	var b bytes.Buffer
+	if err := RenderCSV(&b, events); err != nil {
+		t.Fatalf("RenderCSV: %v", err)
+	}
+	got := b.String()
 	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
 
 	if len(lines) != 4 {
