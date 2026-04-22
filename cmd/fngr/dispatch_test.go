@@ -52,6 +52,9 @@ func TestKongDispatch_AllCommands(t *testing.T) {
 		stdin string
 		want  string
 	}{
+		{name: "bare-fngr", argv: []string{}, want: ""},
+		{name: "bare-fngr-reverse", argv: []string{"-r"}, want: ""},
+		{name: "bare-fngr-no-pager", argv: []string{"--no-pager"}, want: ""},
 		{name: "add", argv: []string{"add", "hello"}, want: "Added event 1"},
 		{name: "list", argv: []string{"list"}, want: ""},
 		{name: "show", argv: []string{"show", "1"}, want: ""},

@@ -18,7 +18,7 @@ type CLI struct {
 	Version kong.VersionFlag `help:"Print version and exit."`
 
 	Add    AddCmd    `cmd:"" help:"Add an event."`
-	List   ListCmd   `cmd:"" help:"List events."`
+	List   ListCmd   `cmd:"" default:"withargs" help:"List events (default command)."`
 	Show   ShowCmd   `cmd:"" help:"Show a single event."`
 	Edit   EditCmd   `cmd:"" help:"Edit an event's text or timestamp."`
 	Delete DeleteCmd `cmd:"" help:"Delete an event."`
