@@ -9,31 +9,50 @@ aliased.
 
 ## Goals
 
-- One verb namespace per event: `fngr event <id> [<sub-verb> [<args...>]]`.
-- Bare `fngr event N` matches today's `fngr show N` exactly: prints event
-  detail (text format default; `--format text|json|csv`) and supports
-  `--tree` for subtree view.
-- Seven mutating sub-verbs:
-  - `text "..."` — replace event text. The body-derived tags
+- One verb namespace per event under `fngr event`. Verb syntax is
+  **`fngr event <verb> <id> [<args...>]`** (verb before ID — see "Kong
+  constraint" below).
+- Bare `fngr event N` (no verb) is a shortcut for `fngr event show N`
+  via Kong's `default:"withargs"` and matches today's `fngr show N`
+  exactly: prints event detail (text format default; `--format
+  text|json|csv`) and supports `--tree` for subtree view.
+- Seven mutating sub-verbs (each takes the event ID as its first
+  positional, then verb-specific args):
+  - `text <id> "..."` — replace event text. The body-derived tags
     (`@person`, `#tag`) are *synced* to the new text: tags parsed from
     the previous text are removed first, then tags parsed from the new
     text are inserted with `ON CONFLICT DO NOTHING`. Non-body-derived
     meta (`author`, anything added via `tag` with a `key=value` shape,
     anything from `add --meta`) is untouched. FTS is rebuilt.
-  - `time "..."` — accept either time-only (`09:30`, `2:15PM`) or full
-    timestamps. Time-only preserves the event's existing date; full input
-    replaces both.
-  - `date "..."` — mirrors `time`: date-only preserves the existing clock
-    components; full input replaces both.
-  - `attach <id>` — set `parent_id`. Reject self-parent and any ancestry
-    cycle.
-  - `detach` — clear `parent_id`.
-  - `tag <args...>` — add one or more meta entries. Each arg is `@person`,
-    `#tag`, or `key=value`. Dedup against existing meta. FTS rebuilt.
-  - `untag <args...>` — remove matching meta entries. Same arg grammar.
-    FTS rebuilt.
+  - `time <id> "..."` — accept either time-only (`09:30`, `2:15PM`) or
+    full timestamps. Time-only preserves the event's existing date;
+    full input replaces both.
+  - `date <id> "..."` — mirrors `time`: date-only preserves the
+    existing clock components; full input replaces both.
+  - `attach <id> <parent-id>` — set `parent_id`. Reject self-parent and
+    any ancestry cycle.
+  - `detach <id>` — clear `parent_id`.
+  - `tag <id> <args...>` — add one or more meta entries. Each arg is
+    `@person`, `#tag`, or `key=value`. Dedup against existing meta. FTS
+    rebuilt.
+  - `untag <id> <args...>` — remove matching meta entries. Same arg
+    grammar. FTS rebuilt.
 - No confirmation prompts on any verb. Single-event scope makes
   inspection trivial via `fngr event N`.
+
+### Kong constraint (verb before ID)
+
+Kong v1.x does not allow a struct to mix positional arguments with
+branching subcommands ("can't mix positional arguments and branching
+arguments"). The originally-brainstormed UX `fngr event <id> <verb>`
+would put a positional ID alongside seven `cmd:""` siblings on the
+same struct, which Kong rejects at construction time.
+
+The pragmatic resolution: each verb owns its own `<id>` arg (read by
+the verb's Run, no parent-context binding needed). The bare-read case
+keeps its convenient `fngr event N` shortcut because the `show` verb
+is marked `default:"withargs"` — so `event 1` and `event show 1` are
+equivalent.
 
 ## Non-goals
 
@@ -173,12 +192,13 @@ func rebuildEventFTS(ctx context.Context, tx *sql.Tx, id int64) error
 
 Delete `cmd/fngr/show.go` and `cmd/fngr/edit.go` (and their test files).
 
-Create `cmd/fngr/event.go` containing one Kong struct:
+Create `cmd/fngr/event.go` containing one Kong parent struct plus eight
+verb structs. Per the Kong constraint above, the parent struct holds
+**only** the verb union; each verb struct owns its own `ID int64 arg:""`
+field:
 
 ```go
 type EventCmd struct {
-    ID int64 `arg:"" help:"Event ID."`
-
     Show   EventShowCmd   `cmd:"" default:"withargs" help:"Show event detail (default)."`
     Text   EventTextCmd   `cmd:"" help:"Replace event text."`
     Time   EventTimeCmd   `cmd:"" help:"Replace clock time (or full timestamp)."`
@@ -190,19 +210,11 @@ type EventCmd struct {
 }
 ```
 
-Each `EventXxxCmd` has its own `Run(parent *EventCmd, s eventStore, io ioStreams) error`. `EventCmd` exposes its parsed ID to the verbs via a
-Kong `AfterApply` hook:
-
-```go
-func (c *EventCmd) AfterApply(kctx *kong.Context) error {
-    kctx.Bind(c)
-    return nil
-}
-```
-
-Verbs read `parent.ID` and call `s.Update(ctx, parent.ID, ...)` /
-`s.Reparent(...)` etc. This is the standard Kong idiom for parent-scoped
-context.
+Each verb struct starts with `ID int64 arg:""` and then its own flags /
+positionals. Each verb's `Run(s eventStore, io ioStreams) error` reads
+`c.ID` directly. `default:"withargs"` on `Show` lets `fngr event N`
+fall through to `EventShowCmd` with the trailing positional consumed as
+its ID.
 
 `EventShowCmd` flag set:
 - `Tree   bool   "Show subtree." short:"t"` (replaces today's `--tree` on `show`)
@@ -232,22 +244,22 @@ context.
 
 ## Verb behavior summary
 
-| Verb | Args | Behavior |
-| --- | --- | --- |
-| (none) | — | Print event detail. Honours `--tree` (subtree) and `--format text\|json\|csv`. |
-| `text "..."` | required string | Replace text. Body tags synced: untag what the old text had, retag from the new text. Non-body meta is untouched. FTS rebuilt. Empty text rejected. |
-| `time "..."` | required string | `ParsePartial`. `hasTime=false` (input was date-only) ⇒ reject (`event time` expects a time or full timestamp). `hasDate=true` ⇒ replace both. `hasDate=false` ⇒ replace clock components, keep event's date. |
-| `date "..."` | required string | `ParsePartial`. `hasDate=false` (input was time-only) ⇒ reject (`event date` expects a date or full timestamp). `hasTime=true` ⇒ replace both. `hasTime=false` ⇒ replace date components, keep event's clock. |
-| `attach <id>` | required int | Set parent. Reject self-parent and cycles. |
-| `detach` | none | Clear parent. |
-| `tag <args...>` | n ≥ 1 | Each arg via `MetaArg`. Dedup against existing meta. FTS rebuilt. |
-| `untag <args...>` | n ≥ 1 | Each arg via `MetaArg`. Delete matching rows. FTS rebuilt. Reports count. |
+| Invocation | Behavior |
+| --- | --- |
+| `fngr event <id>` (or `fngr event show <id>`) | Print event detail. Honours `--tree` (subtree) and `--format text\|json\|csv`. |
+| `fngr event text <id> "..."` | Replace text. Body tags synced: untag what the old text had, retag from the new text. Non-body meta is untouched. FTS rebuilt. Empty text rejected. |
+| `fngr event time <id> "..."` | `ParsePartial`. `hasTime=false` (input was date-only) ⇒ reject. `hasDate=true` ⇒ replace both. `hasDate=false` ⇒ replace clock components, keep event's date. |
+| `fngr event date <id> "..."` | `ParsePartial`. `hasDate=false` (input was time-only) ⇒ reject. `hasTime=true` ⇒ replace both. `hasTime=false` ⇒ replace date components, keep event's clock. |
+| `fngr event attach <id> <parent-id>` | Set parent. Reject self-parent and cycles. |
+| `fngr event detach <id>` | Clear parent. |
+| `fngr event tag <id> <args...>` (n ≥ 1) | Each arg via `MetaArg`. Dedup against existing meta. FTS rebuilt. |
+| `fngr event untag <id> <args...>` (n ≥ 1) | Each arg via `MetaArg`. Delete matching rows. FTS rebuilt. Reports count. |
 
-## Data flow example: `fngr event 5 text "fixed wording for @Sarah #urgent"`
+## Data flow example: `fngr event text 5 "fixed wording for @Sarah #urgent"`
 
-1. Kong parses → `EventCmd{ID: 5}` with `Text: EventTextCmd{Body: "..."}`.
+1. Kong parses → `EventCmd{Text: EventTextCmd{ID: 5, Body: "..."}}`.
 2. `EventTextCmd.Run` validates non-empty body and calls
-   `s.Update(ctx, 5, &body, nil)`.
+   `s.Update(ctx, c.ID, &c.Body, nil)`.
 3. `event.Update` (extended):
    - Begin tx.
    - Read event 5's current text (also confirms it exists; absence

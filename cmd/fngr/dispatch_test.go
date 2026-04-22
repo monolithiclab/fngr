@@ -57,6 +57,7 @@ func TestKongDispatch_AllCommands(t *testing.T) {
 		{name: "bare-fngr-no-pager", argv: []string{"--no-pager"}, want: ""},
 		{name: "add", argv: []string{"add", "hello"}, want: "Added event 1"},
 		{name: "list", argv: []string{"list"}, want: ""},
+		{name: "event-bare", argv: []string{"event", "1"}, want: ""},
 		{name: "event-show", argv: []string{"event", "show", "1"}, want: ""},
 		{name: "event-show-tree", argv: []string{"event", "show", "1", "--tree"}, want: ""},
 		{name: "event-show-json", argv: []string{"event", "show", "1", "--format", "json"}, want: ""},
