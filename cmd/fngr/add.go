@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"time"
 
@@ -17,7 +16,7 @@ type AddCmd struct {
 	Time   string   `help:"Override event timestamp (ISO 8601, e.g. 2026-04-15T14:30:00)." short:"t"`
 }
 
-func (c *AddCmd) Run(db *sql.DB) error {
+func (c *AddCmd) Run(s eventStore, io ioStreams) error {
 	ctx := context.Background()
 
 	if c.Author == "" {
@@ -41,12 +40,12 @@ func (c *AddCmd) Run(db *sql.DB) error {
 		createdAt = &t
 	}
 
-	id, err := event.Add(ctx, db, c.Text, c.Parent, meta, createdAt)
+	id, err := s.Add(ctx, c.Text, c.Parent, meta, createdAt)
 	if err != nil {
 		return err
 	}
 
-	fmt.Printf("Added event %d\n", id)
+	fmt.Fprintf(io.Out, "Added event %d\n", id)
 	return nil
 }
 
