@@ -980,3 +980,76 @@ func TestReparent_NewParentNotFound(t *testing.T) {
 		t.Errorf("err = %v, want ErrNotFound", err)
 	}
 }
+
+func TestAddTags_DedupsAtDB(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	id, _ := Add(ctx, database, "x", nil, []parse.Meta{
+		{Key: "tag", Value: "ops"},
+	}, nil)
+
+	tags := []parse.Meta{
+		{Key: "tag", Value: "ops"},
+		{Key: "tag", Value: "deploy"},
+		{Key: "people", Value: "alice"},
+	}
+	if err := AddTags(ctx, database, id, tags); err != nil {
+		t.Fatalf("AddTags: %v", err)
+	}
+
+	ev, err := Get(ctx, database, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	want := map[parse.Meta]bool{
+		{Key: "tag", Value: "ops"}:      true,
+		{Key: "tag", Value: "deploy"}:   true,
+		{Key: "people", Value: "alice"}: true,
+	}
+	if len(ev.Meta) != len(want) {
+		t.Errorf("got %d meta entries, want %d: %v", len(ev.Meta), len(want), ev.Meta)
+	}
+	for _, m := range ev.Meta {
+		if !want[m] {
+			t.Errorf("unexpected meta %v", m)
+		}
+	}
+}
+
+func TestAddTags_RebuildsFTS(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	id, _ := Add(ctx, database, "no tags here", nil, nil, nil)
+	if err := AddTags(ctx, database, id, []parse.Meta{{Key: "tag", Value: "ops"}}); err != nil {
+		t.Fatalf("AddTags: %v", err)
+	}
+
+	matches, err := List(ctx, database, ListOpts{Filter: "#ops"})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(matches) != 1 {
+		t.Errorf("FTS not refreshed: %d matches for #ops, want 1", len(matches))
+	}
+}
+
+func TestAddTags_NotFound(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+	err := AddTags(ctx, database, 9999, []parse.Meta{{Key: "tag", Value: "x"}})
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestAddTags_EmptyIsNoOp(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+	id, _ := Add(ctx, database, "x", nil, nil, nil)
+	if err := AddTags(ctx, database, id, nil); err != nil {
+		t.Errorf("empty AddTags returned err: %v", err)
+	}
+}

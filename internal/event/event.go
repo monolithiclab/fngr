@@ -245,6 +245,52 @@ func Reparent(ctx context.Context, db *sql.DB, id int64, newParent *int64) error
 	return tx.Commit()
 }
 
+// AddTags inserts the given meta entries for event id. Duplicates are
+// dropped at the database via INSERT ... ON CONFLICT DO NOTHING (the
+// UNIQUE index on (key, value, event_id) added in migration 2). FTS is
+// rebuilt in the same transaction. Returns ErrNotFound if the event is
+// missing. Empty `tags` is a no-op.
+func AddTags(ctx context.Context, db *sql.DB, id int64, tags []parse.Meta) error {
+	if len(tags) == 0 {
+		return nil
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var dummy int
+	err = tx.QueryRowContext(ctx, "SELECT 1 FROM events WHERE id = ?", id).Scan(&dummy)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("event %d: %w", id, ErrNotFound)
+		}
+		return fmt.Errorf("query event: %w", err)
+	}
+
+	stmt, err := tx.PrepareContext(ctx,
+		"INSERT INTO event_meta (event_id, key, value) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
+	)
+	if err != nil {
+		return fmt.Errorf("prepare insert: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, m := range tags {
+		if _, err := stmt.ExecContext(ctx, id, m.Key, m.Value); err != nil {
+			return fmt.Errorf("insert tag: %w", err)
+		}
+	}
+
+	if err := rebuildEventFTS(ctx, tx, id); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
 func readMetaTx(ctx context.Context, tx *sql.Tx, id int64) ([]parse.Meta, error) {
 	rows, err := tx.QueryContext(ctx, "SELECT key, value FROM event_meta WHERE event_id = ? ORDER BY key, value", id)
 	if err != nil {

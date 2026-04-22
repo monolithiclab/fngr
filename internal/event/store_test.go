@@ -302,3 +302,20 @@ func TestStore_Reparent(t *testing.T) {
 		t.Errorf("ParentID = %v, want %d", ev.ParentID, b)
 	}
 }
+
+func TestStore_AddTags(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+
+	id, _ := s.Add(ctx, "x", nil, nil, nil)
+	if err := s.AddTags(ctx, id, []parse.Meta{{Key: "tag", Value: "ops"}}); err != nil {
+		t.Fatalf("AddTags: %v", err)
+	}
+	n, err := s.CountMeta(ctx, "tag", "ops")
+	if err != nil {
+		t.Fatalf("CountMeta: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("count = %d, want 1", n)
+	}
+}

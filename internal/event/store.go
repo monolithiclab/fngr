@@ -69,3 +69,7 @@ func (s *Store) DeleteMeta(ctx context.Context, key, value string) (int64, error
 func (s *Store) Reparent(ctx context.Context, id int64, newParent *int64) error {
 	return Reparent(ctx, s.DB, id, newParent)
 }
+
+func (s *Store) AddTags(ctx context.Context, id int64, tags []parse.Meta) error {
+	return AddTags(ctx, s.DB, id, tags)
+}
