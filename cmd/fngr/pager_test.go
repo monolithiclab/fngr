@@ -80,3 +80,21 @@ func TestWithPager_PagerStartFailureSurfaces(t *testing.T) {
 		t.Errorf("err = %v, want errPagerStartFailed", err)
 	}
 }
+
+func TestPagerCommand_MultiTokenPagerEnv(t *testing.T) {
+	t.Setenv("PAGER", "less -FRX")
+	got := pagerCommand()
+	want := []string{"less", "-FRX"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("pagerCommand() = %v, want %v", got, want)
+	}
+}
+
+func TestPagerCommand_FallbackWhenUnset(t *testing.T) {
+	t.Setenv("PAGER", "")
+	got := pagerCommand()
+	want := []string{"less", "-FRX"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("pagerCommand() = %v, want %v", got, want)
+	}
+}

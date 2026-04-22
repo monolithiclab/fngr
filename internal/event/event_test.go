@@ -678,6 +678,36 @@ func TestFTSIsolation_BodyWordsNotMatchedByMetaFilter(t *testing.T) {
 	}
 }
 
+func TestListSeq_PropagatesDBError(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+	if _, err := Add(ctx, database, "ok", nil, nil, nil); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	calls := 0
+	var lastErr error
+	for ev, err := range ListSeq(ctx, database, ListOpts{}) {
+		calls++
+		if err == nil {
+			t.Fatalf("yield #%d returned (%+v, nil), want non-nil error", calls, ev)
+		}
+		if ev.ID != 0 || ev.Text != "" || ev.ParentID != nil || len(ev.Meta) != 0 {
+			t.Errorf("yield #%d returned non-zero event with err: %+v", calls, ev)
+		}
+		lastErr = err
+	}
+	if calls != 1 {
+		t.Errorf("got %d yields after error, want exactly 1", calls)
+	}
+	if lastErr == nil {
+		t.Error("expected an error to be yielded against a closed DB")
+	}
+}
+
 func TestList_LimitAndSort(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
