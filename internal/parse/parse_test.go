@@ -237,3 +237,47 @@ func TestFTSContent(t *testing.T) {
 		})
 	}
 }
+
+func TestMetaArg(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		input   string
+		wantKey string
+		wantVal string
+		wantErr bool
+	}{
+		{name: "people", input: "@Sarah", wantKey: "people", wantVal: "Sarah"},
+		{name: "tag", input: "#ops", wantKey: "tag", wantVal: "ops"},
+		{name: "key=value", input: "env=prod", wantKey: "env", wantVal: "prod"},
+		{name: "value with =", input: "note=a=b", wantKey: "note", wantVal: "a=b"},
+		{name: "hierarchical tag", input: "#work/project-x", wantKey: "tag", wantVal: "work/project-x"},
+		{name: "empty value", input: "k=", wantKey: "k", wantVal: ""},
+
+		{name: "bare word", input: "urgent", wantErr: true},
+		{name: "lone @", input: "@", wantErr: true},
+		{name: "lone #", input: "#", wantErr: true},
+		{name: "@ with space", input: "@ Sarah", wantErr: true},
+		{name: "missing key", input: "=value", wantErr: true},
+		{name: "empty input", input: "", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := MetaArg(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("MetaArg(%q) expected error", tt.input)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("MetaArg(%q) err = %v", tt.input, err)
+			}
+			if got.Key != tt.wantKey || got.Value != tt.wantVal {
+				t.Errorf("MetaArg(%q) = (%q, %q), want (%q, %q)",
+					tt.input, got.Key, got.Value, tt.wantKey, tt.wantVal)
+			}
+		})
+	}
+}
