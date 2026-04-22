@@ -70,7 +70,10 @@ func TestKongDispatch_AllCommands(t *testing.T) {
 		{name: "event-untag", argv: []string{"event", "untag", "1", "#ops"}, want: ""},
 		{name: "delete", argv: []string{"delete", "1", "-f"}, want: ""},
 		{name: "meta", argv: []string{"meta"}, want: ""},
-		{name: "meta-update", argv: []string{"meta", "update", "tag=a", "tag=b", "-f"}, want: ""},
+		{name: "meta-search-key", argv: []string{"meta", "-S", "tag"}, want: ""},
+		{name: "meta-search-keyvalue", argv: []string{"meta", "-S", "tag=a"}, want: ""},
+		{name: "meta-search-shorthand", argv: []string{"meta", "-S", "#a"}, want: ""},
+		{name: "meta-rename", argv: []string{"meta", "rename", "tag=a", "tag=b", "-f"}, want: ""},
 		{name: "meta-delete", argv: []string{"meta", "delete", "tag=a", "-f"}, want: ""},
 	}
 	for _, tc := range cases {
