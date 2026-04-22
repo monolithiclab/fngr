@@ -20,72 +20,83 @@ builds:
 archives:
   - id: fngr
     ids: [fngr]
-    name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     formats: [tar.gz]
     files: [LICENSE, README.md]
 
 checksum:
-  name_template: 'SHA256SUMS'
+  name_template: "SHA256SUMS"
 
 signs:
   - id: cosign-checksums
     cmd: cosign
-    signature: '${artifact}.sig'
-    certificate: '${artifact}.pem'
+    signature: "${artifact}.sig"
+    certificate: "${artifact}.pem"
     args:
       - sign-blob
-      - '--output-certificate=${certificate}'
-      - '--output-signature=${signature}'
-      - '${artifact}'
-      - '--yes'
+      - "--output-certificate=${certificate}"
+      - "--output-signature=${signature}"
+      - "${artifact}"
+      - "--yes"
     artifacts: checksum
 
+# Note: GoReleaser deprecates `dockers:` + `docker_manifests:` in favor of
+# `dockers_v2:`. The new shape needs a multi-stage Dockerfile that uses
+# buildx's TARGETOS/TARGETARCH build args to pick the right binary per
+# platform — a non-trivial Dockerfile rewrite. Revisit when migrating
+# away from the (still-functional) deprecated keys becomes urgent.
 dockers:
   - id: fngr-amd64
-    image_templates: ['ghcr.io/monolithiclab/fngr:{{ .Version }}-amd64']
+    image_templates: ["ghcr.io/monolithiclab/fngr:{{ .Version }}-amd64"]
     use: buildx
     dockerfile: Dockerfile
     build_flag_templates:
-      - '--platform=linux/amd64'
-      - '--label=org.opencontainers.image.source=https://github.com/monolithiclab/fngr'
-      - '--label=org.opencontainers.image.version={{ .Version }}'
-      - '--label=org.opencontainers.image.revision={{ .FullCommit }}'
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.source=https://github.com/monolithiclab/fngr"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
   - id: fngr-arm64
-    image_templates: ['ghcr.io/monolithiclab/fngr:{{ .Version }}-arm64']
+    image_templates: ["ghcr.io/monolithiclab/fngr:{{ .Version }}-arm64"]
     use: buildx
     dockerfile: Dockerfile
     goarch: arm64
     build_flag_templates:
-      - '--platform=linux/arm64'
-      - '--label=org.opencontainers.image.source=https://github.com/monolithiclab/fngr'
-      - '--label=org.opencontainers.image.version={{ .Version }}'
-      - '--label=org.opencontainers.image.revision={{ .FullCommit }}'
+      - "--platform=linux/arm64"
+      - "--label=org.opencontainers.image.source=https://github.com/monolithiclab/fngr"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .FullCommit }}"
 
 docker_manifests:
-  - name_template: 'ghcr.io/monolithiclab/fngr:{{ .Version }}'
+  - name_template: "ghcr.io/monolithiclab/fngr:{{ .Version }}"
     image_templates:
-      - 'ghcr.io/monolithiclab/fngr:{{ .Version }}-amd64'
-      - 'ghcr.io/monolithiclab/fngr:{{ .Version }}-arm64'
-  - name_template: 'ghcr.io/monolithiclab/fngr:latest'
+      - "ghcr.io/monolithiclab/fngr:{{ .Version }}-amd64"
+      - "ghcr.io/monolithiclab/fngr:{{ .Version }}-arm64"
+  - name_template: "ghcr.io/monolithiclab/fngr:latest"
     skip_push: auto
     image_templates:
-      - 'ghcr.io/monolithiclab/fngr:{{ .Version }}-amd64'
-      - 'ghcr.io/monolithiclab/fngr:{{ .Version }}-arm64'
+      - "ghcr.io/monolithiclab/fngr:{{ .Version }}-amd64"
+      - "ghcr.io/monolithiclab/fngr:{{ .Version }}-arm64"
 
 docker_signs:
   - cmd: cosign
-    args: ['sign', '--yes', '${artifact}@${digest}']
+    args: ["sign", "--yes", "${artifact}@${digest}"]
     artifacts: manifests
 
+# Note: GoReleaser deprecates `brews:` in favor of `homebrew_casks:`, but
+# casks generate macOS-only Cask DSL files (`brew install --cask`) that
+# break Linux installs and require a different `brew install` command.
+# `brews:` still produces the Formula we want for a CLI distributed on
+# both macOS and Linux. Revisit if/when GoReleaser ships a
+# `homebrew_formulas:` key or removes `brews:` outright.
 brews:
   - name: fngr
     repository:
       owner: monolithiclab
       name: homebrew-tap
-      token: '{{ .Env.HOMEBREW_TAP_TOKEN }}'
-    homepage: 'https://github.com/monolithiclab/fngr'
-    description: 'Command-line journal for logging events with FTS, tags, and trees.'
-    license: 'MIT'
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: "https://github.com/monolithiclab/fngr"
+    description: "Command-line journal for logging events with FTS, tags, and trees."
+    license: "MIT"
     skip_upload: auto
     install: |
       bin.install "fngr"
@@ -95,21 +106,22 @@ brews:
 changelog:
   use: git
   sort: asc
+  abbrev: 7
   filters:
     exclude:
-      - '^Merge'
-      - '^chore'
+      - "^Merge"
+      - "^chore"
   groups:
-    - title: 'Features'
+    - title: "Features"
       regexp: '^.*?feat(\(.+\))?:'
       order: 0
-    - title: 'Bug fixes'
+    - title: "Bug fixes"
       regexp: '^.*?fix(\(.+\))?:'
       order: 1
-    - title: 'Documentation'
+    - title: "Documentation"
       regexp: '^.*?docs(\(.+\))?:'
       order: 2
-    - title: 'Other'
+    - title: "Other"
       order: 999
 
 release:
