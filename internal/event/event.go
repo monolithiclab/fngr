@@ -13,12 +13,17 @@ import (
 	"github.com/monolithiclab/fngr/internal/timefmt"
 )
 
+// ErrNotFound is returned when an operation targets an event ID (or a
+// (key, value) meta tuple) that does not exist.
 var ErrNotFound = errors.New("not found")
 
 // ErrCycle is returned when Reparent would introduce a cycle (including
 // the self-parent case).
 var ErrCycle = errors.New("would create a parent cycle")
 
+// Event is a single journal entry as stored, complete with its parsed
+// metadata. CreatedAt is in UTC at the SQL boundary; renderers convert
+// to local time for display.
 type Event struct {
 	ID        int64
 	ParentID  *int64
@@ -27,6 +32,8 @@ type Event struct {
 	Meta      []parse.Meta
 }
 
+// MetaCount is one row of a `fngr meta` summary: a (key, value) tuple
+// and how many events it appears on.
 type MetaCount struct {
 	Key   string
 	Value string
@@ -43,6 +50,10 @@ type AddInput struct {
 	CreatedAt *time.Time
 }
 
+// Add inserts a single event with its meta tuples and FTS row inside one
+// transaction, returning the new event ID. A nil parentID creates a root
+// event; a non-nil parentID must reference an existing event or
+// ErrNotFound is returned. A nil createdAt defaults to the SQL CURRENT_TIMESTAMP.
 func Add(ctx context.Context, db *sql.DB, text string, parentID *int64, meta []parse.Meta, createdAt *time.Time) (int64, error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -154,6 +165,8 @@ func addInTx(ctx context.Context, tx *sql.Tx, inputs []AddInput) ([]int64, error
 	return ids, nil
 }
 
+// Get returns the event with the given id, including its meta tuples.
+// Returns ErrNotFound when no such event exists.
 func Get(ctx context.Context, db *sql.DB, id int64) (*Event, error) {
 	rows, err := db.QueryContext(ctx,
 		"SELECT id, parent_id, text, created_at FROM events WHERE id = ?", id,
@@ -173,6 +186,10 @@ func Get(ctx context.Context, db *sql.DB, id int64) (*Event, error) {
 	return &events[0], nil
 }
 
+// Delete removes the event with the given id. Cascades through the
+// schema's foreign keys to event_meta and events_fts, and to any child
+// events whose parent_id points to id. Returns ErrNotFound when no such
+// event exists.
 func Delete(ctx context.Context, db *sql.DB, id int64) error {
 	res, err := db.ExecContext(ctx, "DELETE FROM events WHERE id = ?", id)
 	if err != nil {
@@ -190,6 +207,11 @@ func Delete(ctx context.Context, db *sql.DB, id int64) error {
 	return nil
 }
 
+// Update mutates an existing event's text and/or createdAt timestamp.
+// Either or both may be nil; nil leaves that column untouched. When text
+// changes, body-derived tags (`@person`, `#tag`) are synced — old ones
+// removed, new ones inserted via ON CONFLICT DO NOTHING — and the FTS
+// row is rebuilt. Returns ErrNotFound when no such event exists.
 func Update(ctx context.Context, db *sql.DB, id int64, text *string, createdAt *time.Time) error {
 	if text == nil && createdAt == nil {
 		return nil
@@ -500,6 +522,8 @@ func rebuildEventFTS(ctx context.Context, tx *sql.Tx, id int64) error {
 	return nil
 }
 
+// HasChildren reports whether any other event has the given id as its
+// parent_id. Used by `fngr delete` to gate the recursive-delete prompt.
 func HasChildren(ctx context.Context, db *sql.DB, id int64) (bool, error) {
 	var count int
 	err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM events WHERE parent_id = ?", id).Scan(&count)
@@ -513,6 +537,10 @@ var wellKnownMetaKeys = map[string]bool{
 	MetaKeyAuthor: true,
 }
 
+// UpdateMeta renames every (oldKey, oldValue) tuple across all events to
+// (newKey, newValue) and returns the number of rows updated. Refuses to
+// touch well-known meta keys (currently `author`) so accidental renames
+// don't break renderers that look them up by name.
 func UpdateMeta(ctx context.Context, db *sql.DB, oldKey, oldValue, newKey, newValue string) (int64, error) {
 	if wellKnownMetaKeys[oldKey] {
 		return 0, fmt.Errorf("cannot rename well-known meta key %q", oldKey)
@@ -527,6 +555,9 @@ func UpdateMeta(ctx context.Context, db *sql.DB, oldKey, oldValue, newKey, newVa
 	return res.RowsAffected()
 }
 
+// DeleteMeta removes every (key, value) tuple across all events and
+// returns the number of rows deleted. Refuses to touch well-known meta
+// keys for the same reason as UpdateMeta.
 func DeleteMeta(ctx context.Context, db *sql.DB, key, value string) (int64, error) {
 	if wellKnownMetaKeys[key] {
 		return 0, fmt.Errorf("cannot delete well-known meta key %q", key)
@@ -541,6 +572,8 @@ func DeleteMeta(ctx context.Context, db *sql.DB, key, value string) (int64, erro
 	return res.RowsAffected()
 }
 
+// CountMeta returns the number of events carrying the given (key, value)
+// meta tuple.
 func CountMeta(ctx context.Context, db *sql.DB, key, value string) (int64, error) {
 	var n int64
 	err := db.QueryRowContext(ctx,
@@ -601,6 +634,8 @@ func ListMeta(ctx context.Context, db *sql.DB, opts ListMetaOpts) ([]MetaCount, 
 	return result, nil
 }
 
+// ListOpts narrows the result of List / ListSeq. All fields are optional;
+// the zero value matches every event in newest-first order.
 type ListOpts struct {
 	Filter    string
 	From      *time.Time // inclusive lower bound
@@ -730,6 +765,9 @@ func buildListQuery(opts ListOpts) (string, []any) {
 	return query, args
 }
 
+// GetSubtree returns the event with id == rootID plus every transitive
+// descendant via parent_id, sorted by created_at ascending. Returns
+// ErrNotFound when no event has id == rootID.
 func GetSubtree(ctx context.Context, db *sql.DB, rootID int64) ([]Event, error) {
 	rows, err := db.QueryContext(ctx, `
 		WITH RECURSIVE subtree AS (

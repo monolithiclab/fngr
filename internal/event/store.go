@@ -16,6 +16,8 @@ type Store struct {
 	DB *sql.DB
 }
 
+// NewStore returns a *Store backed by db. Borrowed, not owned: the
+// caller still controls the lifecycle of the underlying connection.
 func NewStore(db *sql.DB) *Store { return &Store{DB: db} }
 
 func (s *Store) Add(ctx context.Context, text string, parentID *int64, meta []parse.Meta, createdAt *time.Time) (int64, error) {

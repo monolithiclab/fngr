@@ -4,12 +4,22 @@ import (
 	"github.com/monolithiclab/fngr/internal/parse"
 )
 
+// Well-known meta keys. The matching value's domain meaning is encoded
+// in the key, so renderers and CLI verbs can recognise them by name.
 const (
+	// MetaKeyAuthor identifies the user who recorded the event. Auto-set
+	// from --author / $FNGR_AUTHOR / $USER; not renameable via meta verbs.
 	MetaKeyAuthor = "author"
+	// MetaKeyPeople holds names extracted from `@person` body shorthand.
 	MetaKeyPeople = "people"
-	MetaKeyTag    = "tag"
+	// MetaKeyTag holds names extracted from `#tag` body shorthand.
+	MetaKeyTag = "tag"
 )
 
+// CollectMeta merges the meta sources for a new event into one deduped
+// slice in a deterministic order: the author tuple, then body-derived
+// `@person` / `#tag` tags, then explicit `--meta key=value` flag entries.
+// Errors out if any flag fails to parse as `key=value`.
 func CollectMeta(text string, flags []string, author string) ([]parse.Meta, error) {
 	seen := make(map[parse.Meta]struct{})
 	var result []parse.Meta

@@ -52,7 +52,10 @@ func KeyValue(s string) (key, value string, err error) {
 }
 
 // MetaNameRe matches a single @person / #tag name or a `key=value` key
-// in isolation (no surrounding chars). Anchored form of metaNamePattern.
+// in isolation (no surrounding chars). Anchored form of the same character
+// class used by the body-tag patterns; exported so callers outside parse
+// (e.g. `cmd/fngr/meta.go::parseMetaFilter`) can validate bare-key input
+// without re-defining the rule.
 var MetaNameRe = regexp.MustCompile(`^` + metaNamePattern + `$`)
 
 // MetaArg parses a single CLI argument into a Meta entry. Supported forms:

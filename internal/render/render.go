@@ -90,6 +90,9 @@ func SingleEvent(w io.Writer, format string, ev *event.Event) error {
 	}
 }
 
+// Tree writes events as an indented parent/child tree. Events whose
+// parent_id is not present in the input slice render as roots, so a
+// `--limit`-truncated query still produces well-formed output.
 func Tree(w io.Writer, events []event.Event) error {
 	if len(events) == 0 {
 		return nil
@@ -150,6 +153,8 @@ func renderNode(w io.Writer, events []event.Event, byID map[int64]int, children 
 	return nil
 }
 
+// Flat writes one line per event in input order: `id  date  author  text`.
+// Parent/child topology is ignored; for that, use Tree.
 func Flat(w io.Writer, events []event.Event) error {
 	for _, ev := range events {
 		line := formatEventLine(ev.ID, formatLocalStamp(ev.CreatedAt), eventAuthor(ev), ev.Text)
@@ -192,6 +197,9 @@ func toJSONEvent(ev event.Event) jsonEvent {
 	return out
 }
 
+// JSON writes events as a single indented JSON array, suitable for
+// round-tripping back through `fngr add --format=json`. Meta is emitted
+// as `[[key, value], ...]` sorted by (key, value).
 func JSON(w io.Writer, events []event.Event) error {
 	out := make([]jsonEvent, len(events))
 	for i, ev := range events {
@@ -205,6 +213,9 @@ func JSON(w io.Writer, events []event.Event) error {
 	return err
 }
 
+// CSV writes events as a CSV table with the columns
+// `id, parent_id, created_at, author, text`. Meta tuples beyond
+// `author` are not represented; for full meta, use JSON or Markdown.
 func CSV(w io.Writer, events []event.Event) error {
 	cw := csv.NewWriter(w)
 	_ = cw.Write([]string{"id", "parent_id", "created_at", "author", "text"})
@@ -225,6 +236,8 @@ func CSV(w io.Writer, events []event.Event) error {
 	return cw.Error()
 }
 
+// Event writes a single event in the human-readable detail layout used
+// by `fngr event N` (ID / Parent / Date / Text / Meta).
 func Event(w io.Writer, ev *event.Event) error {
 	if _, err := fmt.Fprintf(w, "ID:     %d\n", ev.ID); err != nil {
 		return err
