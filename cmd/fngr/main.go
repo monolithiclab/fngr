@@ -20,6 +20,7 @@ type CLI struct {
 	Add    AddCmd    `cmd:"" help:"Add an event."`
 	List   ListCmd   `cmd:"" help:"List events."`
 	Show   ShowCmd   `cmd:"" help:"Show a single event."`
+	Edit   EditCmd   `cmd:"" help:"Edit an event's text or timestamp."`
 	Delete DeleteCmd `cmd:"" help:"Delete an event."`
 	Meta   MetaCmd   `cmd:"" help:"List all metadata keys and values."`
 }

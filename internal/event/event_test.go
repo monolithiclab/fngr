@@ -183,6 +183,90 @@ func TestDelete_NotFound(t *testing.T) {
 	}
 }
 
+func TestUpdate_TextOnly(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	id, err := Add(ctx, database, "old text", nil, []parse.Meta{
+		{Key: MetaKeyAuthor, Value: "alice"},
+		{Key: MetaKeyTag, Value: "ops"},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	newText := "new text"
+	if err := Update(ctx, database, id, &newText, nil); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	ev, err := Get(ctx, database, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if ev.Text != newText {
+		t.Errorf("text = %q, want %q", ev.Text, newText)
+	}
+
+	matches, err := List(ctx, database, ListOpts{Filter: "new"})
+	if err != nil {
+		t.Fatalf("List filter new: %v", err)
+	}
+	if len(matches) != 1 {
+		t.Errorf("FTS not updated: got %d matches for 'new', want 1", len(matches))
+	}
+	matches, err = List(ctx, database, ListOpts{Filter: "old"})
+	if err != nil {
+		t.Fatalf("List filter old: %v", err)
+	}
+	if len(matches) != 0 {
+		t.Errorf("stale FTS row: got %d matches for 'old', want 0", len(matches))
+	}
+}
+
+func TestUpdate_TimeOnly(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	id, err := Add(ctx, database, "stamped", nil, nil, nil)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	newTime := time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC)
+	if err := Update(ctx, database, id, nil, &newTime); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	ev, err := Get(ctx, database, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !ev.CreatedAt.Equal(newTime) {
+		t.Errorf("created_at = %v, want %v", ev.CreatedAt, newTime)
+	}
+}
+
+func TestUpdate_NoOp(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	if err := Update(ctx, database, 9999, nil, nil); err != nil {
+		t.Errorf("no-op Update returned error: %v", err)
+	}
+}
+
+func TestUpdate_NotFound(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	newText := "x"
+	err := Update(ctx, database, 9999, &newText, nil)
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("error = %v, want ErrNotFound", err)
+	}
+}
+
 func TestDelete_CascadesChildren(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)

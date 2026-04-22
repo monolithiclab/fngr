@@ -131,6 +131,78 @@ func Delete(ctx context.Context, db *sql.DB, id int64) error {
 	return nil
 }
 
+func Update(ctx context.Context, db *sql.DB, id int64, text *string, createdAt *time.Time) error {
+	if text == nil && createdAt == nil {
+		return nil
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var existing string
+	err = tx.QueryRowContext(ctx, "SELECT text FROM events WHERE id = ?", id).Scan(&existing)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("event %d: %w", id, ErrNotFound)
+		}
+		return fmt.Errorf("query event: %w", err)
+	}
+
+	sets := make([]string, 0, 2)
+	args := make([]any, 0, 3)
+	if text != nil {
+		sets = append(sets, "text = ?")
+		args = append(args, *text)
+	}
+	if createdAt != nil {
+		sets = append(sets, "created_at = ?")
+		args = append(args, createdAt.UTC().Format(timefmt.DateTimeFormat))
+	}
+	args = append(args, id)
+	if _, err := tx.ExecContext(ctx, "UPDATE events SET "+strings.Join(sets, ", ")+" WHERE id = ?", args...); err != nil { // #nosec G202 -- sets is built from a fixed allow-list
+		return fmt.Errorf("update event: %w", err)
+	}
+
+	if text != nil {
+		meta, err := readMetaTx(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx,
+			"UPDATE events_fts SET content = ? WHERE rowid = ?",
+			parse.FTSContent(*text, meta), id,
+		); err != nil {
+			return fmt.Errorf("update FTS: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit transaction: %w", err)
+	}
+	return nil
+}
+
+func readMetaTx(ctx context.Context, tx *sql.Tx, id int64) ([]parse.Meta, error) {
+	rows, err := tx.QueryContext(ctx, "SELECT key, value FROM event_meta WHERE event_id = ? ORDER BY key, value", id)
+	if err != nil {
+		return nil, fmt.Errorf("query meta: %w", err)
+	}
+	defer rows.Close()
+
+	var meta []parse.Meta
+	for rows.Next() {
+		var m parse.Meta
+		if err := rows.Scan(&m.Key, &m.Value); err != nil {
+			return nil, fmt.Errorf("scan meta: %w", err)
+		}
+		meta = append(meta, m)
+	}
+	return meta, rows.Err()
+}
+
 func HasChildren(ctx context.Context, db *sql.DB, id int64) (bool, error) {
 	var count int
 	err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM events WHERE parent_id = ?", id).Scan(&count)

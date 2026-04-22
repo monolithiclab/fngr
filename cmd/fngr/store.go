@@ -15,6 +15,7 @@ type eventStore interface {
 	Add(ctx context.Context, text string, parentID *int64, meta []parse.Meta, createdAt *time.Time) (int64, error)
 	Get(ctx context.Context, id int64) (*event.Event, error)
 	Delete(ctx context.Context, id int64) error
+	Update(ctx context.Context, id int64, text *string, createdAt *time.Time) error
 	HasChildren(ctx context.Context, id int64) (bool, error)
 	List(ctx context.Context, opts event.ListOpts) ([]event.Event, error)
 	GetSubtree(ctx context.Context, rootID int64) ([]event.Event, error)

@@ -29,6 +29,10 @@ func (s *Store) Delete(ctx context.Context, id int64) error {
 	return Delete(ctx, s.DB, id)
 }
 
+func (s *Store) Update(ctx context.Context, id int64, text *string, createdAt *time.Time) error {
+	return Update(ctx, s.DB, id, text, createdAt)
+}
+
 func (s *Store) HasChildren(ctx context.Context, id int64) (bool, error) {
 	return HasChildren(ctx, s.DB, id)
 }
