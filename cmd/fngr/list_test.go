@@ -31,6 +31,23 @@ func TestListCmd_DefaultTree(t *testing.T) {
 	}
 }
 
+func TestListCmd_TreeEmptyReportsNoEvents(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, out, errBuf := newTestIOFull("", false)
+
+	cmd := &ListCmd{Format: "tree"}
+	if err := cmd.Run(s, io); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := out.String(); got != "" {
+		t.Errorf("stdout = %q, want empty", got)
+	}
+	if got := errBuf.String(); !strings.Contains(got, "No events found") {
+		t.Errorf("stderr = %q, want 'No events found'", got)
+	}
+}
+
 func TestListCmd_JSON(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)

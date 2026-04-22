@@ -40,6 +40,10 @@ func (c *ListCmd) Run(s eventStore, io ioStreams) error {
 		if err != nil {
 			return err
 		}
+		if len(events) == 0 {
+			fmt.Fprintln(io.Err, "No events found.")
+			return nil
+		}
 		return render.Tree(io.Out, events)
 	}
 	return render.EventsStream(io.Out, c.Format, s.ListSeq(ctx, opts))
