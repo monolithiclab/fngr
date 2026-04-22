@@ -30,18 +30,18 @@ func testDB(t *testing.T) *sql.DB {
 func testDBWithSchema(t *testing.T) *sql.DB {
 	t.Helper()
 	db := testDB(t)
-	if err := initSchema(db); err != nil {
-		t.Fatalf("initSchema: %v", err)
+	if err := migrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
 	}
 	return db
 }
 
-func TestInitSchema_CreatesAllTables(t *testing.T) {
+func TestMigrate_CreatesAllTables(t *testing.T) {
 	t.Parallel()
 	db := testDB(t)
 
-	if err := initSchema(db); err != nil {
-		t.Fatalf("initSchema: %v", err)
+	if err := migrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
 	}
 
 	tables := []string{"events", "event_meta", "events_fts"}
@@ -57,15 +57,54 @@ func TestInitSchema_CreatesAllTables(t *testing.T) {
 	}
 }
 
-func TestInitSchema_Idempotent(t *testing.T) {
+func TestMigrate_Idempotent(t *testing.T) {
 	t.Parallel()
 	db := testDB(t)
 
-	if err := initSchema(db); err != nil {
-		t.Fatalf("first initSchema call: %v", err)
+	for i := range 3 {
+		if err := migrate(db); err != nil {
+			t.Fatalf("migrate call %d: %v", i, err)
+		}
 	}
-	if err := initSchema(db); err != nil {
-		t.Fatalf("second initSchema call: %v", err)
+}
+
+func TestMigrate_BumpsUserVersion(t *testing.T) {
+	t.Parallel()
+	db := testDB(t)
+
+	if err := migrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	v, err := userVersion(db)
+	if err != nil {
+		t.Fatalf("userVersion: %v", err)
+	}
+	want := migrations[len(migrations)-1].version
+	if v != want {
+		t.Errorf("user_version = %d, want %d", v, want)
+	}
+}
+
+func TestMigrate_DetectsLegacyV1(t *testing.T) {
+	t.Parallel()
+	db := testDB(t)
+
+	// Simulate a database created before the migration framework: schema
+	// matches v1 but PRAGMA user_version is still 0.
+	if _, err := db.Exec(migrations[0].up); err != nil {
+		t.Fatalf("seed legacy schema: %v", err)
+	}
+
+	if err := migrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	v, err := userVersion(db)
+	if err != nil {
+		t.Fatalf("userVersion: %v", err)
+	}
+	if v != 1 {
+		t.Errorf("legacy db user_version = %d, want 1", v)
 	}
 }
 
