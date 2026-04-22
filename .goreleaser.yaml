@@ -106,7 +106,7 @@ brews:
 changelog:
   use: git
   sort: asc
-  abbrev: 7
+  abbrev: -1
   filters:
     exclude:
       - "^Merge"
