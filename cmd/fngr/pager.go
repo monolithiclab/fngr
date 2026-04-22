@@ -39,7 +39,7 @@ func withPager(io ioStreams, disabled bool) (ioStreams, func() error) {
 		fmt.Fprintf(os.Stderr, "warning: could not start pager: %v\n", err)
 		return io, noopCloser
 	}
-	return ioStreams{In: io.In, Out: in}, func() error {
+	return ioStreams{In: io.In, Out: in, Err: io.Err, IsTTY: io.IsTTY}, func() error {
 		_ = in.Close()
 		return cmd.Wait()
 	}

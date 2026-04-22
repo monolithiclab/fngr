@@ -38,6 +38,23 @@ func TestWithPager_NonTTYOutNoOps(t *testing.T) {
 	}
 }
 
+func TestWithPager_PreservesErrAndIsTTY(t *testing.T) {
+	t.Parallel()
+	var out, errBuf bytes.Buffer
+	in := strings.NewReader("")
+
+	original := ioStreams{In: in, Out: &out, Err: &errBuf, IsTTY: true}
+	wrapped, closer := withPager(original, true) // disabled=true → returns original io
+	defer func() { _ = closer() }()
+
+	if wrapped.Err != &errBuf {
+		t.Errorf("wrapped.Err = %v, want original errBuf", wrapped.Err)
+	}
+	if !wrapped.IsTTY {
+		t.Errorf("wrapped.IsTTY = false, want true")
+	}
+}
+
 func TestWithPager_PipesToPagerProcess(t *testing.T) {
 	dir := t.TempDir()
 	captured := filepath.Join(dir, "captured.txt")
