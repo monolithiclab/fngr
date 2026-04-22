@@ -794,3 +794,59 @@ func TestList_ComplexFilters(t *testing.T) {
 		})
 	}
 }
+
+func TestListSeq_YieldsAllInOrder(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	for i := range 3 {
+		if _, err := Add(ctx, database, fmt.Sprintf("evt %d", i), nil, []parse.Meta{
+			{Key: MetaKeyAuthor, Value: "alice"},
+		}, nil); err != nil {
+			t.Fatalf("Add %d: %v", i, err)
+		}
+	}
+
+	var got []string
+	for ev, err := range ListSeq(ctx, database, ListOpts{Ascending: true}) {
+		if err != nil {
+			t.Fatalf("ListSeq: %v", err)
+		}
+		if len(ev.Meta) != 1 || ev.Meta[0].Value != "alice" {
+			t.Errorf("event %d meta = %v, want [{author alice}]", ev.ID, ev.Meta)
+		}
+		got = append(got, ev.Text)
+	}
+	want := []string{"evt 0", "evt 1", "evt 2"}
+	if len(got) != 3 || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+func TestListSeq_AcrossBatchBoundary(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	const n = metaBatchSize + 50
+	for i := range n {
+		if _, err := Add(ctx, database, fmt.Sprintf("e%d", i), nil, []parse.Meta{
+			{Key: MetaKeyAuthor, Value: "alice"},
+		}, nil); err != nil {
+			t.Fatalf("Add %d: %v", i, err)
+		}
+	}
+
+	count := 0
+	for ev, err := range ListSeq(ctx, database, ListOpts{Ascending: true}) {
+		if err != nil {
+			t.Fatalf("ListSeq err: %v", err)
+		}
+		if len(ev.Meta) != 1 {
+			t.Fatalf("event %d meta missing across batch boundary", ev.ID)
+		}
+		count++
+	}
+	if count != n {
+		t.Errorf("yielded %d events, want %d", count, n)
+	}
+}

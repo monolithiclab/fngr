@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"iter"
 	"strings"
 	"time"
 
@@ -288,7 +289,77 @@ type ListOpts struct {
 	Ascending bool       // oldest first when true; default is newest first
 }
 
+// ListSeq yields events matching opts one at a time, fetching from the
+// database and loading metadata in batches of metaBatchSize. The second
+// yielded value is the first error encountered; iteration stops after an
+// error is yielded.
+//
+// Note: event rows are materialized before metadata loading begins, as
+// modernc.org/sqlite does not support concurrent queries on a single
+// connection.
+func ListSeq(ctx context.Context, db *sql.DB, opts ListOpts) iter.Seq2[Event, error] {
+	return func(yield func(Event, error) bool) {
+		query, args := buildListQuery(opts)
+		rows, err := db.QueryContext(ctx, query, args...)
+		if err != nil {
+			yield(Event{}, fmt.Errorf("query events: %w", err))
+			return
+		}
+		defer rows.Close()
+
+		// Materialize event rows (ID, ParentID, Text, CreatedAt) before metadata
+		// queries to avoid concurrent query conflicts with modernc.org/sqlite.
+		var events []Event
+		for rows.Next() {
+			var e Event
+			var parentID sql.NullInt64
+			if err := rows.Scan(&e.ID, &parentID, &e.Text, &e.CreatedAt); err != nil {
+				yield(Event{}, fmt.Errorf("scan event: %w", err))
+				return
+			}
+			if parentID.Valid {
+				e.ParentID = &parentID.Int64
+			}
+			events = append(events, e)
+		}
+		if err := rows.Err(); err != nil {
+			yield(Event{}, fmt.Errorf("iterate events: %w", err))
+			return
+		}
+		_ = rows.Close()
+
+		// Load and yield in batches
+		for start := 0; start < len(events); start += metaBatchSize {
+			end := min(start+metaBatchSize, len(events))
+			batch := events[start:end]
+			if err := loadMetaBatch(ctx, db, batch); err != nil {
+				yield(Event{}, err)
+				return
+			}
+			for _, ev := range batch {
+				if !yield(ev, nil) {
+					return
+				}
+			}
+		}
+	}
+}
+
+// List collects every event from ListSeq. Use ListSeq directly when you can
+// stream (flat/csv/json renderers); use List when you genuinely need the
+// full slice in memory (tree topology, GetSubtree).
 func List(ctx context.Context, db *sql.DB, opts ListOpts) ([]Event, error) {
+	var out []Event
+	for ev, err := range ListSeq(ctx, db, opts) {
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, ev)
+	}
+	return out, nil
+}
+
+func buildListQuery(opts ListOpts) (string, []any) {
 	var query string
 	var args []any
 
@@ -333,13 +404,7 @@ func List(ctx context.Context, db *sql.DB, opts ListOpts) ([]Event, error) {
 		args = append(args, opts.Limit)
 	}
 
-	rows, err := db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("query events: %w", err)
-	}
-	defer rows.Close()
-
-	return scanEvents(ctx, db, rows)
+	return query, args
 }
 
 func GetSubtree(ctx context.Context, db *sql.DB, rootID int64) ([]Event, error) {
