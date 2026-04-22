@@ -15,11 +15,11 @@ var version = "dev"
 type CLI struct {
 	DB string `help:"Path to database file." env:"FNGR_DB" type:"path"`
 
-	Add    internal.AddCmd    `cmd:"" default:"withargs" help:"Add an event (default command)."`
-	List   internal.ListCmd   `cmd:"" help:"List events."`
-	Show   internal.ShowCmd   `cmd:"" help:"Show a single event."`
-	Delete internal.DeleteCmd `cmd:"" help:"Delete an event."`
-	Meta   internal.MetaCmd   `cmd:"" help:"List all metadata keys and values."`
+	Add    AddCmd    `cmd:"" default:"withargs" help:"Add an event (default command)."`
+	List   ListCmd   `cmd:"" help:"List events."`
+	Show   ShowCmd   `cmd:"" help:"Show a single event."`
+	Delete DeleteCmd `cmd:"" help:"Delete an event."`
+	Meta   MetaCmd   `cmd:"" help:"List all metadata keys and values."`
 }
 
 func currentUser() string {
