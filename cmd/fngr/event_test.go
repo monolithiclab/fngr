@@ -259,6 +259,55 @@ func TestEventCmd_TagAddsAndDedups(t *testing.T) {
 	}
 }
 
+func TestEventCmd_TagMessage(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		seed     []parse.Meta
+		args     []string
+		contains []string
+	}{
+		{
+			name:     "all-new",
+			seed:     nil,
+			args:     []string{"#ops", "@alice"},
+			contains: []string{"2 added"},
+		},
+		{
+			name:     "all-already-present",
+			seed:     []parse.Meta{{Key: "tag", Value: "ops"}, {Key: "people", Value: "alice"}},
+			args:     []string{"#ops", "@alice"},
+			contains: []string{"already tagged"},
+		},
+		{
+			name:     "partial-dedup",
+			seed:     []parse.Meta{{Key: "tag", Value: "ops"}},
+			args:     []string{"#ops", "env=prod"},
+			contains: []string{"1 added", "1 already present"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			s := newTestStore(t)
+			io, out := newTestIO("")
+
+			id, _ := s.Add(context.Background(), "x", nil, tc.seed, nil)
+			cmd := &EventTagCmd{ID: id, Args: tc.args}
+			if err := cmd.Run(s, io); err != nil {
+				t.Fatalf("Tag: %v", err)
+			}
+			got := out.String()
+			for _, want := range tc.contains {
+				if !strings.Contains(got, want) {
+					t.Errorf("output = %q, want substring %q", got, want)
+				}
+			}
+		})
+	}
+}
+
 func TestEventCmd_TagInvalidArgErrors(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)

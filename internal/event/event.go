@@ -254,43 +254,52 @@ func Reparent(ctx context.Context, db *sql.DB, id int64, newParent *int64) error
 
 // AddTags inserts the given meta entries for event id. Duplicates are
 // dropped at the database via INSERT ... ON CONFLICT DO NOTHING (the
-// UNIQUE index on (key, value, event_id) added in migration 2). FTS is
-// rebuilt in the same transaction. Returns ErrNotFound if the event is
-// missing. Empty `tags` is a no-op.
-func AddTags(ctx context.Context, db *sql.DB, id int64, tags []parse.Meta) error {
+// UNIQUE index on (key, value, event_id) added in migration 2). Returns
+// the number of rows actually inserted — len(tags) minus database-side
+// dedup hits — so callers can report "M added, K already present". FTS
+// is rebuilt in the same transaction. Returns ErrNotFound if the event
+// is missing. Empty `tags` is a no-op returning (0, nil).
+func AddTags(ctx context.Context, db *sql.DB, id int64, tags []parse.Meta) (int64, error) {
 	if len(tags) == 0 {
-		return nil
+		return 0, nil
 	}
 
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin transaction: %w", err)
+		return 0, fmt.Errorf("begin transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
 	if err := requireEventExists(ctx, tx, id); err != nil {
-		return err
+		return 0, err
 	}
 
 	stmt, err := tx.PrepareContext(ctx,
 		"INSERT INTO event_meta (event_id, key, value) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
 	)
 	if err != nil {
-		return fmt.Errorf("prepare insert: %w", err)
+		return 0, fmt.Errorf("prepare insert: %w", err)
 	}
 	defer stmt.Close()
 
+	var added int64
 	for _, m := range tags {
-		if _, err := stmt.ExecContext(ctx, id, m.Key, m.Value); err != nil {
-			return fmt.Errorf("insert tag: %w", err)
+		res, err := stmt.ExecContext(ctx, id, m.Key, m.Value)
+		if err != nil {
+			return 0, fmt.Errorf("insert tag: %w", err)
 		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return 0, fmt.Errorf("rows affected: %w", err)
+		}
+		added += n
 	}
 
 	if err := rebuildEventFTS(ctx, tx, id); err != nil {
-		return err
+		return 0, err
 	}
 
-	return tx.Commit()
+	return added, tx.Commit()
 }
 
 // RemoveTags deletes (event_id, key, value) rows matching tags. Returns

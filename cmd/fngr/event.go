@@ -194,10 +194,19 @@ func (c *EventTagCmd) Run(s eventStore, io ioStreams) error {
 	if err != nil {
 		return err
 	}
-	if err := s.AddTags(ctx, c.ID, tags); err != nil {
+	added, err := s.AddTags(ctx, c.ID, tags)
+	if err != nil {
 		return err
 	}
-	fmt.Fprintf(io.Out, "Tagged event %d with %d tag(s)\n", c.ID, len(tags))
+	requested := int64(len(tags))
+	switch {
+	case added == 0:
+		fmt.Fprintf(io.Out, "Tagged event %d (already tagged)\n", c.ID)
+	case added == requested:
+		fmt.Fprintf(io.Out, "Tagged event %d (%d added)\n", c.ID, added)
+	default:
+		fmt.Fprintf(io.Out, "Tagged event %d (%d added, %d already present)\n", c.ID, added, requested-added)
+	}
 	return nil
 }
 

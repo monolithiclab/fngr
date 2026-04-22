@@ -328,8 +328,12 @@ func TestStore_AddTags(t *testing.T) {
 	s := newTestStore(t)
 
 	id, _ := s.Add(ctx, "x", nil, nil, nil)
-	if err := s.AddTags(ctx, id, []parse.Meta{{Key: "tag", Value: "ops"}}); err != nil {
+	added, err := s.AddTags(ctx, id, []parse.Meta{{Key: "tag", Value: "ops"}})
+	if err != nil {
 		t.Fatalf("AddTags: %v", err)
+	}
+	if added != 1 {
+		t.Errorf("added = %d, want 1", added)
 	}
 	n, err := s.CountMeta(ctx, "tag", "ops")
 	if err != nil {

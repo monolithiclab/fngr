@@ -1068,8 +1068,12 @@ func TestAddTags_DedupsAtDB(t *testing.T) {
 		{Key: "tag", Value: "deploy"},
 		{Key: "people", Value: "alice"},
 	}
-	if err := AddTags(ctx, database, id, tags); err != nil {
+	added, err := AddTags(ctx, database, id, tags)
+	if err != nil {
 		t.Fatalf("AddTags: %v", err)
+	}
+	if added != 2 {
+		t.Errorf("added = %d, want 2 (one of three tags was already present)", added)
 	}
 
 	ev, err := Get(ctx, database, id)
@@ -1092,12 +1096,51 @@ func TestAddTags_DedupsAtDB(t *testing.T) {
 	}
 }
 
+func TestAddTags_AddedCount(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+	id, _ := Add(ctx, database, "x", nil, []parse.Meta{{Key: "tag", Value: "ops"}}, nil)
+
+	cases := []struct {
+		name string
+		tags []parse.Meta
+		want int64
+	}{
+		{
+			name: "all-new",
+			tags: []parse.Meta{{Key: "tag", Value: "deploy"}, {Key: "people", Value: "alice"}},
+			want: 2,
+		},
+		{
+			name: "all-dupes",
+			tags: []parse.Meta{{Key: "tag", Value: "ops"}, {Key: "tag", Value: "deploy"}, {Key: "people", Value: "alice"}},
+			want: 0,
+		},
+		{
+			name: "single-new",
+			tags: []parse.Meta{{Key: "env", Value: "prod"}},
+			want: 1,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			added, err := AddTags(ctx, database, id, tc.tags)
+			if err != nil {
+				t.Fatalf("AddTags: %v", err)
+			}
+			if added != tc.want {
+				t.Errorf("added = %d, want %d", added, tc.want)
+			}
+		})
+	}
+}
+
 func TestAddTags_RebuildsFTS(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
 
 	id, _ := Add(ctx, database, "no tags here", nil, nil, nil)
-	if err := AddTags(ctx, database, id, []parse.Meta{{Key: "tag", Value: "ops"}}); err != nil {
+	if _, err := AddTags(ctx, database, id, []parse.Meta{{Key: "tag", Value: "ops"}}); err != nil {
 		t.Fatalf("AddTags: %v", err)
 	}
 
@@ -1113,7 +1156,7 @@ func TestAddTags_RebuildsFTS(t *testing.T) {
 func TestAddTags_NotFound(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
-	err := AddTags(ctx, database, 9999, []parse.Meta{{Key: "tag", Value: "x"}})
+	_, err := AddTags(ctx, database, 9999, []parse.Meta{{Key: "tag", Value: "x"}})
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("err = %v, want ErrNotFound", err)
 	}
@@ -1123,8 +1166,12 @@ func TestAddTags_EmptyIsNoOp(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
 	id, _ := Add(ctx, database, "x", nil, nil, nil)
-	if err := AddTags(ctx, database, id, nil); err != nil {
+	added, err := AddTags(ctx, database, id, nil)
+	if err != nil {
 		t.Errorf("empty AddTags returned err: %v", err)
+	}
+	if added != 0 {
+		t.Errorf("added = %d, want 0 for empty tags", added)
 	}
 }
 

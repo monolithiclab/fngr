@@ -70,7 +70,7 @@ func (s *Store) Reparent(ctx context.Context, id int64, newParent *int64) error 
 	return Reparent(ctx, s.DB, id, newParent)
 }
 
-func (s *Store) AddTags(ctx context.Context, id int64, tags []parse.Meta) error {
+func (s *Store) AddTags(ctx context.Context, id int64, tags []parse.Meta) (int64, error) {
 	return AddTags(ctx, s.DB, id, tags)
 }
 
