@@ -29,19 +29,19 @@ func currentUser() string {
 	if u, err := user.Current(); err == nil {
 		return u.Username
 	}
-	fmt.Fprintln(os.Stderr, "error: cannot determine current user; use --author or set FNGR_AUTHOR")
-	os.Exit(1)
 	return ""
 }
 
 func main() {
+	username := currentUser()
+
 	var cli CLI
 	ctx := kong.Parse(&cli,
 		kong.Name("fngr"),
 		kong.Description("A CLI to log and track events."),
 		kong.Vars{
 			"version": version,
-			"USER":    currentUser(),
+			"USER":    username,
 		},
 		kong.UsageOnError(),
 	)

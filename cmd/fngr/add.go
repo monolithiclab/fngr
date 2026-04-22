@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/monolithiclab/fngr/internal"
@@ -21,18 +20,14 @@ type AddCmd struct {
 func (c *AddCmd) Run(db *sql.DB) error {
 	ctx := context.Background()
 
-	author := c.Author
-	if author == "" {
-		author = os.Getenv("USER")
-	}
-	if author == "" {
+	if c.Author == "" {
 		return fmt.Errorf("author is required: use --author, FNGR_AUTHOR, or ensure $USER is set")
 	}
 	if c.Text == "" {
 		return fmt.Errorf("event text cannot be empty")
 	}
 
-	meta, err := internal.CollectMeta(c.Text, c.Meta, author)
+	meta, err := internal.CollectMeta(c.Text, c.Meta, c.Author)
 	if err != nil {
 		return err
 	}

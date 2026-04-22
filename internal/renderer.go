@@ -9,7 +9,18 @@ import (
 	"time"
 )
 
-const dateFormat = "2006-01-02"
+const (
+	dateFormat     = "2006-01-02"
+	dateTimeFormat = "2006-01-02 15:04:05"
+)
+
+func formatLocalDate(t time.Time) string {
+	return t.Local().Format(dateFormat)
+}
+
+func formatLocalDateTime(t time.Time) string {
+	return t.Local().Format(dateTimeFormat)
+}
 
 func metaValue(meta []Meta, key string) string {
 	for _, m := range meta {
@@ -53,7 +64,7 @@ func RenderTree(w io.Writer, events []Event) error {
 func renderNode(w io.Writer, events []Event, byID map[int64]int, children map[int64][]int64, id int64, linePrefix, childPrefix string) error {
 	idx := byID[id]
 	ev := events[idx]
-	date := ev.CreatedAt.Format(dateFormat)
+	date := formatLocalDate(ev.CreatedAt)
 	author := eventAuthor(ev)
 
 	if _, err := fmt.Fprintf(w, "%s%-4d%s  %s  %s\n", linePrefix, ev.ID, date, author, ev.Text); err != nil {
@@ -81,7 +92,7 @@ func renderNode(w io.Writer, events []Event, byID map[int64]int, children map[in
 
 func RenderFlat(w io.Writer, events []Event) error {
 	for _, ev := range events {
-		date := ev.CreatedAt.Format(dateFormat)
+		date := formatLocalDate(ev.CreatedAt)
 		author := eventAuthor(ev)
 		if _, err := fmt.Fprintf(w, "%-4d%s  %s  %s\n", ev.ID, date, author, ev.Text); err != nil {
 			return err
@@ -109,7 +120,7 @@ func RenderJSON(w io.Writer, events []Event) error {
 			ID:        ev.ID,
 			ParentID:  ev.ParentID,
 			Text:      ev.Text,
-			CreatedAt: ev.CreatedAt.Format(time.RFC3339),
+			CreatedAt: ev.CreatedAt.UTC().Format(time.RFC3339),
 			Meta:      meta,
 		}
 	}
@@ -132,7 +143,7 @@ func RenderCSV(w io.Writer, events []Event) error {
 		_ = cw.Write([]string{
 			strconv.FormatInt(ev.ID, 10),
 			parentID,
-			ev.CreatedAt.Format(time.RFC3339),
+			ev.CreatedAt.UTC().Format(time.RFC3339),
 			eventAuthor(ev),
 			ev.Text,
 		})
@@ -150,7 +161,7 @@ func RenderEvent(w io.Writer, event *Event) error {
 			return err
 		}
 	}
-	if _, err := fmt.Fprintf(w, "Date:   %s\n", event.CreatedAt.Format("2006-01-02 15:04:05")); err != nil {
+	if _, err := fmt.Fprintf(w, "Date:   %s\n", formatLocalDateTime(event.CreatedAt)); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintf(w, "Text:   %s\n", event.Text); err != nil {

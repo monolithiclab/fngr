@@ -47,7 +47,7 @@ func AddEvent(ctx context.Context, db *sql.DB, text string, parentID *int64, met
 	if createdAt != nil {
 		res, err = tx.ExecContext(ctx,
 			"INSERT INTO events (parent_id, text, created_at) VALUES (?, ?, ?)",
-			parentID, text, createdAt.Format("2006-01-02 15:04:05"),
+			parentID, text, createdAt.UTC().Format(dateTimeFormat),
 		)
 	} else {
 		res, err = tx.ExecContext(ctx,
