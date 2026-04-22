@@ -25,11 +25,10 @@ cycle. Specs land under `docs/superpowers/specs/`, plans under
   meta shape across both input and `fngr list --format=json` output is now
   `[[key, value], ...]` sorted by `(key, value)` — replaces the prior
   `{key: [values]}` map.
-
-## Output format polish
-
-- **Markdown format** (`--format=md`) — one `##` header per date followed by
-  a bullet list of `<time> — <content>` entries.
+- **Markdown output** (`--format=md`) — `fngr list` and `fngr event N`
+  emit a Markdown digest grouped by local date: one `## YYYY-MM-DD`
+  header per date followed by `- <time> — <body>` bullets. Multi-line
+  bodies and meta render as 2-space-indented continuation lines.
 
 ## CLI surface alignment
 

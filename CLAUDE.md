@@ -99,6 +99,7 @@ make ci             # codefix + format + lint + test
   stays flat regardless of result size; tree still buffers because it needs the topology.
   Meta in JSON output is `[[key, value], ...]`, sorted by `(key, value)`. Each `event_meta`
   row maps to one tuple — multiple values for the same key produce multiple tuples.
+  Markdown output groups events by local date as `## YYYY-MM-DD` sections; bullets are `- <time> — <body>` with multi-line bodies indented two spaces and meta on a separate continuation line of space-separated `key=value` tokens.
 
 ## Conventions
 

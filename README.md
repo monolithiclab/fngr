@@ -80,6 +80,14 @@ fngr --format flat
 fngr --format json
 fngr --format csv
 
+# Markdown digest
+fngr --format=md
+fngr --from 2026-04-15 --to 2026-04-22 --format=md > week.md
+# Output groups by local date with ## YYYY-MM-DD headers and bullet
+# entries; multi-line bodies and meta render as indented continuation
+# lines. Designed for paste-into-wiki workflows; for round-trip use
+# --format=json.
+
 # Show a single event (bare form is shorthand for `event show N`)
 fngr event 1
 fngr event 1 --tree         # with children
