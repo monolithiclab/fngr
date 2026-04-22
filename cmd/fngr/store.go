@@ -24,7 +24,7 @@ type eventStore interface {
 	List(ctx context.Context, opts event.ListOpts) ([]event.Event, error)
 	ListSeq(ctx context.Context, opts event.ListOpts) iter.Seq2[event.Event, error]
 	GetSubtree(ctx context.Context, rootID int64) ([]event.Event, error)
-	ListMeta(ctx context.Context) ([]event.MetaCount, error)
+	ListMeta(ctx context.Context, opts event.ListMetaOpts) ([]event.MetaCount, error)
 	CountMeta(ctx context.Context, key, value string) (int64, error)
 	UpdateMeta(ctx context.Context, oldKey, oldValue, newKey, newValue string) (int64, error)
 	DeleteMeta(ctx context.Context, key, value string) (int64, error)

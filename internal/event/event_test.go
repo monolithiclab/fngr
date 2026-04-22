@@ -513,7 +513,7 @@ func TestListMeta(t *testing.T) {
 		t.Fatalf("Add 2: %v", err)
 	}
 
-	counts, err := ListMeta(ctx, database)
+	counts, err := ListMeta(ctx, database, ListMetaOpts{})
 	if err != nil {
 		t.Fatalf("ListMeta: %v", err)
 	}
@@ -538,6 +538,80 @@ func TestListMeta(t *testing.T) {
 				i, counts[i].Key, counts[i].Value, counts[i].Count,
 				exp.key, exp.value, exp.count)
 		}
+	}
+}
+
+func TestListMeta_FilterByKey(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	if _, err := Add(ctx, database, "x", nil, []parse.Meta{
+		{Key: "tag", Value: "ops"},
+		{Key: "tag", Value: "deploy"},
+		{Key: "people", Value: "alice"},
+	}, nil); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	got, err := ListMeta(ctx, database, ListMetaOpts{Key: "tag"})
+	if err != nil {
+		t.Fatalf("ListMeta: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len = %d, want 2: %v", len(got), got)
+	}
+	for _, mc := range got {
+		if mc.Key != "tag" {
+			t.Errorf("got key %q, want tag", mc.Key)
+		}
+	}
+}
+
+func TestListMeta_FilterByKeyValue(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	for range 3 {
+		if _, err := Add(ctx, database, "x", nil, []parse.Meta{
+			{Key: "tag", Value: "ops"},
+		}, nil); err != nil {
+			t.Fatalf("Add: %v", err)
+		}
+	}
+	if _, err := Add(ctx, database, "y", nil, []parse.Meta{
+		{Key: "tag", Value: "other"},
+	}, nil); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	got, err := ListMeta(ctx, database, ListMetaOpts{Key: "tag", Value: "ops"})
+	if err != nil {
+		t.Fatalf("ListMeta: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len = %d, want 1: %v", len(got), got)
+	}
+	if got[0].Key != "tag" || got[0].Value != "ops" || got[0].Count != 3 {
+		t.Errorf("got %+v, want tag=ops count=3", got[0])
+	}
+}
+
+func TestListMeta_FilterEmptyResult(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	if _, err := Add(ctx, database, "x", nil, []parse.Meta{
+		{Key: "tag", Value: "ops"},
+	}, nil); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	got, err := ListMeta(ctx, database, ListMetaOpts{Key: "tag", Value: "missing"})
+	if err != nil {
+		t.Fatalf("ListMeta: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("got %d rows, want 0: %v", len(got), got)
 	}
 }
 

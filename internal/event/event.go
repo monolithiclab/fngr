@@ -491,10 +491,34 @@ func CountMeta(ctx context.Context, db *sql.DB, key, value string) (int64, error
 	return n, nil
 }
 
-func ListMeta(ctx context.Context, db *sql.DB) ([]MetaCount, error) {
-	rows, err := db.QueryContext(ctx,
-		"SELECT key, value, COUNT(*) AS count FROM event_meta GROUP BY key, value ORDER BY key, value",
-	)
+// ListMetaOpts narrows the result of ListMeta. Both fields are optional;
+// zero values mean "no filter on that field". When both are set, the
+// query is an exact (key, value) match.
+type ListMetaOpts struct {
+	Key   string
+	Value string
+}
+
+// ListMeta returns one MetaCount row per (key, value) tuple matching opts,
+// sorted by key then value.
+func ListMeta(ctx context.Context, db *sql.DB, opts ListMetaOpts) ([]MetaCount, error) {
+	query := "SELECT key, value, COUNT(*) AS count FROM event_meta"
+	var args []any
+	var conds []string
+	if opts.Key != "" {
+		conds = append(conds, "key = ?")
+		args = append(args, opts.Key)
+	}
+	if opts.Value != "" {
+		conds = append(conds, "value = ?")
+		args = append(args, opts.Value)
+	}
+	if len(conds) > 0 {
+		query += " WHERE " + strings.Join(conds, " AND ") // #nosec G202 -- conds are "key = ?" and "value = ?" only, not user input
+	}
+	query += " GROUP BY key, value ORDER BY key, value"
+
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query meta counts: %w", err)
 	}

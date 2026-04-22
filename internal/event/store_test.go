@@ -200,7 +200,7 @@ func TestStore_MetaCRUD(t *testing.T) {
 		}
 	}
 
-	counts, err := s.ListMeta(ctx)
+	counts, err := s.ListMeta(ctx, ListMetaOpts{})
 	if err != nil {
 		t.Fatalf("ListMeta: %v", err)
 	}
@@ -238,6 +238,26 @@ func TestStore_MetaCRUD(t *testing.T) {
 	}
 	if left != 0 {
 		t.Errorf("count after delete = %d, want 0", left)
+	}
+}
+
+func TestStore_ListMeta_Filter(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+
+	if _, err := s.Add(ctx, "x", nil, []parse.Meta{
+		{Key: "tag", Value: "ops"},
+		{Key: "people", Value: "alice"},
+	}, nil); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	got, err := s.ListMeta(ctx, ListMetaOpts{Key: "people"})
+	if err != nil {
+		t.Fatalf("ListMeta: %v", err)
+	}
+	if len(got) != 1 || got[0].Key != "people" {
+		t.Errorf("got %v, want one row with key=people", got)
 	}
 }
 

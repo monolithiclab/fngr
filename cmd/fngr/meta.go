@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/monolithiclab/fngr/internal/event"
 	"github.com/monolithiclab/fngr/internal/parse"
 )
 
@@ -18,7 +19,7 @@ type MetaListCmd struct{}
 func (c *MetaListCmd) Run(s eventStore, io ioStreams) error {
 	ctx := context.Background()
 
-	counts, err := s.ListMeta(ctx)
+	counts, err := s.ListMeta(ctx, event.ListMetaOpts{})
 	if err != nil {
 		return err
 	}
