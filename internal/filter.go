@@ -34,19 +34,18 @@ func PreprocessFilter(expr string) string {
 // convertTerm transforms a single token into its FTS5 representation.
 // It handles the ! prefix (NOT), # shorthand (tag), @ shorthand (people),
 // key=value quoting, and bare word passthrough.
+var shorthandKeys = map[byte]string{
+	'#': MetaKeyTag,
+	'@': MetaKeyPeople,
+}
+
 func convertTerm(tok string) string {
-	// Handle NOT prefix: strip the ! and recurse, then prepend NOT.
 	if strings.HasPrefix(tok, "!") {
-		inner := convertTerm(tok[1:])
-		return "NOT " + inner
+		return "NOT " + convertTerm(tok[1:])
 	}
 
-	if strings.HasPrefix(tok, "#") {
-		return ftsQuote(MetaKeyTag + "=" + tok[1:])
-	}
-
-	if strings.HasPrefix(tok, "@") {
-		return ftsQuote(MetaKeyPeople + "=" + tok[1:])
+	if key, ok := shorthandKeys[tok[0]]; ok {
+		return ftsQuote(key + "=" + tok[1:])
 	}
 
 	if strings.Contains(tok, "=") {

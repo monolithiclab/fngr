@@ -9,7 +9,8 @@ import (
 	"time"
 )
 
-// metaValue returns the value of the first Meta entry matching key, or "" if not found.
+const dateFormat = "2006-01-02"
+
 func metaValue(meta []Meta, key string) string {
 	for _, m := range meta {
 		if m.Key == key {
@@ -17,6 +18,10 @@ func metaValue(meta []Meta, key string) string {
 		}
 	}
 	return ""
+}
+
+func eventAuthor(ev Event) string {
+	return metaValue(ev.Meta, MetaKeyAuthor)
 }
 
 // RenderTree renders events as an ASCII tree with parent-child indentation.
@@ -55,8 +60,8 @@ func RenderTree(events []Event) string {
 func renderNode(b *bytes.Buffer, events []Event, byID map[int64]int, children map[int64][]int64, id int64, linePrefix, childPrefix string) {
 	idx := byID[id]
 	ev := events[idx]
-	date := ev.CreatedAt.Format("2006-01-02")
-	author := metaValue(ev.Meta, MetaKeyAuthor)
+	date := ev.CreatedAt.Format(dateFormat)
+	author := eventAuthor(ev)
 
 	fmt.Fprintf(b, "%s%-4d%s  %s  %s\n", linePrefix, ev.ID, date, author, ev.Text)
 
@@ -84,8 +89,8 @@ func RenderFlat(events []Event) string {
 
 	var b bytes.Buffer
 	for _, ev := range events {
-		date := ev.CreatedAt.Format("2006-01-02")
-		author := metaValue(ev.Meta, MetaKeyAuthor)
+		date := ev.CreatedAt.Format(dateFormat)
+		author := eventAuthor(ev)
 		fmt.Fprintf(&b, "%-4d%s  %s  %s\n", ev.ID, date, author, ev.Text)
 	}
 	return b.String()
@@ -137,7 +142,7 @@ func RenderCSV(events []Event) string {
 		if ev.ParentID != nil {
 			parentID = strconv.FormatInt(*ev.ParentID, 10)
 		}
-		author := metaValue(ev.Meta, MetaKeyAuthor)
+		author := eventAuthor(ev)
 		_ = w.Write([]string{
 			strconv.FormatInt(ev.ID, 10),
 			parentID,

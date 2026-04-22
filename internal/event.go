@@ -87,32 +87,23 @@ func AddEvent(db *sql.DB, text string, parentID *int64, meta []Meta) (int64, err
 	return id, nil
 }
 
-// GetEvent retrieves an event by ID including its metadata.
 func GetEvent(db *sql.DB, id int64) (*Event, error) {
-	e := &Event{}
-	var parentID sql.NullInt64
-
-	err := db.QueryRow(
+	rows, err := db.Query(
 		"SELECT id, parent_id, text, created_at FROM events WHERE id = ?", id,
-	).Scan(&e.ID, &parentID, &e.Text, &e.CreatedAt)
+	)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("event %d: %w", id, ErrNotFound)
-		}
 		return nil, fmt.Errorf("query event: %w", err)
 	}
+	defer rows.Close()
 
-	if parentID.Valid {
-		e.ParentID = &parentID.Int64
-	}
-
-	meta, err := loadMeta(db, id)
+	events, err := scanEvents(db, rows)
 	if err != nil {
 		return nil, err
 	}
-	e.Meta = meta
-
-	return e, nil
+	if len(events) == 0 {
+		return nil, fmt.Errorf("event %d: %w", id, ErrNotFound)
+	}
+	return &events[0], nil
 }
 
 // DeleteEvent removes an event by ID. Returns an error if the event does not exist.
@@ -302,30 +293,4 @@ func loadMetaBatch(db *sql.DB, events []Event) error {
 		}
 	}
 	return rows.Err()
-}
-
-// loadMeta queries all metadata for a given event ID, ordered by key then value.
-func loadMeta(db *sql.DB, eventID int64) ([]Meta, error) {
-	rows, err := db.Query(
-		"SELECT key, value FROM event_meta WHERE event_id = ? ORDER BY key, value",
-		eventID,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("query meta: %w", err)
-	}
-	defer rows.Close()
-
-	var result []Meta
-	for rows.Next() {
-		var m Meta
-		if err := rows.Scan(&m.Key, &m.Value); err != nil {
-			return nil, fmt.Errorf("scan meta: %w", err)
-		}
-		result = append(result, m)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate meta: %w", err)
-	}
-
-	return result, nil
 }
