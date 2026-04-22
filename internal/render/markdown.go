@@ -1,0 +1,74 @@
+// Package render contains output formatting functions.
+package render
+
+import (
+	"cmp"
+	"fmt"
+	"io"
+	"slices"
+	"strings"
+
+	"github.com/monolithiclab/fngr/internal/event"
+	"github.com/monolithiclab/fngr/internal/timefmt"
+)
+
+// Markdown renders events as a Markdown digest grouped by local date.
+// Section headers (## YYYY-MM-DD) are emitted when the local date changes
+// between consecutive events. Iteration order is preserved.
+func Markdown(w io.Writer, events []event.Event) error {
+	var lastDate string
+	for _, ev := range events {
+		if err := renderMarkdownEvent(w, &lastDate, ev); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// renderMarkdownEvent writes one event's bullet (and optional continuation
+// lines and meta line). It updates *lastDate; when the local date of ev
+// differs, it first writes a date header (with a leading blank line if
+// *lastDate is non-empty).
+func renderMarkdownEvent(w io.Writer, lastDate *string, ev event.Event) error {
+	local := ev.CreatedAt.Local()
+	date := local.Format(timefmt.DateFormat)
+	if date != *lastDate {
+		if *lastDate != "" {
+			if _, err := fmt.Fprint(w, "\n"); err != nil {
+				return err
+			}
+		}
+		if _, err := fmt.Fprintf(w, "## %s\n\n", date); err != nil {
+			return err
+		}
+		*lastDate = date
+	}
+
+	timeStr := local.Format(timefmt.LayoutToday)
+
+	lines := strings.Split(ev.Text, "\n")
+	for i, line := range lines {
+		lines[i] = strings.TrimSuffix(line, "\r")
+	}
+
+	if _, err := fmt.Fprintf(w, "- %s — %s\n", timeStr, lines[0]); err != nil {
+		return err
+	}
+	for _, line := range lines[1:] {
+		if _, err := fmt.Fprintf(w, "  %s\n", line); err != nil {
+			return err
+		}
+	}
+
+	if len(ev.Meta) > 0 {
+		pairs := make([]string, 0, len(ev.Meta))
+		for _, m := range ev.Meta {
+			pairs = append(pairs, fmt.Sprintf("%s=%s", m.Key, m.Value))
+		}
+		slices.SortFunc(pairs, cmp.Compare)
+		if _, err := fmt.Fprintf(w, "  %s\n", strings.Join(pairs, " ")); err != nil {
+			return err
+		}
+	}
+	return nil
+}
