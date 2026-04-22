@@ -1,9 +1,12 @@
 package internal
 
 import (
+	"context"
 	"errors"
 	"testing"
 )
+
+var ctx = context.Background()
 
 func TestAddEvent(t *testing.T) {
 	t.Parallel()
@@ -15,7 +18,7 @@ func TestAddEvent(t *testing.T) {
 		{Key: "people", Value: "bob"},
 	}
 
-	id, err := AddEvent(db, "standup with @bob #meeting", nil, meta)
+	id, err := AddEvent(ctx, db, "standup with @bob #meeting", nil, meta)
 	if err != nil {
 		t.Fatalf("AddEvent: %v", err)
 	}
@@ -58,12 +61,12 @@ func TestAddEvent_WithParent(t *testing.T) {
 	t.Parallel()
 	db := testDBWithSchema(t)
 
-	parentID, err := AddEvent(db, "parent event", nil, nil)
+	parentID, err := AddEvent(ctx, db, "parent event", nil, nil)
 	if err != nil {
 		t.Fatalf("AddEvent parent: %v", err)
 	}
 
-	childID, err := AddEvent(db, "child event", &parentID, nil)
+	childID, err := AddEvent(ctx, db, "child event", &parentID, nil)
 	if err != nil {
 		t.Fatalf("AddEvent child: %v", err)
 	}
@@ -84,7 +87,7 @@ func TestAddEvent_InvalidParent(t *testing.T) {
 	db := testDBWithSchema(t)
 
 	invalidParent := int64(9999)
-	_, err := AddEvent(db, "orphan event", &invalidParent, nil)
+	_, err := AddEvent(ctx, db, "orphan event", &invalidParent, nil)
 	if err == nil {
 		t.Fatal("expected error for invalid parent, got nil")
 	}
@@ -102,12 +105,12 @@ func TestGetEvent(t *testing.T) {
 		{Key: "tag", Value: "work"},
 	}
 
-	id, err := AddEvent(db, "get me", nil, meta)
+	id, err := AddEvent(ctx, db, "get me", nil, meta)
 	if err != nil {
 		t.Fatalf("AddEvent: %v", err)
 	}
 
-	event, err := GetEvent(db, id)
+	event, err := GetEvent(ctx, db, id)
 	if err != nil {
 		t.Fatalf("GetEvent: %v", err)
 	}
@@ -124,7 +127,7 @@ func TestGetEvent_NotFound(t *testing.T) {
 	t.Parallel()
 	db := testDBWithSchema(t)
 
-	_, err := GetEvent(db, 9999)
+	_, err := GetEvent(ctx, db, 9999)
 	if err == nil {
 		t.Fatal("expected error for nonexistent event, got nil")
 	}
@@ -137,12 +140,12 @@ func TestDeleteEvent(t *testing.T) {
 	t.Parallel()
 	db := testDBWithSchema(t)
 
-	id, err := AddEvent(db, "to be deleted", nil, nil)
+	id, err := AddEvent(ctx, db, "to be deleted", nil, nil)
 	if err != nil {
 		t.Fatalf("AddEvent: %v", err)
 	}
 
-	if err := DeleteEvent(db, id); err != nil {
+	if err := DeleteEvent(ctx, db, id); err != nil {
 		t.Fatalf("DeleteEvent: %v", err)
 	}
 
@@ -161,7 +164,7 @@ func TestDeleteEvent_NotFound(t *testing.T) {
 	t.Parallel()
 	db := testDBWithSchema(t)
 
-	err := DeleteEvent(db, 9999)
+	err := DeleteEvent(ctx, db, 9999)
 	if err == nil {
 		t.Fatal("expected error for nonexistent event, got nil")
 	}
@@ -174,17 +177,17 @@ func TestDeleteEvent_CascadesChildren(t *testing.T) {
 	t.Parallel()
 	db := testDBWithSchema(t)
 
-	parentID, err := AddEvent(db, "parent", nil, []Meta{{Key: "author", Value: "alice"}})
+	parentID, err := AddEvent(ctx, db, "parent", nil, []Meta{{Key: "author", Value: "alice"}})
 	if err != nil {
 		t.Fatalf("AddEvent parent: %v", err)
 	}
 
-	childID, err := AddEvent(db, "child", &parentID, []Meta{{Key: "tag", Value: "reply"}})
+	childID, err := AddEvent(ctx, db, "child", &parentID, []Meta{{Key: "tag", Value: "reply"}})
 	if err != nil {
 		t.Fatalf("AddEvent child: %v", err)
 	}
 
-	if err := DeleteEvent(db, parentID); err != nil {
+	if err := DeleteEvent(ctx, db, parentID); err != nil {
 		t.Fatalf("DeleteEvent parent: %v", err)
 	}
 
@@ -203,16 +206,16 @@ func TestListEvents_NoFilter(t *testing.T) {
 	t.Parallel()
 	db := testDBWithSchema(t)
 
-	_, err := AddEvent(db, "first event #work", nil, []Meta{{Key: "tag", Value: "work"}})
+	_, err := AddEvent(ctx, db, "first event #work", nil, []Meta{{Key: "tag", Value: "work"}})
 	if err != nil {
 		t.Fatalf("AddEvent 1: %v", err)
 	}
-	_, err = AddEvent(db, "second event #personal", nil, []Meta{{Key: "tag", Value: "personal"}})
+	_, err = AddEvent(ctx, db, "second event #personal", nil, []Meta{{Key: "tag", Value: "personal"}})
 	if err != nil {
 		t.Fatalf("AddEvent 2: %v", err)
 	}
 
-	events, err := ListEvents(db, ListOpts{})
+	events, err := ListEvents(ctx, db, ListOpts{})
 	if err != nil {
 		t.Fatalf("ListEvents: %v", err)
 	}
@@ -231,16 +234,16 @@ func TestListEvents_WithFilter(t *testing.T) {
 	t.Parallel()
 	db := testDBWithSchema(t)
 
-	_, err := AddEvent(db, "deploy to prod #ops", nil, []Meta{{Key: "tag", Value: "ops"}})
+	_, err := AddEvent(ctx, db, "deploy to prod #ops", nil, []Meta{{Key: "tag", Value: "ops"}})
 	if err != nil {
 		t.Fatalf("AddEvent 1: %v", err)
 	}
-	_, err = AddEvent(db, "standup meeting #work", nil, []Meta{{Key: "tag", Value: "work"}})
+	_, err = AddEvent(ctx, db, "standup meeting #work", nil, []Meta{{Key: "tag", Value: "work"}})
 	if err != nil {
 		t.Fatalf("AddEvent 2: %v", err)
 	}
 
-	events, err := ListEvents(db, ListOpts{Filter: "#ops"})
+	events, err := ListEvents(ctx, db, ListOpts{Filter: "#ops"})
 	if err != nil {
 		t.Fatalf("ListEvents: %v", err)
 	}
@@ -276,7 +279,7 @@ func TestListEvents_WithDateRange(t *testing.T) {
 	}
 
 	// Filter to only include events on or after 2026-03-01.
-	events, err := ListEvents(db, ListOpts{From: "2026-03-01"})
+	events, err := ListEvents(ctx, db, ListOpts{From: "2026-03-01"})
 	if err != nil {
 		t.Fatalf("ListEvents with From: %v", err)
 	}
@@ -288,7 +291,7 @@ func TestListEvents_WithDateRange(t *testing.T) {
 	}
 
 	// Filter to only include events on or before 2026-02-01.
-	events, err = ListEvents(db, ListOpts{To: "2026-02-01"})
+	events, err = ListEvents(ctx, db, ListOpts{To: "2026-02-01"})
 	if err != nil {
 		t.Fatalf("ListEvents with To: %v", err)
 	}
@@ -300,7 +303,7 @@ func TestListEvents_WithDateRange(t *testing.T) {
 	}
 
 	// Filter with both From and To.
-	events, err = ListEvents(db, ListOpts{From: "2026-02-01", To: "2026-04-01"})
+	events, err = ListEvents(ctx, db, ListOpts{From: "2026-02-01", To: "2026-04-01"})
 	if err != nil {
 		t.Fatalf("ListEvents with From and To: %v", err)
 	}
@@ -317,7 +320,7 @@ func TestListMeta(t *testing.T) {
 	db := testDBWithSchema(t)
 
 	// Add 2 events with overlapping meta.
-	_, err := AddEvent(db, "event one", nil, []Meta{
+	_, err := AddEvent(ctx, db, "event one", nil, []Meta{
 		{Key: "author", Value: "alice"},
 		{Key: "tag", Value: "work"},
 	})
@@ -325,7 +328,7 @@ func TestListMeta(t *testing.T) {
 		t.Fatalf("AddEvent 1: %v", err)
 	}
 
-	_, err = AddEvent(db, "event two", nil, []Meta{
+	_, err = AddEvent(ctx, db, "event two", nil, []Meta{
 		{Key: "author", Value: "alice"},
 		{Key: "tag", Value: "personal"},
 	})
@@ -333,7 +336,7 @@ func TestListMeta(t *testing.T) {
 		t.Fatalf("AddEvent 2: %v", err)
 	}
 
-	counts, err := ListMeta(db)
+	counts, err := ListMeta(ctx, db)
 	if err != nil {
 		t.Fatalf("ListMeta: %v", err)
 	}
@@ -368,27 +371,27 @@ func TestGetSubtree(t *testing.T) {
 	t.Parallel()
 	db := testDBWithSchema(t)
 
-	root, err := AddEvent(db, "root", nil, []Meta{{Key: MetaKeyAuthor, Value: "alice"}})
+	root, err := AddEvent(ctx, db, "root", nil, []Meta{{Key: MetaKeyAuthor, Value: "alice"}})
 	if err != nil {
 		t.Fatalf("AddEvent root: %v", err)
 	}
 
-	child, err := AddEvent(db, "child", &root, []Meta{{Key: MetaKeyAuthor, Value: "alice"}})
+	child, err := AddEvent(ctx, db, "child", &root, []Meta{{Key: MetaKeyAuthor, Value: "alice"}})
 	if err != nil {
 		t.Fatalf("AddEvent child: %v", err)
 	}
 
-	grandchild, err := AddEvent(db, "grandchild", &child, []Meta{{Key: MetaKeyAuthor, Value: "bob"}})
+	grandchild, err := AddEvent(ctx, db, "grandchild", &child, []Meta{{Key: MetaKeyAuthor, Value: "bob"}})
 	if err != nil {
 		t.Fatalf("AddEvent grandchild: %v", err)
 	}
 
 	// Add an unrelated event that should not appear in the subtree.
-	if _, err := AddEvent(db, "unrelated", nil, nil); err != nil {
+	if _, err := AddEvent(ctx, db, "unrelated", nil, nil); err != nil {
 		t.Fatalf("AddEvent unrelated: %v", err)
 	}
 
-	events, err := GetSubtree(db, root)
+	events, err := GetSubtree(ctx, db, root)
 	if err != nil {
 		t.Fatalf("GetSubtree: %v", err)
 	}
@@ -416,12 +419,12 @@ func TestGetSubtree_LeafNode(t *testing.T) {
 	t.Parallel()
 	db := testDBWithSchema(t)
 
-	id, err := AddEvent(db, "leaf", nil, nil)
+	id, err := AddEvent(ctx, db, "leaf", nil, nil)
 	if err != nil {
 		t.Fatalf("AddEvent: %v", err)
 	}
 
-	events, err := GetSubtree(db, id)
+	events, err := GetSubtree(ctx, db, id)
 	if err != nil {
 		t.Fatalf("GetSubtree: %v", err)
 	}
@@ -437,7 +440,7 @@ func TestGetSubtree_NotFound(t *testing.T) {
 	t.Parallel()
 	db := testDBWithSchema(t)
 
-	_, err := GetSubtree(db, 9999)
+	_, err := GetSubtree(ctx, db, 9999)
 	if err == nil {
 		t.Fatal("expected error for nonexistent root, got nil")
 	}
@@ -451,7 +454,7 @@ func TestFTSIsolation_MetaTokensNotMatchedByBareWords(t *testing.T) {
 	db := testDBWithSchema(t)
 
 	// Event with tag=deploy in metadata but "deploy" does NOT appear in body text.
-	_, err := AddEvent(db, "pushed to production", nil, []Meta{
+	_, err := AddEvent(ctx, db, "pushed to production", nil, []Meta{
 		{Key: MetaKeyAuthor, Value: "alice"},
 		{Key: MetaKeyTag, Value: "deploy"},
 	})
@@ -461,7 +464,7 @@ func TestFTSIsolation_MetaTokensNotMatchedByBareWords(t *testing.T) {
 
 	// Bare word "deploy" should NOT match because the FTS token is "tag=deploy"
 	// (the = is a token character), not "deploy" as a standalone token.
-	events, err := ListEvents(db, ListOpts{Filter: "deploy"})
+	events, err := ListEvents(ctx, db, ListOpts{Filter: "deploy"})
 	if err != nil {
 		t.Fatalf("ListEvents bare word: %v", err)
 	}
@@ -470,7 +473,7 @@ func TestFTSIsolation_MetaTokensNotMatchedByBareWords(t *testing.T) {
 	}
 
 	// But #deploy (tag shorthand) should match via "tag=deploy" phrase.
-	events, err = ListEvents(db, ListOpts{Filter: "#deploy"})
+	events, err = ListEvents(ctx, db, ListOpts{Filter: "#deploy"})
 	if err != nil {
 		t.Fatalf("ListEvents #deploy: %v", err)
 	}
@@ -484,7 +487,7 @@ func TestFTSIsolation_BodyWordsNotMatchedByMetaFilter(t *testing.T) {
 	db := testDBWithSchema(t)
 
 	// Event with "work" in body text but no tag=work metadata.
-	_, err := AddEvent(db, "heading to work early", nil, []Meta{
+	_, err := AddEvent(ctx, db, "heading to work early", nil, []Meta{
 		{Key: MetaKeyAuthor, Value: "alice"},
 	})
 	if err != nil {
@@ -493,7 +496,7 @@ func TestFTSIsolation_BodyWordsNotMatchedByMetaFilter(t *testing.T) {
 
 	// #work filter → "tag=work" phrase match. Should NOT match because
 	// "work" in body is a standalone token, not "tag=work".
-	events, err := ListEvents(db, ListOpts{Filter: "#work"})
+	events, err := ListEvents(ctx, db, ListOpts{Filter: "#work"})
 	if err != nil {
 		t.Fatalf("ListEvents #work: %v", err)
 	}
@@ -502,7 +505,7 @@ func TestFTSIsolation_BodyWordsNotMatchedByMetaFilter(t *testing.T) {
 	}
 
 	// Bare word "work" should match the body text.
-	events, err = ListEvents(db, ListOpts{Filter: "work"})
+	events, err = ListEvents(ctx, db, ListOpts{Filter: "work"})
 	if err != nil {
 		t.Fatalf("ListEvents bare work: %v", err)
 	}
@@ -516,7 +519,7 @@ func TestListEvents_ComplexFilters(t *testing.T) {
 	db := testDBWithSchema(t)
 
 	// Event 1: tagged ops, person alice, body "deploy to prod"
-	_, err := AddEvent(db, "deploy to prod", nil, []Meta{
+	_, err := AddEvent(ctx, db, "deploy to prod", nil, []Meta{
 		{Key: MetaKeyAuthor, Value: "alice"},
 		{Key: MetaKeyTag, Value: "ops"},
 		{Key: MetaKeyPeople, Value: "alice"},
@@ -526,7 +529,7 @@ func TestListEvents_ComplexFilters(t *testing.T) {
 	}
 
 	// Event 2: tagged work, person bob, body "standup meeting"
-	_, err = AddEvent(db, "standup meeting", nil, []Meta{
+	_, err = AddEvent(ctx, db, "standup meeting", nil, []Meta{
 		{Key: MetaKeyAuthor, Value: "bob"},
 		{Key: MetaKeyTag, Value: "work"},
 		{Key: MetaKeyPeople, Value: "bob"},
@@ -536,7 +539,7 @@ func TestListEvents_ComplexFilters(t *testing.T) {
 	}
 
 	// Event 3: tagged ops AND work, person alice, body "deploy standup"
-	_, err = AddEvent(db, "deploy standup", nil, []Meta{
+	_, err = AddEvent(ctx, db, "deploy standup", nil, []Meta{
 		{Key: MetaKeyAuthor, Value: "alice"},
 		{Key: MetaKeyTag, Value: "ops"},
 		{Key: MetaKeyTag, Value: "work"},
@@ -561,7 +564,7 @@ func TestListEvents_ComplexFilters(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			events, err := ListEvents(db, ListOpts{Filter: tt.filter})
+			events, err := ListEvents(ctx, db, ListOpts{Filter: tt.filter})
 			if err != nil {
 				t.Fatalf("ListEvents(%q): %v", tt.filter, err)
 			}

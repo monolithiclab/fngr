@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -33,6 +34,8 @@ type DeleteCmd struct {
 type MetaCmd struct{}
 
 func (c *AddCmd) Run(db *sql.DB) error {
+	ctx := context.Background()
+
 	author := c.Author
 	if author == "" {
 		author = os.Getenv("USER")
@@ -49,7 +52,7 @@ func (c *AddCmd) Run(db *sql.DB) error {
 		return err
 	}
 
-	id, err := AddEvent(db, c.Text, c.Parent, meta)
+	id, err := AddEvent(ctx, db, c.Text, c.Parent, meta)
 	if err != nil {
 		return err
 	}
@@ -59,7 +62,9 @@ func (c *AddCmd) Run(db *sql.DB) error {
 }
 
 func (c *ListCmd) Run(db *sql.DB) error {
-	events, err := ListEvents(db, ListOpts{Filter: c.Filter, From: c.From, To: c.To})
+	ctx := context.Background()
+
+	events, err := ListEvents(ctx, db, ListOpts{Filter: c.Filter, From: c.From, To: c.To})
 	if err != nil {
 		return err
 	}
@@ -78,15 +83,17 @@ func (c *ListCmd) Run(db *sql.DB) error {
 }
 
 func (c *ShowCmd) Run(db *sql.DB) error {
+	ctx := context.Background()
+
 	if c.Tree {
-		events, err := GetSubtree(db, c.ID)
+		events, err := GetSubtree(ctx, db, c.ID)
 		if err != nil {
 			return err
 		}
 		return RenderTree(os.Stdout, events)
 	}
 
-	event, err := GetEvent(db, c.ID)
+	event, err := GetEvent(ctx, db, c.ID)
 	if err != nil {
 		return err
 	}
@@ -95,7 +102,9 @@ func (c *ShowCmd) Run(db *sql.DB) error {
 }
 
 func (c *DeleteCmd) Run(db *sql.DB) error {
-	if err := DeleteEvent(db, c.ID); err != nil {
+	ctx := context.Background()
+
+	if err := DeleteEvent(ctx, db, c.ID); err != nil {
 		return err
 	}
 	fmt.Printf("Deleted event %d\n", c.ID)
@@ -103,7 +112,9 @@ func (c *DeleteCmd) Run(db *sql.DB) error {
 }
 
 func (c *MetaCmd) Run(db *sql.DB) error {
-	counts, err := ListMeta(db)
+	ctx := context.Background()
+
+	counts, err := ListMeta(ctx, db)
 	if err != nil {
 		return err
 	}

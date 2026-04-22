@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -10,7 +11,6 @@ import (
 
 var ErrNotFound = errors.New("not found")
 
-// Event represents a journal entry with optional parent linkage and metadata.
 type Event struct {
 	ID        int64
 	ParentID  *int64
@@ -19,17 +19,14 @@ type Event struct {
 	Meta      []Meta
 }
 
-// MetaCount represents a metadata key-value pair with its occurrence count.
 type MetaCount struct {
 	Key   string
 	Value string
 	Count int
 }
 
-// AddEvent inserts a new event with metadata and FTS content within a transaction.
-// If parentID is non-nil, it validates the parent exists before inserting.
-func AddEvent(db *sql.DB, text string, parentID *int64, meta []Meta) (int64, error) {
-	tx, err := db.Begin()
+func AddEvent(ctx context.Context, db *sql.DB, text string, parentID *int64, meta []Meta) (int64, error) {
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("begin transaction: %w", err)
 	}
@@ -37,7 +34,7 @@ func AddEvent(db *sql.DB, text string, parentID *int64, meta []Meta) (int64, err
 
 	if parentID != nil {
 		var exists int
-		err := tx.QueryRow("SELECT 1 FROM events WHERE id = ?", *parentID).Scan(&exists)
+		err := tx.QueryRowContext(ctx, "SELECT 1 FROM events WHERE id = ?", *parentID).Scan(&exists)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return 0, fmt.Errorf("parent event %d: %w", *parentID, ErrNotFound)
@@ -46,7 +43,7 @@ func AddEvent(db *sql.DB, text string, parentID *int64, meta []Meta) (int64, err
 		}
 	}
 
-	res, err := tx.Exec(
+	res, err := tx.ExecContext(ctx,
 		"INSERT INTO events (parent_id, text) VALUES (?, ?)",
 		parentID, text,
 	)
@@ -60,20 +57,20 @@ func AddEvent(db *sql.DB, text string, parentID *int64, meta []Meta) (int64, err
 	}
 
 	if len(meta) > 0 {
-		stmt, err := tx.Prepare("INSERT INTO event_meta (event_id, key, value) VALUES (?, ?, ?)")
+		stmt, err := tx.PrepareContext(ctx, "INSERT INTO event_meta (event_id, key, value) VALUES (?, ?, ?)")
 		if err != nil {
 			return 0, fmt.Errorf("prepare meta insert: %w", err)
 		}
 		defer stmt.Close()
 		for _, m := range meta {
-			if _, err := stmt.Exec(id, m.Key, m.Value); err != nil {
+			if _, err := stmt.ExecContext(ctx, id, m.Key, m.Value); err != nil {
 				return 0, fmt.Errorf("insert meta: %w", err)
 			}
 		}
 	}
 
 	ftsContent := BuildFTSContent(text, meta)
-	if _, err := tx.Exec(
+	if _, err := tx.ExecContext(ctx,
 		"INSERT INTO events_fts (rowid, content) VALUES (?, ?)",
 		id, ftsContent,
 	); err != nil {
@@ -87,8 +84,8 @@ func AddEvent(db *sql.DB, text string, parentID *int64, meta []Meta) (int64, err
 	return id, nil
 }
 
-func GetEvent(db *sql.DB, id int64) (*Event, error) {
-	rows, err := db.Query(
+func GetEvent(ctx context.Context, db *sql.DB, id int64) (*Event, error) {
+	rows, err := db.QueryContext(ctx,
 		"SELECT id, parent_id, text, created_at FROM events WHERE id = ?", id,
 	)
 	if err != nil {
@@ -96,7 +93,7 @@ func GetEvent(db *sql.DB, id int64) (*Event, error) {
 	}
 	defer rows.Close()
 
-	events, err := scanEvents(db, rows)
+	events, err := scanEvents(ctx, db, rows)
 	if err != nil {
 		return nil, err
 	}
@@ -106,11 +103,8 @@ func GetEvent(db *sql.DB, id int64) (*Event, error) {
 	return &events[0], nil
 }
 
-// DeleteEvent removes an event by ID. Returns an error if the event does not exist.
-// Child events and metadata are cascade-deleted via FK constraints.
-// FTS cleanup is handled by the database trigger.
-func DeleteEvent(db *sql.DB, id int64) error {
-	res, err := db.Exec("DELETE FROM events WHERE id = ?", id)
+func DeleteEvent(ctx context.Context, db *sql.DB, id int64) error {
+	res, err := db.ExecContext(ctx, "DELETE FROM events WHERE id = ?", id)
 	if err != nil {
 		return fmt.Errorf("delete event: %w", err)
 	}
@@ -126,10 +120,8 @@ func DeleteEvent(db *sql.DB, id int64) error {
 	return nil
 }
 
-// ListMeta returns all distinct metadata key-value pairs with their occurrence
-// counts, ordered by key then value.
-func ListMeta(db *sql.DB) ([]MetaCount, error) {
-	rows, err := db.Query(
+func ListMeta(ctx context.Context, db *sql.DB) ([]MetaCount, error) {
+	rows, err := db.QueryContext(ctx,
 		"SELECT key, value, COUNT(*) AS count FROM event_meta GROUP BY key, value ORDER BY key, value",
 	)
 	if err != nil {
@@ -152,23 +144,19 @@ func ListMeta(db *sql.DB) ([]MetaCount, error) {
 	return result, nil
 }
 
-// ListOpts controls filtering and date range for ListEvents.
 type ListOpts struct {
 	Filter string
 	From   string
 	To     string
 }
 
-// ListEvents retrieves events with optional FTS5 filtering and date range.
-// Results are ordered by created_at ASC. Each event includes its metadata.
-func ListEvents(db *sql.DB, opts ListOpts) ([]Event, error) {
+func ListEvents(ctx context.Context, db *sql.DB, opts ListOpts) ([]Event, error) {
 	var query string
 	var args []any
 
 	if opts.Filter != "" {
 		matchExpr := PreprocessFilter(opts.Filter)
 		if positiveExpr, ok := strings.CutPrefix(matchExpr, "NOT "); ok {
-			// FTS5 NOT is a binary operator and cannot lead an expression.
 			query = `SELECT e.id, e.parent_id, e.text, e.created_at
 				FROM events e
 				WHERE e.id NOT IN (
@@ -199,20 +187,17 @@ func ListEvents(db *sql.DB, opts ListOpts) ([]Event, error) {
 
 	query += " ORDER BY e.created_at ASC"
 
-	rows, err := db.Query(query, args...)
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query events: %w", err)
 	}
 	defer rows.Close()
 
-	return scanEvents(db, rows)
+	return scanEvents(ctx, db, rows)
 }
 
-// GetSubtree retrieves an event and all its descendants using a recursive CTE.
-// The root event must exist or an error is returned. Results are ordered by
-// created_at ASC and each event includes its metadata.
-func GetSubtree(db *sql.DB, rootID int64) ([]Event, error) {
-	rows, err := db.Query(`
+func GetSubtree(ctx context.Context, db *sql.DB, rootID int64) ([]Event, error) {
+	rows, err := db.QueryContext(ctx, `
 		WITH RECURSIVE subtree AS (
 			SELECT id, parent_id, text, created_at FROM events WHERE id = ?
 			UNION ALL
@@ -226,7 +211,7 @@ func GetSubtree(db *sql.DB, rootID int64) ([]Event, error) {
 	}
 	defer rows.Close()
 
-	events, err := scanEvents(db, rows)
+	events, err := scanEvents(ctx, db, rows)
 	if err != nil {
 		return nil, err
 	}
@@ -236,7 +221,7 @@ func GetSubtree(db *sql.DB, rootID int64) ([]Event, error) {
 	return events, nil
 }
 
-func scanEvents(db *sql.DB, rows *sql.Rows) ([]Event, error) {
+func scanEvents(ctx context.Context, db *sql.DB, rows *sql.Rows) ([]Event, error) {
 	var events []Event
 	for rows.Next() {
 		var e Event
@@ -254,7 +239,7 @@ func scanEvents(db *sql.DB, rows *sql.Rows) ([]Event, error) {
 	}
 
 	if len(events) > 0 {
-		if err := loadMetaBatch(db, events); err != nil {
+		if err := loadMetaBatch(ctx, db, events); err != nil {
 			return nil, err
 		}
 	}
@@ -262,7 +247,7 @@ func scanEvents(db *sql.DB, rows *sql.Rows) ([]Event, error) {
 	return events, nil
 }
 
-func loadMetaBatch(db *sql.DB, events []Event) error {
+func loadMetaBatch(ctx context.Context, db *sql.DB, events []Event) error {
 	ids := make([]any, len(events))
 	idIdx := make(map[int64]int, len(events))
 	for i, e := range events {
@@ -274,9 +259,7 @@ func loadMetaBatch(db *sql.DB, events []Event) error {
 	placeholders = placeholders[:len(placeholders)-1]
 
 	query := "SELECT event_id, key, value FROM event_meta WHERE event_id IN (" + placeholders + ") ORDER BY event_id, key, value" // #nosec G202 -- placeholders are "?" repeated, not user input
-	rows, err := db.Query(query,
-		ids...,
-	)
+	rows, err := db.QueryContext(ctx, query, ids...)
 	if err != nil {
 		return fmt.Errorf("query meta batch: %w", err)
 	}
