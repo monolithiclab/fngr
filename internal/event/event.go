@@ -207,14 +207,8 @@ func Reparent(ctx context.Context, db *sql.DB, id int64, newParent *int64) error
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Confirm the event exists.
-	var dummy int
-	err = tx.QueryRowContext(ctx, "SELECT 1 FROM events WHERE id = ?", id).Scan(&dummy)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("event %d: %w", id, ErrNotFound)
-		}
-		return fmt.Errorf("query event: %w", err)
+	if err := requireEventExists(ctx, tx, id); err != nil {
+		return err
 	}
 
 	if newParent != nil {
@@ -274,13 +268,8 @@ func AddTags(ctx context.Context, db *sql.DB, id int64, tags []parse.Meta) error
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var dummy int
-	err = tx.QueryRowContext(ctx, "SELECT 1 FROM events WHERE id = ?", id).Scan(&dummy)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("event %d: %w", id, ErrNotFound)
-		}
-		return fmt.Errorf("query event: %w", err)
+	if err := requireEventExists(ctx, tx, id); err != nil {
+		return err
 	}
 
 	stmt, err := tx.PrepareContext(ctx,
@@ -319,13 +308,8 @@ func RemoveTags(ctx context.Context, db *sql.DB, id int64, tags []parse.Meta) (i
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var dummy int
-	err = tx.QueryRowContext(ctx, "SELECT 1 FROM events WHERE id = ?", id).Scan(&dummy)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return 0, fmt.Errorf("event %d: %w", id, ErrNotFound)
-		}
-		return 0, fmt.Errorf("query event: %w", err)
+	if err := requireEventExists(ctx, tx, id); err != nil {
+		return 0, err
 	}
 
 	stmt, err := tx.PrepareContext(ctx,
@@ -415,6 +399,21 @@ func insertMetaTuples(ctx context.Context, tx *sql.Tx, id int64, tags []parse.Me
 		if _, err := stmt.ExecContext(ctx, id, m.Key, m.Value); err != nil {
 			return fmt.Errorf("insert meta: %w", err)
 		}
+	}
+	return nil
+}
+
+// requireEventExists returns ErrNotFound (wrapped) if id has no row in
+// events. Used by every event-mutation function so missing rows surface
+// the same sentinel before any other work begins.
+func requireEventExists(ctx context.Context, tx *sql.Tx, id int64) error {
+	var dummy int
+	err := tx.QueryRowContext(ctx, "SELECT 1 FROM events WHERE id = ?", id).Scan(&dummy)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("event %d: %w", id, ErrNotFound)
+		}
+		return fmt.Errorf("query event: %w", err)
 	}
 	return nil
 }
