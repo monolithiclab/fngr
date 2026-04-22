@@ -41,23 +41,23 @@ func convertTerm(tok string) string {
 		return "NOT " + inner
 	}
 
-	// Hash tag shorthand: #value -> "tag=value"
 	if strings.HasPrefix(tok, "#") {
-		return `"` + MetaKeyTag + "=" + tok[1:] + `"`
+		return ftsQuote(MetaKeyTag + "=" + tok[1:])
 	}
 
-	// At tag shorthand: @value -> "people=value"
 	if strings.HasPrefix(tok, "@") {
-		return `"` + MetaKeyPeople + "=" + tok[1:] + `"`
+		return ftsQuote(MetaKeyPeople + "=" + tok[1:])
 	}
 
-	// Key=value: quote the whole term for FTS5 phrase matching.
 	if strings.Contains(tok, "=") {
-		return `"` + tok + `"`
+		return ftsQuote(tok)
 	}
 
-	// Bare word: pass through unquoted.
 	return tok
+}
+
+func ftsQuote(s string) string {
+	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
 }
 
 // tokenizeFilter splits a filter expression into tokens. It splits on spaces
@@ -79,8 +79,7 @@ func tokenizeFilter(expr string) []string {
 		}
 	}
 
-	for i := 0; i < len(expr); i++ {
-		ch := expr[i]
+	for _, ch := range expr {
 		switch ch {
 		case ' ':
 			flush()
@@ -88,7 +87,7 @@ func tokenizeFilter(expr string) []string {
 			flush()
 			tokens = append(tokens, string(ch))
 		default:
-			current.WriteByte(ch)
+			current.WriteRune(ch)
 		}
 	}
 	flush()

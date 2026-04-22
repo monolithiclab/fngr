@@ -118,6 +118,16 @@ func RenderJSON(events []Event) string {
 	return string(data) + "\n"
 }
 
+func csvSanitize(s string) string {
+	if len(s) > 0 {
+		switch s[0] {
+		case '=', '+', '-', '@', '\t', '\r':
+			return "'" + s
+		}
+	}
+	return s
+}
+
 func RenderCSV(events []Event) string {
 	var b bytes.Buffer
 	w := csv.NewWriter(&b)
@@ -132,8 +142,8 @@ func RenderCSV(events []Event) string {
 			strconv.FormatInt(ev.ID, 10),
 			parentID,
 			ev.CreatedAt.Format(time.RFC3339),
-			author,
-			ev.Text,
+			csvSanitize(author),
+			csvSanitize(ev.Text),
 		})
 	}
 	w.Flush()

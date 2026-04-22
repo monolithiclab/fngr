@@ -57,6 +57,7 @@ func TestPreprocessFilter(t *testing.T) {
 		{"hierarchical tag", "#work/project-x", `"tag=work/project-x"`},
 		{"empty input", "", ""},
 		{"NOT with key=value", "!tag=deploy", `NOT "tag=deploy"`},
+		{"embedded double quotes", `tag=val"ue`, `"tag=val""ue"`},
 	}
 
 	for _, tt := range tests {
