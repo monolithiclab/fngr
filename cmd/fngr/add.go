@@ -10,10 +10,10 @@ import (
 )
 
 type AddCmd struct {
-	Text   string   `arg:"" help:"Event text."`
+	Text   string   `arg:"" help:"Event text. Use @person and #tag for inline metadata extraction."`
 	Author string   `help:"Event author." env:"FNGR_AUTHOR" default:"${USER}"`
-	Parent *int64   `help:"Parent event ID."`
-	Meta   []string `help:"Metadata key=value pairs." short:"m"`
+	Parent *int64   `help:"Parent event ID to create a child event."`
+	Meta   []string `help:"Metadata key=value pairs (e.g. --meta env=prod)." short:"m"`
 }
 
 func (c *AddCmd) Run(db *sql.DB) error {

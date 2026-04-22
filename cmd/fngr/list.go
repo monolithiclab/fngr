@@ -9,11 +9,10 @@ import (
 )
 
 type ListCmd struct {
-	Filter string `arg:"" optional:"" help:"Filter expression."`
+	Filter string `arg:"" optional:"" help:"Filter expression (#tag, @person, key=value, bare words). Operators: & (AND), | (OR), ! (NOT)."`
 	From   string `help:"Start date (inclusive)." placeholder:"YYYY-MM-DD"`
 	To     string `help:"End date (inclusive)." placeholder:"YYYY-MM-DD"`
-	Format string `help:"Output format." enum:"table,json,csv" default:"table"`
-	Tree   bool   `help:"Show events as a tree." default:"true" negatable:""`
+	Format string `help:"Output format: tree (default), flat, json, csv." enum:"tree,flat,json,csv" default:"tree"`
 }
 
 func (c *ListCmd) Run(db *sql.DB) error {
@@ -29,10 +28,9 @@ func (c *ListCmd) Run(db *sql.DB) error {
 		return internal.RenderJSON(os.Stdout, events)
 	case "csv":
 		return internal.RenderCSV(os.Stdout, events)
-	default:
-		if c.Tree {
-			return internal.RenderTree(os.Stdout, events)
-		}
+	case "flat":
 		return internal.RenderFlat(os.Stdout, events)
+	default:
+		return internal.RenderTree(os.Stdout, events)
 	}
 }

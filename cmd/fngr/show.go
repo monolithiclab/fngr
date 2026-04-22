@@ -9,8 +9,9 @@ import (
 )
 
 type ShowCmd struct {
-	ID   int64 `arg:"" help:"Event ID."`
-	Tree bool  `help:"Show subtree." default:"false"`
+	ID     int64  `arg:"" help:"Event ID."`
+	Tree   bool   `help:"Show subtree." default:"false"`
+	Format string `help:"Output format: text (default), json, csv." enum:"text,json,csv" default:"text"`
 }
 
 func (c *ShowCmd) Run(db *sql.DB) error {
@@ -21,7 +22,14 @@ func (c *ShowCmd) Run(db *sql.DB) error {
 		if err != nil {
 			return err
 		}
-		return internal.RenderTree(os.Stdout, events)
+		switch c.Format {
+		case "json":
+			return internal.RenderJSON(os.Stdout, events)
+		case "csv":
+			return internal.RenderCSV(os.Stdout, events)
+		default:
+			return internal.RenderTree(os.Stdout, events)
+		}
 	}
 
 	event, err := internal.GetEvent(ctx, db, c.ID)
@@ -29,5 +37,12 @@ func (c *ShowCmd) Run(db *sql.DB) error {
 		return err
 	}
 
-	return internal.RenderEvent(os.Stdout, event)
+	switch c.Format {
+	case "json":
+		return internal.RenderJSON(os.Stdout, []internal.Event{*event})
+	case "csv":
+		return internal.RenderCSV(os.Stdout, []internal.Event{*event})
+	default:
+		return internal.RenderEvent(os.Stdout, event)
+	}
 }
