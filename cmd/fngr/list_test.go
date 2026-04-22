@@ -184,3 +184,23 @@ func TestListCmd_JSONUsesStreamingPath(t *testing.T) {
 		t.Errorf("got %d entries, want 3; output:\n%s", len(parsed), out.String())
 	}
 }
+
+func TestListCmd_NoPagerStillRendersToBuffer(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, out := newTestIO("")
+
+	if _, err := s.Add(context.Background(), "evt", nil, []parse.Meta{
+		{Key: "author", Value: "alice"},
+	}, nil); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	cmd := &ListCmd{Format: "flat", NoPager: true}
+	if err := cmd.Run(s, io); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.Contains(out.String(), "evt") {
+		t.Errorf("expected 'evt' in output, got %q", out.String())
+	}
+}

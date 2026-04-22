@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/monolithiclab/fngr/internal/event"
 	"github.com/monolithiclab/fngr/internal/render"
@@ -16,10 +17,18 @@ type ListCmd struct {
 	Format  string `help:"Output format: tree (default), flat, json, csv." enum:"tree,flat,json,csv" default:"tree"`
 	Limit   int    `help:"Maximum events to return (0 = no limit)." short:"n" default:"0"`
 	Reverse bool   `help:"Sort oldest first (default is newest first)." short:"r"`
+	NoPager bool   `help:"Disable the pager even when stdout is a TTY."`
 }
 
 func (c *ListCmd) Run(s eventStore, io ioStreams) error {
 	ctx := context.Background()
+
+	io, closePager := withPager(io, c.NoPager)
+	defer func() {
+		if err := closePager(); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: pager exited with error: %v\n", err)
+		}
+	}()
 
 	opts, err := c.toListOpts()
 	if err != nil {
