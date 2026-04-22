@@ -147,7 +147,7 @@ func TestListCmd_FilterAndDateRange(t *testing.T) {
 		t.Fatalf("Add: %v", err)
 	}
 
-	cmd := &ListCmd{Format: "flat", Filter: "#ops"}
+	cmd := &ListCmd{Format: "flat", Search: "#ops"}
 	if err := cmd.Run(s, io); err != nil {
 		t.Fatalf("Run: %v", err)
 	}

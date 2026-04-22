@@ -11,13 +11,13 @@ import (
 )
 
 type ListCmd struct {
-	Filter  string `arg:"" optional:"" help:"Filter expression (#tag, @person, key=value, bare words). Operators: & (AND), | (OR), ! (NOT)."`
 	From    string `help:"Start date (inclusive)." placeholder:"YYYY-MM-DD"`
 	To      string `help:"End date (inclusive)." placeholder:"YYYY-MM-DD"`
 	Format  string `help:"Output format: tree (default), flat, json, csv." enum:"tree,flat,json,csv" default:"tree"`
 	Limit   int    `help:"Maximum events to return (0 = no limit)." short:"n" default:"0"`
 	Reverse bool   `help:"Sort oldest first (default is newest first)." short:"r"`
 	NoPager bool   `help:"Disable the pager even when stdout is a TTY."`
+	Search  string `help:"Filter expression (#tag, @person, key=value, bare words). Operators: & (AND), | (OR), ! (NOT)." short:"S"`
 }
 
 func (c *ListCmd) Run(s eventStore, io ioStreams) error {
@@ -47,7 +47,7 @@ func (c *ListCmd) Run(s eventStore, io ioStreams) error {
 
 func (c *ListCmd) toListOpts() (event.ListOpts, error) {
 	opts := event.ListOpts{
-		Filter:    c.Filter,
+		Filter:    c.Search,
 		Limit:     c.Limit,
 		Ascending: c.Reverse,
 	}
