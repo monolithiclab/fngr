@@ -55,6 +55,32 @@ func TestListCmd_JSON(t *testing.T) {
 	}
 }
 
+func TestListCmd_LimitAndSort(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, out := newTestIO("")
+
+	for _, text := range []string{"alpha", "beta", "gamma"} {
+		if _, err := s.Add(context.Background(), text, nil, []parse.Meta{
+			{Key: "author", Value: "alice"},
+		}, nil); err != nil {
+			t.Fatalf("Add %s: %v", text, err)
+		}
+	}
+
+	cmd := &ListCmd{Format: "flat", Limit: 1, Sort: "desc"}
+	if err := cmd.Run(s, io); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	got := out.String()
+	if strings.Count(got, "\n") != 1 {
+		t.Errorf("limit=1 produced %d lines:\n%s", strings.Count(got, "\n"), got)
+	}
+	if !strings.Contains(got, "gamma") {
+		t.Errorf("desc sort: expected gamma first, got:\n%s", got)
+	}
+}
+
 func TestListCmd_InvalidFromDate(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)

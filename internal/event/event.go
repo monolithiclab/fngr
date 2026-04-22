@@ -284,6 +284,8 @@ type ListOpts struct {
 	Filter string
 	From   *time.Time // inclusive lower bound
 	To     *time.Time // exclusive upper bound (compute end-of-day in caller)
+	Limit  int        // 0 means no limit
+	Desc   bool       // newest first when true; default is oldest first
 }
 
 func List(ctx context.Context, db *sql.DB, opts ListOpts) ([]Event, error) {
@@ -321,7 +323,15 @@ func List(ctx context.Context, db *sql.DB, opts ListOpts) ([]Event, error) {
 		args = append(args, opts.To.UTC().Format(timefmt.DateTimeFormat))
 	}
 
-	query += " ORDER BY e.created_at ASC"
+	if opts.Desc {
+		query += " ORDER BY e.created_at DESC"
+	} else {
+		query += " ORDER BY e.created_at ASC"
+	}
+	if opts.Limit > 0 {
+		query += " LIMIT ?"
+		args = append(args, opts.Limit)
+	}
 
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {

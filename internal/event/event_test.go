@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -616,6 +617,43 @@ func TestFTSIsolation_BodyWordsNotMatchedByMetaFilter(t *testing.T) {
 	}
 	if len(events) != 1 {
 		t.Errorf("bare 'work' matched %d events, want 1", len(events))
+	}
+}
+
+func TestList_LimitAndSort(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	for i := range 5 {
+		_, err := database.Exec(
+			"INSERT INTO events (text, created_at) VALUES (?, ?)",
+			fmt.Sprintf("evt %d", i),
+			fmt.Sprintf("2026-01-0%d 10:00:00", i+1),
+		)
+		if err != nil {
+			t.Fatalf("seed event %d: %v", i, err)
+		}
+	}
+	for i := range 5 {
+		if _, err := database.Exec("INSERT INTO events_fts (rowid, content) VALUES (?, ?)", i+1, fmt.Sprintf("evt %d", i)); err != nil {
+			t.Fatalf("seed FTS %d: %v", i, err)
+		}
+	}
+
+	asc, err := List(ctx, database, ListOpts{Limit: 2})
+	if err != nil {
+		t.Fatalf("List asc limit: %v", err)
+	}
+	if len(asc) != 2 || asc[0].Text != "evt 0" {
+		t.Errorf("asc limit got %d events, first=%q; want 2 starting with 'evt 0'", len(asc), asc[0].Text)
+	}
+
+	desc, err := List(ctx, database, ListOpts{Limit: 2, Desc: true})
+	if err != nil {
+		t.Fatalf("List desc limit: %v", err)
+	}
+	if len(desc) != 2 || desc[0].Text != "evt 4" {
+		t.Errorf("desc limit got %d events, first=%q; want 2 starting with 'evt 4'", len(desc), desc[0].Text)
 	}
 }
 

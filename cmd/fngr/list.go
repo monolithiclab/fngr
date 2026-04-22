@@ -14,12 +14,18 @@ type ListCmd struct {
 	From   string `help:"Start date (inclusive)." placeholder:"YYYY-MM-DD"`
 	To     string `help:"End date (inclusive)." placeholder:"YYYY-MM-DD"`
 	Format string `help:"Output format: tree (default), flat, json, csv." enum:"tree,flat,json,csv" default:"tree"`
+	Limit  int    `help:"Maximum events to return (0 = no limit)." short:"n" default:"0"`
+	Sort   string `help:"Sort order: asc (default, oldest first) or desc (newest first)." enum:"asc,desc" default:"asc"`
 }
 
 func (c *ListCmd) Run(s eventStore, io ioStreams) error {
 	ctx := context.Background()
 
-	opts := event.ListOpts{Filter: c.Filter}
+	opts := event.ListOpts{
+		Filter: c.Filter,
+		Limit:  c.Limit,
+		Desc:   c.Sort == "desc",
+	}
 	if c.From != "" {
 		from, err := timefmt.ParseDate(c.From)
 		if err != nil {
