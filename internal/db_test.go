@@ -2,6 +2,8 @@ package internal
 
 import (
 	"database/sql"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"testing"
@@ -228,7 +230,7 @@ func TestOpenDB_CreateTrue(t *testing.T) {
 	defer db.Close()
 
 	// Verify file was created.
-	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+	if _, err := os.Stat(dbPath); errors.Is(err, fs.ErrNotExist) {
 		t.Fatal("database file was not created")
 	}
 

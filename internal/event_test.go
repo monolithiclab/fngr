@@ -1,7 +1,7 @@
 package internal
 
 import (
-	"strings"
+	"errors"
 	"testing"
 )
 
@@ -85,8 +85,8 @@ func TestAddEvent_InvalidParent(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for invalid parent, got nil")
 	}
-	if !strings.Contains(err.Error(), "parent event 9999 not found") {
-		t.Errorf("error = %q, want it to contain %q", err.Error(), "parent event 9999 not found")
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("error = %q, want ErrNotFound", err.Error())
 	}
 }
 
@@ -123,8 +123,8 @@ func TestGetEvent_NotFound(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for nonexistent event, got nil")
 	}
-	if !strings.Contains(err.Error(), "event 9999 not found") {
-		t.Errorf("error = %q, want it to contain %q", err.Error(), "event 9999 not found")
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("error = %q, want ErrNotFound", err.Error())
 	}
 }
 
@@ -157,6 +157,9 @@ func TestDeleteEvent_NotFound(t *testing.T) {
 	err := DeleteEvent(db, 9999)
 	if err == nil {
 		t.Fatal("expected error for nonexistent event, got nil")
+	}
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("error = %q, want ErrNotFound", err.Error())
 	}
 }
 
@@ -423,8 +426,8 @@ func TestGetSubtree_NotFound(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for nonexistent root, got nil")
 	}
-	if !strings.Contains(err.Error(), "event 9999 not found") {
-		t.Errorf("error = %q, want it to contain %q", err.Error(), "event 9999 not found")
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("error = %q, want ErrNotFound", err.Error())
 	}
 }
 

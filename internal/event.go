@@ -2,10 +2,13 @@ package internal
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 )
+
+var ErrNotFound = errors.New("not found")
 
 // Event represents a journal entry with optional parent linkage and metadata.
 type Event struct {
@@ -32,16 +35,17 @@ func AddEvent(db *sql.DB, text string, parentID *int64, meta []Meta) (int64, err
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Validate parent exists if specified.
 	if parentID != nil {
 		var exists int
 		err := tx.QueryRow("SELECT 1 FROM events WHERE id = ?", *parentID).Scan(&exists)
 		if err != nil {
-			return 0, fmt.Errorf("parent event %d not found", *parentID)
+			if errors.Is(err, sql.ErrNoRows) {
+				return 0, fmt.Errorf("parent event %d: %w", *parentID, ErrNotFound)
+			}
+			return 0, fmt.Errorf("query parent event: %w", err)
 		}
 	}
 
-	// Insert the event.
 	res, err := tx.Exec(
 		"INSERT INTO events (parent_id, text) VALUES (?, ?)",
 		parentID, text,
@@ -55,7 +59,6 @@ func AddEvent(db *sql.DB, text string, parentID *int64, meta []Meta) (int64, err
 		return 0, fmt.Errorf("last insert id: %w", err)
 	}
 
-	// Insert metadata rows.
 	for _, m := range meta {
 		if _, err := tx.Exec(
 			"INSERT INTO event_meta (event_id, key, value) VALUES (?, ?, ?)",
@@ -65,7 +68,6 @@ func AddEvent(db *sql.DB, text string, parentID *int64, meta []Meta) (int64, err
 		}
 	}
 
-	// Insert FTS content.
 	ftsContent := BuildFTSContent(text, meta)
 	if _, err := tx.Exec(
 		"INSERT INTO events_fts (rowid, content) VALUES (?, ?)",
@@ -90,8 +92,8 @@ func GetEvent(db *sql.DB, id int64) (*Event, error) {
 		"SELECT id, parent_id, text, created_at FROM events WHERE id = ?", id,
 	).Scan(&e.ID, &parentID, &e.Text, &e.CreatedAt)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("event %d not found", id)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("event %d: %w", id, ErrNotFound)
 		}
 		return nil, fmt.Errorf("query event: %w", err)
 	}
@@ -123,7 +125,7 @@ func DeleteEvent(db *sql.DB, id int64) error {
 		return fmt.Errorf("rows affected: %w", err)
 	}
 	if n == 0 {
-		return fmt.Errorf("event %d not found", id)
+		return fmt.Errorf("event %d: %w", id, ErrNotFound)
 	}
 
 	return nil
@@ -217,7 +219,10 @@ func ListEvents(db *sql.DB, opts ListOpts) ([]Event, error) {
 func GetSubtree(db *sql.DB, rootID int64) ([]Event, error) {
 	var exists int
 	if err := db.QueryRow("SELECT 1 FROM events WHERE id = ?", rootID).Scan(&exists); err != nil {
-		return nil, fmt.Errorf("event %d not found", rootID)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("event %d: %w", rootID, ErrNotFound)
+		}
+		return nil, fmt.Errorf("query event: %w", err)
 	}
 
 	rows, err := db.Query(`

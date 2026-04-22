@@ -2,7 +2,9 @@ package internal
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 
@@ -25,7 +27,7 @@ func ResolveDBPath(explicit string) (string, error) {
 
 func OpenDB(path string, create bool) (*sql.DB, error) {
 	if !create {
-		if _, err := os.Stat(path); os.IsNotExist(err) {
+		if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
 			return nil, fmt.Errorf("database not found: %s (use 'fngr add' to create one)", path)
 		}
 	}
