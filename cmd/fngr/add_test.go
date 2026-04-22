@@ -247,3 +247,208 @@ func TestAddCmd_EditFlagPipedError(t *testing.T) {
 		t.Errorf("err = %v, want '--edit conflicts'", err)
 	}
 }
+
+func TestAddCmd_FormatJSON_Single(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, out, _ := newTestIOFull(`{"text":"hi"}`, false) // piped stdin
+
+	cmd := &AddCmd{Format: "json", Author: "alice"}
+	if err := cmd.Run(s, io); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.Contains(out.String(), "Imported 1 event") {
+		t.Errorf("output = %q, want 'Imported 1 event'", out.String())
+	}
+
+	ev, _ := s.Get(context.Background(), 1)
+	if ev.Text != "hi" {
+		t.Errorf("text = %q, want 'hi'", ev.Text)
+	}
+}
+
+func TestAddCmd_FormatJSON_Array(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, out, _ := newTestIOFull(`[{"text":"a"},{"text":"b"},{"text":"c"}]`, false)
+
+	cmd := &AddCmd{Format: "json", Author: "alice"}
+	if err := cmd.Run(s, io); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.Contains(out.String(), "Imported 3 events") {
+		t.Errorf("output = %q, want 'Imported 3 events'", out.String())
+	}
+
+	events, _ := s.List(context.Background(), event.ListOpts{})
+	if len(events) != 3 {
+		t.Errorf("created %d events, want 3", len(events))
+	}
+}
+
+func TestAddCmd_FormatJSON_EmptyArray(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, out, _ := newTestIOFull(`[]`, false)
+
+	cmd := &AddCmd{Format: "json", Author: "alice"}
+	if err := cmd.Run(s, io); err != nil {
+		t.Fatalf("Run returned err = %v, want nil for empty array", err)
+	}
+	if !strings.Contains(out.String(), "Imported 0 events") {
+		t.Errorf("output = %q, want 'Imported 0 events'", out.String())
+	}
+}
+
+func TestAddCmd_FormatJSON_AtomicRollback(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	// Second record references parent_id=9999 which doesn't exist → rollback.
+	io, _, _ := newTestIOFull(`[{"text":"good"},{"text":"bad","parent_id":9999}]`, false)
+
+	cmd := &AddCmd{Format: "json", Author: "alice"}
+	err := cmd.Run(s, io)
+	if err == nil {
+		t.Fatal("Run returned nil err, want parent-not-found")
+	}
+
+	events, _ := s.List(context.Background(), event.ListOpts{})
+	if len(events) != 0 {
+		t.Errorf("created %d events, want 0 (atomic rollback)", len(events))
+	}
+}
+
+func TestAddCmd_FormatJSON_EditConflicts(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, _, _ := newTestIOFull("", true)
+
+	cmd := &AddCmd{Format: "json", Edit: true, Author: "alice"}
+	err := cmd.Run(s, io)
+	if err == nil || !strings.Contains(err.Error(), "--edit conflicts with --format=json") {
+		t.Errorf("err = %v, want '--edit conflicts with --format=json'", err)
+	}
+}
+
+func TestAddCmd_FormatJSON_BareTTYRejects(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, _, _ := newTestIOFull("", true) // TTY, no args
+
+	cmd := &AddCmd{Format: "json", Author: "alice"}
+	err := cmd.Run(s, io)
+	if err == nil || !strings.Contains(err.Error(), "requires JSON via args or piped stdin") {
+		t.Errorf("err = %v, want 'requires JSON via args or piped stdin'", err)
+	}
+}
+
+func TestAddCmd_FormatJSON_FromArgs(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, out := newTestIO("")
+
+	cmd := &AddCmd{Format: "json", Args: []string{`{"text":"from arg"}`}, Author: "alice"}
+	if err := cmd.Run(s, io); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.Contains(out.String(), "Imported 1 event") {
+		t.Errorf("output = %q, want 'Imported 1 event'", out.String())
+	}
+	ev, _ := s.Get(context.Background(), 1)
+	if ev.Text != "from arg" {
+		t.Errorf("text = %q, want 'from arg'", ev.Text)
+	}
+}
+
+func TestAddCmd_FormatJSON_TimeFlagFallback(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, _, _ := newTestIOFull(`{"text":"hi"}`, false)
+
+	cmd := &AddCmd{Format: "json", Time: "2026-04-01", Author: "alice"}
+	if err := cmd.Run(s, io); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	ev, _ := s.Get(context.Background(), 1)
+	// timefmt.Parse interprets "2026-04-01" as local-tz midnight; storage
+	// round-trips via UTC, so compare in the same local frame.
+	got := ev.CreatedAt.Local()
+	if got.Year() != 2026 || got.Month() != 4 || got.Day() != 1 {
+		t.Errorf("CreatedAt (local) = %v, want 2026-04-01", got)
+	}
+}
+
+func TestAddCmd_FormatJSON_MalformedJSON(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, _, _ := newTestIOFull(`{"text":`, false)
+
+	cmd := &AddCmd{Format: "json", Author: "alice"}
+	err := cmd.Run(s, io)
+	if err == nil || !strings.Contains(err.Error(), "--format=json") {
+		t.Errorf("err = %v, want '--format=json' parse error", err)
+	}
+}
+
+func TestAddCmd_FormatJSON_BadCLITimeFallback(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, _, _ := newTestIOFull(`{"text":"hi"}`, false)
+
+	cmd := &AddCmd{Format: "json", Time: "not-a-time", Author: "alice"}
+	err := cmd.Run(s, io)
+	if err == nil || !strings.Contains(err.Error(), "invalid --time") {
+		t.Errorf("err = %v, want 'invalid --time'", err)
+	}
+}
+
+func TestAddCmd_FormatJSON_BadCLIMetaFallback(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, _, _ := newTestIOFull(`{"text":"hi"}`, false)
+
+	cmd := &AddCmd{Format: "json", Meta: []string{"noequals"}, Author: "alice"}
+	err := cmd.Run(s, io)
+	if err == nil {
+		t.Fatal("expected error for malformed --meta default")
+	}
+}
+
+func TestAddCmd_FormatJSON_PerRecordError(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	// Second record has empty text → jsonInputToAddInput returns an error.
+	io, _, _ := newTestIOFull(`[{"text":"good"},{"text":""}]`, false)
+
+	cmd := &AddCmd{Format: "json", Author: "alice"}
+	err := cmd.Run(s, io)
+	if err == nil || !strings.Contains(err.Error(), "record 1: text is required") {
+		t.Errorf("err = %v, want 'record 1: text is required'", err)
+	}
+
+	events, _ := s.List(context.Background(), event.ListOpts{})
+	if len(events) != 0 {
+		t.Errorf("created %d events, want 0 (validation aborts before AddMany)", len(events))
+	}
+}
+
+func TestAddCmd_FormatJSON_MetaFlagFallback(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, _, _ := newTestIOFull(`{"text":"hi"}`, false)
+
+	cmd := &AddCmd{Format: "json", Meta: []string{"env=prod"}, Author: "alice"}
+	if err := cmd.Run(s, io); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	ev, _ := s.Get(context.Background(), 1)
+	hasEnv := false
+	for _, m := range ev.Meta {
+		if m.Key == "env" && m.Value == "prod" {
+			hasEnv = true
+		}
+	}
+	if !hasEnv {
+		t.Errorf("Meta = %v, want env=prod from --meta fallback", ev.Meta)
+	}
+}

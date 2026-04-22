@@ -66,6 +66,7 @@ func TestKongDispatch_AllCommands(t *testing.T) {
 		{name: "add-multiarg", argv: []string{"add", "deployed", "v1.2"}, isTTY: true, want: "Added event 1"},
 		{name: "add-stdin", argv: []string{"add"}, stdin: "piped body", isTTY: false, want: ""},
 		{name: "add-editor", argv: []string{"add", "-e"}, isTTY: true, want: "Added event 1"},
+		{name: "add-json", argv: []string{"add", "--format=json"}, stdin: `{"text":"hi"}`, isTTY: false, want: ""},
 		{name: "list", argv: []string{"list"}, isTTY: true, want: ""},
 		{name: "event-bare", argv: []string{"event", "1"}, isTTY: true, want: ""},
 		{name: "event-show", argv: []string{"event", "show", "1"}, isTTY: true, want: ""},

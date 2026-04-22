@@ -42,6 +42,8 @@ func kongVars(version, username string) kong.Vars {
 	return kong.Vars{
 		"version":              version,
 		"USER":                 username,
+		"ADD_FORMATS":          strings.Join([]string{render.FormatText, render.FormatJSON}, ","),
+		"ADD_FORMAT_DEFAULT":   render.FormatText,
 		"LIST_FORMATS":         strings.Join(render.ListFormats, ","),
 		"LIST_FORMAT_DEFAULT":  render.FormatTree,
 		"EVENT_FORMATS":        strings.Join(render.EventFormats, ","),
