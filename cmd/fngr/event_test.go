@@ -10,7 +10,7 @@ import (
 	"github.com/monolithiclab/fngr/internal/parse"
 )
 
-func TestShowCmd_SingleEvent_Text(t *testing.T) {
+func TestEventCmd_ShowText(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
 	io, out := newTestIO("")
@@ -22,7 +22,7 @@ func TestShowCmd_SingleEvent_Text(t *testing.T) {
 		t.Fatalf("Add: %v", err)
 	}
 
-	cmd := &ShowCmd{ID: id, Format: "text"}
+	cmd := &EventShowCmd{ID: id, Format: "text"}
 	if err := cmd.Run(s, io); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -32,7 +32,7 @@ func TestShowCmd_SingleEvent_Text(t *testing.T) {
 	}
 }
 
-func TestShowCmd_Subtree(t *testing.T) {
+func TestEventCmd_ShowSubtree(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
 	io, out := newTestIO("")
@@ -49,7 +49,7 @@ func TestShowCmd_Subtree(t *testing.T) {
 		t.Fatalf("Add child: %v", err)
 	}
 
-	cmd := &ShowCmd{ID: parent, Tree: true, Format: "tree"}
+	cmd := &EventShowCmd{ID: parent, Tree: true, Format: "tree"}
 	if err := cmd.Run(s, io); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -59,14 +59,14 @@ func TestShowCmd_Subtree(t *testing.T) {
 	}
 }
 
-func TestShowCmd_NotFound(t *testing.T) {
+func TestEventCmd_ShowNotFound(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
 	io, _ := newTestIO("")
 
-	cmd := &ShowCmd{ID: 9999}
+	cmd := &EventShowCmd{ID: 9999}
 	err := cmd.Run(s, io)
 	if !errors.Is(err, event.ErrNotFound) {
-		t.Errorf("error = %v, want ErrNotFound", err)
+		t.Errorf("err = %v, want ErrNotFound", err)
 	}
 }
