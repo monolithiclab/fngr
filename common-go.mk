@@ -53,6 +53,7 @@ lint-gocritic:  # (no-help)
 .SILENT: lint
 .PHONY: lint
 lint: lint-format lint-vet lint-staticcheck lint-golangci-lint lint-gosec lint-gocritic  ## Lint source code (use -j to parallelize, use FORCE_UPDATE=1 to reinstall linters)
+	echo "Lint successfull"
 
 
 .SILENT: codefix

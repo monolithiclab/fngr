@@ -27,16 +27,23 @@ make ci             # codefix + format + lint + test
   `Run(eventStore, ioStreams) error` methods, one file per top-level command. `list` is marked
   `default:"withargs"` so bare `fngr` dispatches to it; the filter is a `-S` / `--search` flag
   (Kong v1.x cannot mix positional args with branching subcommands on the same struct, so
-  every list-ish command uses `-S`). `event` hosts a sub-command tree: `fngr event N` reads
-  (shorthand for `event show N`); `text`, `time`, `date`, `attach`, `detach`, `tag`, `untag`
-  mutate. Each verb owns its own `ID` arg, syntax `fngr event <verb> <id> [<args>]`. `meta`
-  is a sub-command tree too: `fngr meta` lists with optional `-S` filter (bare key, key=value,
-  @person, #tag), `meta rename` and `meta delete` mutate (both accept the same shorthand).
-  None of the event verbs prompt; meta verbs prompt with the destructive-vs-additive defaults
-  (rename `[Y/n]`, delete `[y/N]`).
+  every list-ish command uses `-S`). `add` accepts variadic positional `Args` (joined with
+  spaces); body source resolved by `cmd/fngr/body.go::resolveBody` via the
+  (args, `-e`, stdin TTY-ness) dispatch table; `-e/--edit` forces the editor; bare `fngr add`
+  in a TTY auto-launches `$VISUAL`/`$EDITOR`. `event` hosts a sub-command tree: `fngr event N`
+  reads (shorthand for `event show N`); `text`, `time`, `date`, `attach`, `detach`, `tag`,
+  `untag` mutate. Each verb owns its own `ID` arg, syntax `fngr event <verb> <id> [<args>]`.
+  `meta` is a sub-command tree too: `fngr meta` lists with optional `-S` filter (bare key,
+  key=value, @person, #tag), `meta rename` and `meta delete` mutate (both accept the same
+  shorthand). None of the event verbs prompt; meta verbs prompt with the destructive-vs-additive
+  defaults (rename `[Y/n]`, delete `[y/N]`).
 - `cmd/fngr/store.go` — Defines the narrow `eventStore` interface that commands depend on plus the
-  injectable `ioStreams` (`In io.Reader`, `Out io.Writer`).
+  injectable `ioStreams` (`In io.Reader`, `Out io.Writer`, `Err io.Writer`, `IsTTY bool`).
 - `cmd/fngr/prompt.go` — `confirm(in, out, prompt, defaultVal) (bool, error)` shared yes/no helper.
+- `cmd/fngr/body.go` — Body-source dispatch for `fngr add`. `resolveBody` returns the body string
+  from one of {joined args, stdin, editor} per the (args, `-e`, `IsTTY`) dispatch table.
+  `launchEditor` is a `var` for test stubbing; `realLaunchEditor` execs `$VISUAL`/`$EDITOR` on a
+  temp file; `errCancel` signals empty-save (handled as exit-0 by `AddCmd.Run`).
 - `cmd/fngr/pager.go` — `withPager(io, disabled) (ioStreams, closer)` wraps `Out` in a pipe to
   `$PAGER` (fallback `less -FRX`) when stdout is a TTY. Used by `list`.
 - `internal/db/db.go` — DB path resolution (explicit > `.fngr.db` in cwd > `~/.fngr.db`), connection

@@ -15,16 +15,13 @@ cycle. Specs land under `docs/superpowers/specs/`, plans under
 - **`meta` UX** — `fngr meta` ≡ `fngr meta list`; `-S` filter accepts bare
   key / `key=value` / `@person` / `#tag`; `meta rename` (was `meta update`)
   and `meta delete` mutate.
+- **`add` body-input modes** — `fngr add foo bar` joins multi-arg into a
+  single body; `cmd | fngr add` reads stdin; bare `fngr add` in a TTY (or
+  with `-e`) launches `$VISUAL`/`$EDITOR`; empty editor save cancels
+  cleanly. Conflicts (args+stdin, --edit+stdin) error loudly.
 
 ## Add command ergonomics
 
-- **Multi-arg body** — `fngr add foo bar baz` consolidates positional args
-  into a single body string so casual entries don't need quoting.
-- **Stdin body** — when stdin is not a TTY (`echo ... | fngr add` or
-  `fngr add < file`), use the piped content as the body.
-- **`$EDITOR` support** — with no args on an interactive TTY (or via an
-  explicit flag) launch `$EDITOR` on a temp file and use the saved contents
-  as the body.
 - **`--format=json` import** — accept a single event or an array of events on
   stdin / in a file for bulk import.
 
@@ -43,7 +40,7 @@ cycle. Specs land under `docs/superpowers/specs/`, plans under
 - **`-S` for search everywhere** — `fngr -S "..."` for list and
   `fngr meta -S "..."` for meta share the same flag spelling. Meta requires
   `-S` because of its subcommand tree; list mirrors the idiom so users learn
-  one form. Now load-bearing: `fngr add` is gaining multi-arg input, so
+  one form. Load-bearing: `fngr add` now accepts multi-arg input, so
   positional search on the bare command would be ambiguous.
 - **`help` alias** — `fngr help` ≡ `fngr --help`; `fngr help <cmd>` ≡
   `fngr <cmd> --help`.

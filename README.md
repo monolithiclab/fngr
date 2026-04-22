@@ -22,9 +22,18 @@ make install      # installs to $GOBIN
 ## Quick start
 
 ```
-# Add events
-fngr add "deployed v2.3 to prod #ops @sarah"
+# Add events — multi-arg body, quote tags so the shell doesn't treat # as a comment
+fngr add deployed v1.2 to staging '#ops' @alice
 fngr add "fixed login bug #bugfix" --meta env=prod
+
+# From a pipe
+echo "build broken on main" | fngr add
+
+# From a file
+fngr add < notes.md
+
+# Open $VISUAL or $EDITOR (also auto-launches on bare `fngr add` in a TTY)
+fngr add -e
 
 # Add a child event
 fngr add "rollback needed" --parent 1
