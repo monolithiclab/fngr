@@ -1,11 +1,13 @@
 package render
 
 import (
+	"cmp"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
 	"iter"
+	"slices"
 	"strconv"
 	"time"
 
@@ -159,25 +161,35 @@ func Flat(w io.Writer, events []event.Event) error {
 }
 
 type jsonEvent struct {
-	ID        int64               `json:"id"`
-	ParentID  *int64              `json:"parent_id,omitempty"`
-	Text      string              `json:"text"`
-	CreatedAt string              `json:"created_at"`
-	Meta      map[string][]string `json:"meta,omitempty"`
+	ID        int64       `json:"id"`
+	ParentID  *int64      `json:"parent_id,omitempty"`
+	Text      string      `json:"text"`
+	CreatedAt string      `json:"created_at"`
+	Meta      [][2]string `json:"meta,omitempty"`
 }
 
 func toJSONEvent(ev event.Event) jsonEvent {
-	meta := make(map[string][]string)
-	for _, m := range ev.Meta {
-		meta[m.Key] = append(meta[m.Key], m.Value)
-	}
-	return jsonEvent{
+	out := jsonEvent{
 		ID:        ev.ID,
 		ParentID:  ev.ParentID,
 		Text:      ev.Text,
 		CreatedAt: ev.CreatedAt.UTC().Format(time.RFC3339),
-		Meta:      meta,
 	}
+	if len(ev.Meta) == 0 {
+		return out
+	}
+	pairs := make([][2]string, 0, len(ev.Meta))
+	for _, m := range ev.Meta {
+		pairs = append(pairs, [2]string{m.Key, m.Value})
+	}
+	slices.SortFunc(pairs, func(a, b [2]string) int {
+		if c := cmp.Compare(a[0], b[0]); c != 0 {
+			return c
+		}
+		return cmp.Compare(a[1], b[1])
+	})
+	out.Meta = pairs
+	return out
 }
 
 func JSON(w io.Writer, events []event.Event) error {

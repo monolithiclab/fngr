@@ -317,6 +317,59 @@ func TestJSON(t *testing.T) {
 	}
 }
 
+func TestJSON_MultiValuePerKey(t *testing.T) {
+	t.Parallel()
+
+	ev := event.Event{
+		ID:        1,
+		Text:      "x",
+		CreatedAt: time.Date(2026, 4, 10, 0, 0, 0, 0, time.UTC),
+		Meta: []parse.Meta{
+			{Key: "tag", Value: "ops"},
+			{Key: "tag", Value: "deploy"},
+			{Key: "author", Value: "alice"},
+		},
+	}
+	var buf bytes.Buffer
+	if err := JSON(&buf, []event.Event{ev}); err != nil {
+		t.Fatalf("JSON: %v", err)
+	}
+
+	// Re-marshal compactly so we can substring-match without caring about
+	// MarshalIndent's whitespace.
+	var parsed []map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v\noutput:\n%s", err, buf.String())
+	}
+	compact, err := json.Marshal(parsed)
+	if err != nil {
+		t.Fatalf("re-marshal: %v", err)
+	}
+	got := string(compact)
+	want := `"meta":[["author","alice"],["tag","deploy"],["tag","ops"]]`
+	if !strings.Contains(got, want) {
+		t.Errorf("got %s\nwant substring %s", got, want)
+	}
+}
+
+func TestJSON_NoMetaOmitsField(t *testing.T) {
+	t.Parallel()
+
+	ev := event.Event{
+		ID:        1,
+		Text:      "x",
+		CreatedAt: time.Date(2026, 4, 10, 0, 0, 0, 0, time.UTC),
+	}
+	var buf bytes.Buffer
+	if err := JSON(&buf, []event.Event{ev}); err != nil {
+		t.Fatalf("JSON: %v", err)
+	}
+	got := buf.String()
+	if strings.Contains(got, `"meta"`) {
+		t.Errorf("expected no meta field for event with no meta; got:\n%s", got)
+	}
+}
+
 func TestCSV(t *testing.T) {
 	t.Parallel()
 	events := []event.Event{
