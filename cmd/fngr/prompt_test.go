@@ -26,7 +26,7 @@ func TestConfirm(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			var out bytes.Buffer
-			got, err := confirm(strings.NewReader(tt.input), &out, "Continue? [Y/n] ")
+			got, err := confirm(strings.NewReader(tt.input), &out, "Continue? [Y/n] ", true)
 			if err != nil {
 				t.Fatalf("confirm: %v", err)
 			}

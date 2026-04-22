@@ -29,11 +29,11 @@ func (c *DeleteCmd) Run(s eventStore, io ioStreams) error {
 	}
 
 	if !c.Force {
-		prompt := fmt.Sprintf("Delete event %d? [Y/n] ", ev.ID)
+		prompt := fmt.Sprintf("Delete event %d? [y/N] ", ev.ID)
 		if hasChildren {
-			prompt = fmt.Sprintf("Delete event %d and all its children? [Y/n] ", ev.ID)
+			prompt = fmt.Sprintf("Delete event %d and all its children? [y/N] ", ev.ID)
 		}
-		ok, err := confirm(io.In, io.Out, prompt)
+		ok, err := confirm(io.In, io.Out, prompt, false)
 		if err != nil {
 			return err
 		}

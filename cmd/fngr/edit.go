@@ -49,7 +49,7 @@ func (c *EditCmd) Run(s eventStore, io ioStreams) error {
 				newCreatedAt.Local().Format(timefmt.DateTimeFormat),
 			)
 		}
-		ok, err := confirm(io.In, io.Out, "Apply changes? [Y/n] ")
+		ok, err := confirm(io.In, io.Out, "Apply changes? [Y/n] ", true)
 		if err != nil {
 			return err
 		}

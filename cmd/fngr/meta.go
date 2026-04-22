@@ -73,7 +73,7 @@ func (c *MetaUpdateCmd) Run(s eventStore, io ioStreams) error {
 
 	if !c.Force {
 		prompt := fmt.Sprintf("Update %d occurrence(s) of %s=%s to %s=%s? [Y/n] ", count, oldKey, oldValue, newKey, newValue)
-		ok, err := confirm(io.In, io.Out, prompt)
+		ok, err := confirm(io.In, io.Out, prompt, true)
 		if err != nil {
 			return err
 		}
@@ -114,8 +114,8 @@ func (c *MetaDeleteCmd) Run(s eventStore, io ioStreams) error {
 	}
 
 	if !c.Force {
-		prompt := fmt.Sprintf("Delete %d occurrence(s) of %s=%s? [Y/n] ", count, key, value)
-		ok, err := confirm(io.In, io.Out, prompt)
+		prompt := fmt.Sprintf("Delete %d occurrence(s) of %s=%s? [y/N] ", count, key, value)
+		ok, err := confirm(io.In, io.Out, prompt, false)
 		if err != nil {
 			return err
 		}
