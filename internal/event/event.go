@@ -291,6 +291,61 @@ func AddTags(ctx context.Context, db *sql.DB, id int64, tags []parse.Meta) error
 	return tx.Commit()
 }
 
+// RemoveTags deletes (event_id, key, value) rows matching tags. Returns
+// the number of rows removed. FTS rebuilt in the same transaction.
+// Returns ErrNotFound if the event is missing; (0, nil) is a valid
+// outcome when none of the tags were present. Empty tags is a no-op.
+func RemoveTags(ctx context.Context, db *sql.DB, id int64, tags []parse.Meta) (int64, error) {
+	if len(tags) == 0 {
+		return 0, nil
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var dummy int
+	err = tx.QueryRowContext(ctx, "SELECT 1 FROM events WHERE id = ?", id).Scan(&dummy)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, fmt.Errorf("event %d: %w", id, ErrNotFound)
+		}
+		return 0, fmt.Errorf("query event: %w", err)
+	}
+
+	stmt, err := tx.PrepareContext(ctx,
+		"DELETE FROM event_meta WHERE event_id = ? AND key = ? AND value = ?",
+	)
+	if err != nil {
+		return 0, fmt.Errorf("prepare delete: %w", err)
+	}
+	defer stmt.Close()
+
+	var total int64
+	for _, m := range tags {
+		res, err := stmt.ExecContext(ctx, id, m.Key, m.Value)
+		if err != nil {
+			return 0, fmt.Errorf("delete tag: %w", err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return 0, fmt.Errorf("rows affected: %w", err)
+		}
+		total += n
+	}
+
+	if err := rebuildEventFTS(ctx, tx, id); err != nil {
+		return 0, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit transaction: %w", err)
+	}
+	return total, nil
+}
+
 func readMetaTx(ctx context.Context, tx *sql.Tx, id int64) ([]parse.Meta, error) {
 	rows, err := tx.QueryContext(ctx, "SELECT key, value FROM event_meta WHERE event_id = ? ORDER BY key, value", id)
 	if err != nil {

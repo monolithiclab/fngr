@@ -1053,3 +1053,93 @@ func TestAddTags_EmptyIsNoOp(t *testing.T) {
 		t.Errorf("empty AddTags returned err: %v", err)
 	}
 }
+
+func TestRemoveTags_ReturnsCount(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	id, _ := Add(ctx, database, "x", nil, []parse.Meta{
+		{Key: "tag", Value: "ops"},
+		{Key: "tag", Value: "deploy"},
+		{Key: "people", Value: "alice"},
+	}, nil)
+
+	n, err := RemoveTags(ctx, database, id, []parse.Meta{
+		{Key: "tag", Value: "ops"},
+		{Key: "tag", Value: "missing"},
+	})
+	if err != nil {
+		t.Fatalf("RemoveTags: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("removed = %d, want 1", n)
+	}
+
+	ev, _ := Get(ctx, database, id)
+	for _, m := range ev.Meta {
+		if m.Key == "tag" && m.Value == "ops" {
+			t.Error("tag=ops not removed")
+		}
+	}
+}
+
+func TestRemoveTags_RebuildsFTS(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	id, _ := Add(ctx, database, "x #ops", nil, []parse.Meta{
+		{Key: "tag", Value: "ops"},
+	}, nil)
+
+	if _, err := RemoveTags(ctx, database, id, []parse.Meta{
+		{Key: "tag", Value: "ops"},
+	}); err != nil {
+		t.Fatalf("RemoveTags: %v", err)
+	}
+
+	matches, err := List(ctx, database, ListOpts{Filter: "#ops"})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(matches) != 0 {
+		t.Errorf("FTS not refreshed: %d matches for #ops, want 0", len(matches))
+	}
+}
+
+func TestRemoveTags_NoMatchReturnsZero(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	id, _ := Add(ctx, database, "x", nil, nil, nil)
+	n, err := RemoveTags(ctx, database, id, []parse.Meta{
+		{Key: "tag", Value: "ghost"},
+	})
+	if err != nil {
+		t.Fatalf("RemoveTags: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("removed = %d, want 0", n)
+	}
+}
+
+func TestRemoveTags_NotFound(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+	_, err := RemoveTags(ctx, database, 9999, []parse.Meta{{Key: "tag", Value: "x"}})
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestRemoveTags_EmptyIsNoOp(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+	id, _ := Add(ctx, database, "x", nil, nil, nil)
+	n, err := RemoveTags(ctx, database, id, nil)
+	if err != nil {
+		t.Errorf("empty RemoveTags err: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("empty RemoveTags returned %d, want 0", n)
+	}
+}

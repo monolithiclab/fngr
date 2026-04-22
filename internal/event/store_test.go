@@ -319,3 +319,20 @@ func TestStore_AddTags(t *testing.T) {
 		t.Errorf("count = %d, want 1", n)
 	}
 }
+
+func TestStore_RemoveTags(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+
+	id, _ := s.Add(ctx, "x", nil, []parse.Meta{
+		{Key: "tag", Value: "ops"},
+	}, nil)
+
+	n, err := s.RemoveTags(ctx, id, []parse.Meta{{Key: "tag", Value: "ops"}})
+	if err != nil {
+		t.Fatalf("RemoveTags: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("removed = %d, want 1", n)
+	}
+}
