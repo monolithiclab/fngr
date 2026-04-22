@@ -47,10 +47,18 @@ func resolveBody(args []string, useEditor bool, io ioStreams) (string, error) {
 	}
 }
 
+// maxStdinBytes caps stdin reads to bound memory when something large
+// (or unbounded, e.g. `cat /dev/zero | fngr add`) gets piped in. Sized
+// to comfortably fit a JSON batch import; raise if real workflows hit it.
+const maxStdinBytes = 16 << 20 // 16 MiB
+
 func readStdin(in io.Reader) (string, error) {
-	raw, err := io.ReadAll(in)
+	raw, err := io.ReadAll(io.LimitReader(in, maxStdinBytes+1))
 	if err != nil {
 		return "", fmt.Errorf("read stdin: %w", err)
+	}
+	if len(raw) > maxStdinBytes {
+		return "", fmt.Errorf("stdin exceeds %d-byte limit", maxStdinBytes)
 	}
 	body := strings.TrimSpace(string(raw))
 	if body == "" {

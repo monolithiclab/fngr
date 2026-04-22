@@ -31,17 +31,35 @@ type cliDefaults struct {
 	meta   []parse.Meta // already parsed from --meta key=value flags
 }
 
-// parseJSONAddInput tries to unmarshal raw as an array first; falls back
-// to a single object if that fails. Returns the single-object error if
-// both attempts fail (more informative for the common single-event case).
+// maxJSONBatchSize caps the number of records accepted in a single
+// `add --format=json` invocation. Each record becomes one INSERT inside
+// a single transaction; bound this to keep tx times reasonable and to
+// surface oversized input to the user instead of silently grinding.
+const maxJSONBatchSize = 10000
+
+// parseJSONAddInput decodes raw as either a JSON object (single record)
+// or a JSON array (batch). The shape is dispatched on the first
+// non-whitespace character so error messages stay scoped to the actual
+// input shape. Unknown fields are rejected to surface typos
+// (`{"txet": ...}`) instead of silently dropping data.
 func parseJSONAddInput(raw string) ([]jsonAddInput, error) {
-	data := []byte(raw)
-	var batch []jsonAddInput
-	if err := json.Unmarshal(data, &batch); err == nil {
+	trimmed := strings.TrimLeft(raw, " \t\r\n")
+	if strings.HasPrefix(trimmed, "[") {
+		dec := json.NewDecoder(strings.NewReader(raw))
+		dec.DisallowUnknownFields()
+		var batch []jsonAddInput
+		if err := dec.Decode(&batch); err != nil {
+			return nil, fmt.Errorf("--format=json: %w", err)
+		}
+		if len(batch) > maxJSONBatchSize {
+			return nil, fmt.Errorf("--format=json: batch size %d exceeds limit %d (split into smaller batches)", len(batch), maxJSONBatchSize)
+		}
 		return batch, nil
 	}
+	dec := json.NewDecoder(strings.NewReader(raw))
+	dec.DisallowUnknownFields()
 	var one jsonAddInput
-	if err := json.Unmarshal(data, &one); err != nil {
+	if err := dec.Decode(&one); err != nil {
 		return nil, fmt.Errorf("--format=json: %w", err)
 	}
 	return []jsonAddInput{one}, nil

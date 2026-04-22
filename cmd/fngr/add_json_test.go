@@ -24,6 +24,9 @@ func TestParseJSONAddInput(t *testing.T) {
 		{name: "scalar-number", input: `42`, wantErr: "--format=json"},
 		{name: "with-meta", input: `{"text":"hi","meta":[["tag","ops"]]}`, wantLen: 1},
 		{name: "with-parent-and-time", input: `{"text":"hi","parent_id":3,"created_at":"2026-04-01T12:00:00Z"}`, wantLen: 1},
+		{name: "unknown-field-single", input: `{"text":"hi","txet":"typo"}`, wantErr: "unknown field"},
+		{name: "unknown-field-array", input: `[{"text":"hi","extra":1}]`, wantErr: "unknown field"},
+		{name: "leading-whitespace-array", input: "  \n[{\"text\":\"hi\"}]", wantLen: 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -146,5 +149,22 @@ func TestJSONInputToAddInput(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestParseJSONAddInput_BatchSizeLimit(t *testing.T) {
+	t.Parallel()
+	var b strings.Builder
+	b.WriteByte('[')
+	for i := 0; i <= maxJSONBatchSize; i++ {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(`{"text":"x"}`)
+	}
+	b.WriteByte(']')
+	_, err := parseJSONAddInput(b.String())
+	if err == nil || !strings.Contains(err.Error(), "exceeds limit") {
+		t.Errorf("err = %v, want 'exceeds limit'", err)
 	}
 }

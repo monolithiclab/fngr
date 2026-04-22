@@ -52,6 +52,16 @@ func TestReadStdin_ReadError(t *testing.T) {
 	}
 }
 
+func TestReadStdin_ExceedsLimit(t *testing.T) {
+	t.Parallel()
+	// One byte over the cap is enough to trip the limit branch.
+	huge := strings.Repeat("a", maxStdinBytes+1)
+	_, err := readStdin(strings.NewReader(huge))
+	if err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Errorf("err = %v, want 'exceeds' error", err)
+	}
+}
+
 type errReader struct{}
 
 func (errReader) Read(_ []byte) (int, error) { return 0, errors.New("boom") }
