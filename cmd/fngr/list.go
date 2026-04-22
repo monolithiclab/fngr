@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
-	"os"
 
 	"github.com/monolithiclab/fngr/internal/event"
 	"github.com/monolithiclab/fngr/internal/render"
@@ -16,12 +14,12 @@ type ListCmd struct {
 	Format string `help:"Output format: tree (default), flat, json, csv." enum:"tree,flat,json,csv" default:"tree"`
 }
 
-func (c *ListCmd) Run(db *sql.DB) error {
+func (c *ListCmd) Run(s eventStore, io ioStreams) error {
 	ctx := context.Background()
 
-	events, err := event.List(ctx, db, event.ListOpts{Filter: c.Filter, From: c.From, To: c.To})
+	events, err := s.List(ctx, event.ListOpts{Filter: c.Filter, From: c.From, To: c.To})
 	if err != nil {
 		return err
 	}
-	return render.Events(os.Stdout, c.Format, events)
+	return render.Events(io.Out, c.Format, events)
 }

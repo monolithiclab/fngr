@@ -2,10 +2,7 @@ package main
 
 import (
 	"context"
-	"database/sql"
-	"os"
 
-	"github.com/monolithiclab/fngr/internal/event"
 	"github.com/monolithiclab/fngr/internal/render"
 )
 
@@ -15,20 +12,20 @@ type ShowCmd struct {
 	Format string `help:"Output format: text (default), json, csv." enum:"text,json,csv" default:"text"`
 }
 
-func (c *ShowCmd) Run(db *sql.DB) error {
+func (c *ShowCmd) Run(s eventStore, io ioStreams) error {
 	ctx := context.Background()
 
 	if c.Tree {
-		events, err := event.GetSubtree(ctx, db, c.ID)
+		events, err := s.GetSubtree(ctx, c.ID)
 		if err != nil {
 			return err
 		}
-		return render.Events(os.Stdout, c.Format, events)
+		return render.Events(io.Out, c.Format, events)
 	}
 
-	ev, err := event.Get(ctx, db, c.ID)
+	ev, err := s.Get(ctx, c.ID)
 	if err != nil {
 		return err
 	}
-	return render.SingleEvent(os.Stdout, c.Format, ev)
+	return render.SingleEvent(io.Out, c.Format, ev)
 }

@@ -2,11 +2,8 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
-	"os"
 
-	"github.com/monolithiclab/fngr/internal/event"
 	"github.com/monolithiclab/fngr/internal/parse"
 )
 
@@ -18,16 +15,16 @@ type MetaCmd struct {
 
 type MetaListCmd struct{}
 
-func (c *MetaListCmd) Run(db *sql.DB) error {
+func (c *MetaListCmd) Run(s eventStore, io ioStreams) error {
 	ctx := context.Background()
 
-	counts, err := event.ListMeta(ctx, db)
+	counts, err := s.ListMeta(ctx)
 	if err != nil {
 		return err
 	}
 
 	if len(counts) == 0 {
-		fmt.Println("No metadata found.")
+		fmt.Fprintln(io.Out, "No metadata found.")
 		return nil
 	}
 
@@ -42,7 +39,7 @@ func (c *MetaListCmd) Run(db *sql.DB) error {
 	}
 
 	for _, mc := range counts {
-		fmt.Fprintf(os.Stdout, "%-*s=%-*s  (%d)\n", maxKey, mc.Key, maxVal, mc.Value, mc.Count)
+		fmt.Fprintf(io.Out, "%-*s=%-*s  (%d)\n", maxKey, mc.Key, maxVal, mc.Value, mc.Count)
 	}
 
 	return nil
@@ -54,7 +51,7 @@ type MetaUpdateCmd struct {
 	Force bool   `help:"Skip confirmation prompt." short:"f"`
 }
 
-func (c *MetaUpdateCmd) Run(db *sql.DB) error {
+func (c *MetaUpdateCmd) Run(s eventStore, io ioStreams) error {
 	ctx := context.Background()
 
 	oldKey, oldValue, err := parse.KeyValue(c.Old)
@@ -66,7 +63,7 @@ func (c *MetaUpdateCmd) Run(db *sql.DB) error {
 		return err
 	}
 
-	count, err := event.CountMeta(ctx, db, oldKey, oldValue)
+	count, err := s.CountMeta(ctx, oldKey, oldValue)
 	if err != nil {
 		return err
 	}
@@ -76,22 +73,22 @@ func (c *MetaUpdateCmd) Run(db *sql.DB) error {
 
 	if !c.Force {
 		prompt := fmt.Sprintf("Update %d occurrence(s) of %s=%s to %s=%s? [Y/n] ", count, oldKey, oldValue, newKey, newValue)
-		ok, err := confirm(os.Stdin, os.Stdout, prompt)
+		ok, err := confirm(io.In, io.Out, prompt)
 		if err != nil {
 			return err
 		}
 		if !ok {
-			fmt.Println("Aborted.")
+			fmt.Fprintln(io.Out, "Aborted.")
 			return nil
 		}
 	}
 
-	affected, err := event.UpdateMeta(ctx, db, oldKey, oldValue, newKey, newValue)
+	affected, err := s.UpdateMeta(ctx, oldKey, oldValue, newKey, newValue)
 	if err != nil {
 		return err
 	}
 
-	fmt.Printf("Updated %d occurrence(s)\n", affected)
+	fmt.Fprintf(io.Out, "Updated %d occurrence(s)\n", affected)
 	return nil
 }
 
@@ -100,7 +97,7 @@ type MetaDeleteCmd struct {
 	Force bool   `help:"Skip confirmation prompt." short:"f"`
 }
 
-func (c *MetaDeleteCmd) Run(db *sql.DB) error {
+func (c *MetaDeleteCmd) Run(s eventStore, io ioStreams) error {
 	ctx := context.Background()
 
 	key, value, err := parse.KeyValue(c.Meta)
@@ -108,7 +105,7 @@ func (c *MetaDeleteCmd) Run(db *sql.DB) error {
 		return err
 	}
 
-	count, err := event.CountMeta(ctx, db, key, value)
+	count, err := s.CountMeta(ctx, key, value)
 	if err != nil {
 		return err
 	}
@@ -118,21 +115,21 @@ func (c *MetaDeleteCmd) Run(db *sql.DB) error {
 
 	if !c.Force {
 		prompt := fmt.Sprintf("Delete %d occurrence(s) of %s=%s? [Y/n] ", count, key, value)
-		ok, err := confirm(os.Stdin, os.Stdout, prompt)
+		ok, err := confirm(io.In, io.Out, prompt)
 		if err != nil {
 			return err
 		}
 		if !ok {
-			fmt.Println("Aborted.")
+			fmt.Fprintln(io.Out, "Aborted.")
 			return nil
 		}
 	}
 
-	n, err := event.DeleteMeta(ctx, db, key, value)
+	n, err := s.DeleteMeta(ctx, key, value)
 	if err != nil {
 		return err
 	}
 
-	fmt.Printf("Deleted %d occurrence(s)\n", n)
+	fmt.Fprintf(io.Out, "Deleted %d occurrence(s)\n", n)
 	return nil
 }

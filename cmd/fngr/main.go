@@ -8,6 +8,7 @@ import (
 
 	"github.com/alecthomas/kong"
 	"github.com/monolithiclab/fngr/internal/db"
+	"github.com/monolithiclab/fngr/internal/event"
 )
 
 var version = "dev"
@@ -60,6 +61,8 @@ func main() {
 	}
 	defer database.Close()
 
-	err = ctx.Run(database)
+	store := event.NewStore(database)
+	io := ioStreams{In: os.Stdin, Out: os.Stdout}
+	err = ctx.Run(eventStore(store), io)
 	ctx.FatalIfErrorf(err)
 }
