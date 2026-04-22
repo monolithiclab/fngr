@@ -212,6 +212,125 @@ func TestDeleteEvent_CascadesChildren(t *testing.T) {
 	}
 }
 
+func TestListEvents_NoFilter(t *testing.T) {
+	db := testDB(t)
+	if err := initSchema(db); err != nil {
+		t.Fatalf("initSchema: %v", err)
+	}
+
+	_, err := AddEvent(db, "first event #work", nil, []Meta{{Key: "tag", Value: "work"}})
+	if err != nil {
+		t.Fatalf("AddEvent 1: %v", err)
+	}
+	_, err = AddEvent(db, "second event #personal", nil, []Meta{{Key: "tag", Value: "personal"}})
+	if err != nil {
+		t.Fatalf("AddEvent 2: %v", err)
+	}
+
+	events, err := ListEvents(db, ListOpts{})
+	if err != nil {
+		t.Fatalf("ListEvents: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("len(events) = %d, want 2", len(events))
+	}
+	if events[0].Text != "first event #work" {
+		t.Errorf("events[0].Text = %q, want %q", events[0].Text, "first event #work")
+	}
+	if events[1].Text != "second event #personal" {
+		t.Errorf("events[1].Text = %q, want %q", events[1].Text, "second event #personal")
+	}
+}
+
+func TestListEvents_WithFilter(t *testing.T) {
+	db := testDB(t)
+	if err := initSchema(db); err != nil {
+		t.Fatalf("initSchema: %v", err)
+	}
+
+	_, err := AddEvent(db, "deploy to prod #ops", nil, []Meta{{Key: "tag", Value: "ops"}})
+	if err != nil {
+		t.Fatalf("AddEvent 1: %v", err)
+	}
+	_, err = AddEvent(db, "standup meeting #work", nil, []Meta{{Key: "tag", Value: "work"}})
+	if err != nil {
+		t.Fatalf("AddEvent 2: %v", err)
+	}
+
+	events, err := ListEvents(db, ListOpts{Filter: "#ops"})
+	if err != nil {
+		t.Fatalf("ListEvents: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("len(events) = %d, want 1", len(events))
+	}
+	if events[0].Text != "deploy to prod #ops" {
+		t.Errorf("events[0].Text = %q, want %q", events[0].Text, "deploy to prod #ops")
+	}
+}
+
+func TestListEvents_WithDateRange(t *testing.T) {
+	db := testDB(t)
+	if err := initSchema(db); err != nil {
+		t.Fatalf("initSchema: %v", err)
+	}
+
+	// Insert events with explicit timestamps to control ordering and filtering.
+	_, err := db.Exec("INSERT INTO events (text, created_at) VALUES (?, ?)", "old event", "2026-01-01 00:00:00")
+	if err != nil {
+		t.Fatalf("insert old event: %v", err)
+	}
+	_, err = db.Exec("INSERT INTO events_fts (rowid, content) VALUES (1, 'old event')")
+	if err != nil {
+		t.Fatalf("insert old FTS: %v", err)
+	}
+
+	_, err = db.Exec("INSERT INTO events (text, created_at) VALUES (?, ?)", "new event", "2026-03-15 12:00:00")
+	if err != nil {
+		t.Fatalf("insert new event: %v", err)
+	}
+	_, err = db.Exec("INSERT INTO events_fts (rowid, content) VALUES (2, 'new event')")
+	if err != nil {
+		t.Fatalf("insert new FTS: %v", err)
+	}
+
+	// Filter to only include events on or after 2026-03-01.
+	events, err := ListEvents(db, ListOpts{From: "2026-03-01"})
+	if err != nil {
+		t.Fatalf("ListEvents with From: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("len(events) = %d, want 1", len(events))
+	}
+	if events[0].Text != "new event" {
+		t.Errorf("events[0].Text = %q, want %q", events[0].Text, "new event")
+	}
+
+	// Filter to only include events on or before 2026-02-01.
+	events, err = ListEvents(db, ListOpts{To: "2026-02-01"})
+	if err != nil {
+		t.Fatalf("ListEvents with To: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("len(events) = %d, want 1", len(events))
+	}
+	if events[0].Text != "old event" {
+		t.Errorf("events[0].Text = %q, want %q", events[0].Text, "old event")
+	}
+
+	// Filter with both From and To.
+	events, err = ListEvents(db, ListOpts{From: "2026-02-01", To: "2026-04-01"})
+	if err != nil {
+		t.Fatalf("ListEvents with From and To: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("len(events) = %d, want 1", len(events))
+	}
+	if events[0].Text != "new event" {
+		t.Errorf("events[0].Text = %q, want %q", events[0].Text, "new event")
+	}
+}
+
 func TestListMeta(t *testing.T) {
 	db := testDB(t)
 	if err := initSchema(db); err != nil {

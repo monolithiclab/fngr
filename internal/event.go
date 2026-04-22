@@ -154,6 +154,77 @@ func ListMeta(db *sql.DB) ([]MetaCount, error) {
 	return result, nil
 }
 
+// ListOpts controls filtering and date range for ListEvents.
+type ListOpts struct {
+	Filter string
+	From   string
+	To     string
+}
+
+// ListEvents retrieves events with optional FTS5 filtering and date range.
+// Results are ordered by created_at ASC. Each event includes its metadata.
+func ListEvents(db *sql.DB, opts ListOpts) ([]Event, error) {
+	var query string
+	var args []any
+
+	if opts.Filter != "" {
+		matchExpr := PreprocessFilter(opts.Filter)
+		query = `SELECT e.id, e.parent_id, e.text, e.created_at
+			FROM events e
+			JOIN events_fts f ON f.rowid = e.id
+			WHERE events_fts MATCH ?`
+		args = append(args, matchExpr)
+	} else {
+		query = `SELECT e.id, e.parent_id, e.text, e.created_at
+			FROM events e
+			WHERE 1=1`
+	}
+
+	if opts.From != "" {
+		query += " AND e.created_at >= ?"
+		args = append(args, opts.From)
+	}
+	if opts.To != "" {
+		query += " AND e.created_at <= datetime(?, '+1 day')"
+		args = append(args, opts.To)
+	}
+
+	query += " ORDER BY e.created_at ASC"
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query events: %w", err)
+	}
+	defer rows.Close()
+
+	var events []Event
+	for rows.Next() {
+		var e Event
+		var parentID sql.NullInt64
+		if err := rows.Scan(&e.ID, &parentID, &e.Text, &e.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan event: %w", err)
+		}
+		if parentID.Valid {
+			e.ParentID = &parentID.Int64
+		}
+		events = append(events, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate events: %w", err)
+	}
+
+	// Load metadata for each event.
+	for i := range events {
+		meta, err := loadMeta(db, events[i].ID)
+		if err != nil {
+			return nil, err
+		}
+		events[i].Meta = meta
+	}
+
+	return events, nil
+}
+
 // loadMeta queries all metadata for a given event ID, ordered by key then value.
 func loadMeta(db *sql.DB, eventID int64) ([]Meta, error) {
 	rows, err := db.Query(
