@@ -2,6 +2,8 @@ package internal
 
 import (
 	"database/sql"
+	"os"
+	"path/filepath"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -22,6 +24,15 @@ func testDB(t *testing.T) *sql.DB {
 		t.Fatalf("enable foreign keys: %v", err)
 	}
 
+	return db
+}
+
+func testDBWithSchema(t *testing.T) *sql.DB {
+	t.Helper()
+	db := testDB(t)
+	if err := initSchema(db); err != nil {
+		t.Fatalf("initSchema: %v", err)
+	}
 	return db
 }
 
@@ -57,11 +68,7 @@ func TestInitSchema_Idempotent(t *testing.T) {
 }
 
 func TestCascadeDelete_RemovesChildrenAndMeta(t *testing.T) {
-	db := testDB(t)
-
-	if err := initSchema(db); err != nil {
-		t.Fatalf("initSchema: %v", err)
-	}
+	db := testDBWithSchema(t)
 
 	// Insert parent event.
 	res, err := db.Exec("INSERT INTO events (text) VALUES (?)", "parent event")
@@ -109,11 +116,7 @@ func TestCascadeDelete_RemovesChildrenAndMeta(t *testing.T) {
 }
 
 func TestFTSDeleteTrigger(t *testing.T) {
-	db := testDB(t)
-
-	if err := initSchema(db); err != nil {
-		t.Fatalf("initSchema: %v", err)
-	}
+	db := testDBWithSchema(t)
 
 	// Insert an event.
 	res, err := db.Exec("INSERT INTO events (text) VALUES (?)", "searchable event")
@@ -147,5 +150,140 @@ func TestFTSDeleteTrigger(t *testing.T) {
 	}
 	if count != 0 {
 		t.Errorf("expected FTS row to be deleted, got count=%d", count)
+	}
+}
+
+func TestResolveDBPath_ExplicitPath(t *testing.T) {
+	got, err := ResolveDBPath("/tmp/custom.db")
+	if err != nil {
+		t.Fatalf("ResolveDBPath: %v", err)
+	}
+	if got != "/tmp/custom.db" {
+		t.Errorf("got %q, want %q", got, "/tmp/custom.db")
+	}
+}
+
+func TestResolveDBPath_LocalFile(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create .fngr.db in the temp dir.
+	localDB := filepath.Join(dir, ".fngr.db")
+	if err := os.WriteFile(localDB, nil, 0o644); err != nil {
+		t.Fatalf("create local db: %v", err)
+	}
+
+	origDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(origDir) })
+
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+
+	got, err := ResolveDBPath("")
+	if err != nil {
+		t.Fatalf("ResolveDBPath: %v", err)
+	}
+	if got != ".fngr.db" {
+		t.Errorf("got %q, want %q", got, ".fngr.db")
+	}
+}
+
+func TestResolveDBPath_FallbackHome(t *testing.T) {
+	dir := t.TempDir()
+
+	origDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(origDir) })
+
+	// Change to a dir without .fngr.db.
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+
+	got, err := ResolveDBPath("")
+	if err != nil {
+		t.Fatalf("ResolveDBPath: %v", err)
+	}
+
+	home, _ := os.UserHomeDir()
+	want := filepath.Join(home, ".fngr.db")
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestOpenDB_CreateTrue(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+
+	db, err := OpenDB(dbPath, true)
+	if err != nil {
+		t.Fatalf("OpenDB create=true: %v", err)
+	}
+	defer db.Close()
+
+	// Verify file was created.
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		t.Fatal("database file was not created")
+	}
+
+	// Verify schema was initialized.
+	var name string
+	err = db.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name='events'").Scan(&name)
+	if err != nil {
+		t.Errorf("events table not found: %v", err)
+	}
+}
+
+func TestOpenDB_CreateFalseNotExists(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "nonexistent.db")
+
+	_, err := OpenDB(dbPath, false)
+	if err == nil {
+		t.Fatal("expected error for nonexistent db with create=false")
+	}
+}
+
+func TestOpenDB_ForeignKeysEnabled(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "fk.db")
+
+	db, err := OpenDB(dbPath, true)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+
+	var fkEnabled int
+	if err := db.QueryRow("PRAGMA foreign_keys").Scan(&fkEnabled); err != nil {
+		t.Fatalf("PRAGMA foreign_keys: %v", err)
+	}
+	if fkEnabled != 1 {
+		t.Errorf("foreign_keys = %d, want 1", fkEnabled)
+	}
+}
+
+func TestOpenDB_WALMode(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "wal.db")
+
+	db, err := OpenDB(dbPath, true)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+
+	var journalMode string
+	if err := db.QueryRow("PRAGMA journal_mode").Scan(&journalMode); err != nil {
+		t.Fatalf("PRAGMA journal_mode: %v", err)
+	}
+	if journalMode != "wal" {
+		t.Errorf("journal_mode = %q, want %q", journalMode, "wal")
 	}
 }

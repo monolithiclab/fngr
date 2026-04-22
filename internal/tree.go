@@ -121,14 +121,14 @@ func RenderJSON(events []Event) string {
 func RenderCSV(events []Event) string {
 	var b bytes.Buffer
 	w := csv.NewWriter(&b)
-	w.Write([]string{"id", "parent_id", "created_at", "author", "text"})
+	_ = w.Write([]string{"id", "parent_id", "created_at", "author", "text"})
 	for _, ev := range events {
 		parentID := ""
 		if ev.ParentID != nil {
 			parentID = strconv.FormatInt(*ev.ParentID, 10)
 		}
 		author := metaValue(ev.Meta, MetaKeyAuthor)
-		w.Write([]string{
+		_ = w.Write([]string{
 			strconv.FormatInt(ev.ID, 10),
 			parentID,
 			ev.CreatedAt.Format(time.RFC3339),

@@ -25,7 +25,10 @@ func PreprocessFilter(expr string) string {
 		}
 	}
 
-	return strings.Join(out, " ")
+	result := strings.Join(out, " ")
+	// FTS5's NOT is a binary operator (a NOT b), so "AND NOT" is redundant.
+	result = strings.ReplaceAll(result, " AND NOT ", " NOT ")
+	return result
 }
 
 // convertTerm transforms a single token into its FTS5 representation.

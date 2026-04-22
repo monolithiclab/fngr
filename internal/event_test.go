@@ -6,10 +6,7 @@ import (
 )
 
 func TestAddEvent(t *testing.T) {
-	db := testDB(t)
-	if err := initSchema(db); err != nil {
-		t.Fatalf("initSchema: %v", err)
-	}
+	db := testDBWithSchema(t)
 
 	meta := []Meta{
 		{Key: "author", Value: "alice"},
@@ -57,10 +54,7 @@ func TestAddEvent(t *testing.T) {
 }
 
 func TestAddEvent_WithParent(t *testing.T) {
-	db := testDB(t)
-	if err := initSchema(db); err != nil {
-		t.Fatalf("initSchema: %v", err)
-	}
+	db := testDBWithSchema(t)
 
 	parentID, err := AddEvent(db, "parent event", nil, nil)
 	if err != nil {
@@ -84,10 +78,7 @@ func TestAddEvent_WithParent(t *testing.T) {
 }
 
 func TestAddEvent_InvalidParent(t *testing.T) {
-	db := testDB(t)
-	if err := initSchema(db); err != nil {
-		t.Fatalf("initSchema: %v", err)
-	}
+	db := testDBWithSchema(t)
 
 	invalidParent := int64(9999)
 	_, err := AddEvent(db, "orphan event", &invalidParent, nil)
@@ -100,10 +91,7 @@ func TestAddEvent_InvalidParent(t *testing.T) {
 }
 
 func TestGetEvent(t *testing.T) {
-	db := testDB(t)
-	if err := initSchema(db); err != nil {
-		t.Fatalf("initSchema: %v", err)
-	}
+	db := testDBWithSchema(t)
 
 	meta := []Meta{
 		{Key: "author", Value: "alice"},
@@ -129,10 +117,7 @@ func TestGetEvent(t *testing.T) {
 }
 
 func TestGetEvent_NotFound(t *testing.T) {
-	db := testDB(t)
-	if err := initSchema(db); err != nil {
-		t.Fatalf("initSchema: %v", err)
-	}
+	db := testDBWithSchema(t)
 
 	_, err := GetEvent(db, 9999)
 	if err == nil {
@@ -144,10 +129,7 @@ func TestGetEvent_NotFound(t *testing.T) {
 }
 
 func TestDeleteEvent(t *testing.T) {
-	db := testDB(t)
-	if err := initSchema(db); err != nil {
-		t.Fatalf("initSchema: %v", err)
-	}
+	db := testDBWithSchema(t)
 
 	id, err := AddEvent(db, "to be deleted", nil, nil)
 	if err != nil {
@@ -170,10 +152,7 @@ func TestDeleteEvent(t *testing.T) {
 }
 
 func TestDeleteEvent_NotFound(t *testing.T) {
-	db := testDB(t)
-	if err := initSchema(db); err != nil {
-		t.Fatalf("initSchema: %v", err)
-	}
+	db := testDBWithSchema(t)
 
 	err := DeleteEvent(db, 9999)
 	if err == nil {
@@ -182,10 +161,7 @@ func TestDeleteEvent_NotFound(t *testing.T) {
 }
 
 func TestDeleteEvent_CascadesChildren(t *testing.T) {
-	db := testDB(t)
-	if err := initSchema(db); err != nil {
-		t.Fatalf("initSchema: %v", err)
-	}
+	db := testDBWithSchema(t)
 
 	parentID, err := AddEvent(db, "parent", nil, []Meta{{Key: "author", Value: "alice"}})
 	if err != nil {
@@ -213,10 +189,7 @@ func TestDeleteEvent_CascadesChildren(t *testing.T) {
 }
 
 func TestListEvents_NoFilter(t *testing.T) {
-	db := testDB(t)
-	if err := initSchema(db); err != nil {
-		t.Fatalf("initSchema: %v", err)
-	}
+	db := testDBWithSchema(t)
 
 	_, err := AddEvent(db, "first event #work", nil, []Meta{{Key: "tag", Value: "work"}})
 	if err != nil {
@@ -243,10 +216,7 @@ func TestListEvents_NoFilter(t *testing.T) {
 }
 
 func TestListEvents_WithFilter(t *testing.T) {
-	db := testDB(t)
-	if err := initSchema(db); err != nil {
-		t.Fatalf("initSchema: %v", err)
-	}
+	db := testDBWithSchema(t)
 
 	_, err := AddEvent(db, "deploy to prod #ops", nil, []Meta{{Key: "tag", Value: "ops"}})
 	if err != nil {
@@ -270,10 +240,7 @@ func TestListEvents_WithFilter(t *testing.T) {
 }
 
 func TestListEvents_WithDateRange(t *testing.T) {
-	db := testDB(t)
-	if err := initSchema(db); err != nil {
-		t.Fatalf("initSchema: %v", err)
-	}
+	db := testDBWithSchema(t)
 
 	// Insert events with explicit timestamps to control ordering and filtering.
 	_, err := db.Exec("INSERT INTO events (text, created_at) VALUES (?, ?)", "old event", "2026-01-01 00:00:00")
@@ -332,10 +299,7 @@ func TestListEvents_WithDateRange(t *testing.T) {
 }
 
 func TestListMeta(t *testing.T) {
-	db := testDB(t)
-	if err := initSchema(db); err != nil {
-		t.Fatalf("initSchema: %v", err)
-	}
+	db := testDBWithSchema(t)
 
 	// Add 2 events with overlapping meta.
 	_, err := AddEvent(db, "event one", nil, []Meta{
@@ -382,5 +346,211 @@ func TestListMeta(t *testing.T) {
 				i, counts[i].Key, counts[i].Value, counts[i].Count,
 				exp.key, exp.value, exp.count)
 		}
+	}
+}
+
+func TestGetSubtree(t *testing.T) {
+	db := testDBWithSchema(t)
+
+	root, err := AddEvent(db, "root", nil, []Meta{{Key: MetaKeyAuthor, Value: "alice"}})
+	if err != nil {
+		t.Fatalf("AddEvent root: %v", err)
+	}
+
+	child, err := AddEvent(db, "child", &root, []Meta{{Key: MetaKeyAuthor, Value: "alice"}})
+	if err != nil {
+		t.Fatalf("AddEvent child: %v", err)
+	}
+
+	grandchild, err := AddEvent(db, "grandchild", &child, []Meta{{Key: MetaKeyAuthor, Value: "bob"}})
+	if err != nil {
+		t.Fatalf("AddEvent grandchild: %v", err)
+	}
+
+	// Add an unrelated event that should not appear in the subtree.
+	if _, err := AddEvent(db, "unrelated", nil, nil); err != nil {
+		t.Fatalf("AddEvent unrelated: %v", err)
+	}
+
+	events, err := GetSubtree(db, root)
+	if err != nil {
+		t.Fatalf("GetSubtree: %v", err)
+	}
+
+	if len(events) != 3 {
+		t.Fatalf("len(events) = %d, want 3", len(events))
+	}
+
+	ids := make([]int64, len(events))
+	for i, e := range events {
+		ids[i] = e.ID
+	}
+
+	if ids[0] != root || ids[1] != child || ids[2] != grandchild {
+		t.Errorf("subtree IDs = %v, want [%d %d %d]", ids, root, child, grandchild)
+	}
+
+	// Verify metadata is loaded.
+	if len(events[2].Meta) != 1 || events[2].Meta[0].Value != "bob" {
+		t.Errorf("grandchild meta = %v, want [{author bob}]", events[2].Meta)
+	}
+}
+
+func TestGetSubtree_LeafNode(t *testing.T) {
+	db := testDBWithSchema(t)
+
+	id, err := AddEvent(db, "leaf", nil, nil)
+	if err != nil {
+		t.Fatalf("AddEvent: %v", err)
+	}
+
+	events, err := GetSubtree(db, id)
+	if err != nil {
+		t.Fatalf("GetSubtree: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("len(events) = %d, want 1", len(events))
+	}
+	if events[0].Text != "leaf" {
+		t.Errorf("events[0].Text = %q, want %q", events[0].Text, "leaf")
+	}
+}
+
+func TestGetSubtree_NotFound(t *testing.T) {
+	db := testDBWithSchema(t)
+
+	_, err := GetSubtree(db, 9999)
+	if err == nil {
+		t.Fatal("expected error for nonexistent root, got nil")
+	}
+	if !strings.Contains(err.Error(), "event 9999 not found") {
+		t.Errorf("error = %q, want it to contain %q", err.Error(), "event 9999 not found")
+	}
+}
+
+func TestFTSIsolation_MetaTokensNotMatchedByBareWords(t *testing.T) {
+	db := testDBWithSchema(t)
+
+	// Event with tag=deploy in metadata but "deploy" does NOT appear in body text.
+	_, err := AddEvent(db, "pushed to production", nil, []Meta{
+		{Key: MetaKeyAuthor, Value: "alice"},
+		{Key: MetaKeyTag, Value: "deploy"},
+	})
+	if err != nil {
+		t.Fatalf("AddEvent: %v", err)
+	}
+
+	// Bare word "deploy" should NOT match because the FTS token is "tag=deploy"
+	// (the = is a token character), not "deploy" as a standalone token.
+	events, err := ListEvents(db, ListOpts{Filter: "deploy"})
+	if err != nil {
+		t.Fatalf("ListEvents bare word: %v", err)
+	}
+	if len(events) != 0 {
+		t.Errorf("bare word 'deploy' matched %d events, want 0 (FTS isolation broken)", len(events))
+	}
+
+	// But #deploy (tag shorthand) should match via "tag=deploy" phrase.
+	events, err = ListEvents(db, ListOpts{Filter: "#deploy"})
+	if err != nil {
+		t.Fatalf("ListEvents #deploy: %v", err)
+	}
+	if len(events) != 1 {
+		t.Errorf("#deploy matched %d events, want 1", len(events))
+	}
+}
+
+func TestFTSIsolation_BodyWordsNotMatchedByMetaFilter(t *testing.T) {
+	db := testDBWithSchema(t)
+
+	// Event with "work" in body text but no tag=work metadata.
+	_, err := AddEvent(db, "heading to work early", nil, []Meta{
+		{Key: MetaKeyAuthor, Value: "alice"},
+	})
+	if err != nil {
+		t.Fatalf("AddEvent: %v", err)
+	}
+
+	// #work filter → "tag=work" phrase match. Should NOT match because
+	// "work" in body is a standalone token, not "tag=work".
+	events, err := ListEvents(db, ListOpts{Filter: "#work"})
+	if err != nil {
+		t.Fatalf("ListEvents #work: %v", err)
+	}
+	if len(events) != 0 {
+		t.Errorf("#work matched %d events, want 0 (body word leaked into meta filter)", len(events))
+	}
+
+	// Bare word "work" should match the body text.
+	events, err = ListEvents(db, ListOpts{Filter: "work"})
+	if err != nil {
+		t.Fatalf("ListEvents bare work: %v", err)
+	}
+	if len(events) != 1 {
+		t.Errorf("bare 'work' matched %d events, want 1", len(events))
+	}
+}
+
+func TestListEvents_ComplexFilters(t *testing.T) {
+	db := testDBWithSchema(t)
+
+	// Event 1: tagged ops, person alice, body "deploy to prod"
+	_, err := AddEvent(db, "deploy to prod", nil, []Meta{
+		{Key: MetaKeyAuthor, Value: "alice"},
+		{Key: MetaKeyTag, Value: "ops"},
+		{Key: MetaKeyPeople, Value: "alice"},
+	})
+	if err != nil {
+		t.Fatalf("AddEvent 1: %v", err)
+	}
+
+	// Event 2: tagged work, person bob, body "standup meeting"
+	_, err = AddEvent(db, "standup meeting", nil, []Meta{
+		{Key: MetaKeyAuthor, Value: "bob"},
+		{Key: MetaKeyTag, Value: "work"},
+		{Key: MetaKeyPeople, Value: "bob"},
+	})
+	if err != nil {
+		t.Fatalf("AddEvent 2: %v", err)
+	}
+
+	// Event 3: tagged ops AND work, person alice, body "deploy standup"
+	_, err = AddEvent(db, "deploy standup", nil, []Meta{
+		{Key: MetaKeyAuthor, Value: "alice"},
+		{Key: MetaKeyTag, Value: "ops"},
+		{Key: MetaKeyTag, Value: "work"},
+		{Key: MetaKeyPeople, Value: "alice"},
+	})
+	if err != nil {
+		t.Fatalf("AddEvent 3: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		filter string
+		want   int
+	}{
+		{"AND tags", "#ops & #work", 1},
+		{"OR tags", "#ops | #work", 3},
+		{"NOT tag", "!#work", 1},
+		{"tag AND person", "#ops & @alice", 2},
+		{"body AND tag", "deploy & #ops", 2},
+		{"body NOT tag", "deploy & !#work", 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			events, err := ListEvents(db, ListOpts{Filter: tt.filter})
+			if err != nil {
+				t.Fatalf("ListEvents(%q): %v", tt.filter, err)
+			}
+			if len(events) != tt.want {
+				texts := make([]string, len(events))
+				for i, e := range events {
+					texts[i] = e.Text
+				}
+				t.Errorf("filter %q matched %d events %v, want %d", tt.filter, len(events), texts, tt.want)
+			}
+		})
 	}
 }

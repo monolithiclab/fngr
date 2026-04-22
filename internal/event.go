@@ -3,6 +3,7 @@ package internal
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -169,11 +170,21 @@ func ListEvents(db *sql.DB, opts ListOpts) ([]Event, error) {
 
 	if opts.Filter != "" {
 		matchExpr := PreprocessFilter(opts.Filter)
-		query = `SELECT e.id, e.parent_id, e.text, e.created_at
-			FROM events e
-			JOIN events_fts f ON f.rowid = e.id
-			WHERE events_fts MATCH ?`
-		args = append(args, matchExpr)
+		if positiveExpr, ok := strings.CutPrefix(matchExpr, "NOT "); ok {
+			// FTS5 NOT is a binary operator and cannot lead an expression.
+			query = `SELECT e.id, e.parent_id, e.text, e.created_at
+				FROM events e
+				WHERE e.id NOT IN (
+					SELECT rowid FROM events_fts WHERE events_fts MATCH ?
+				)`
+			args = append(args, positiveExpr)
+		} else {
+			query = `SELECT e.id, e.parent_id, e.text, e.created_at
+				FROM events e
+				JOIN events_fts f ON f.rowid = e.id
+				WHERE events_fts MATCH ?`
+			args = append(args, matchExpr)
+		}
 	} else {
 		query = `SELECT e.id, e.parent_id, e.text, e.created_at
 			FROM events e
@@ -197,41 +208,16 @@ func ListEvents(db *sql.DB, opts ListOpts) ([]Event, error) {
 	}
 	defer rows.Close()
 
-	var events []Event
-	for rows.Next() {
-		var e Event
-		var parentID sql.NullInt64
-		if err := rows.Scan(&e.ID, &parentID, &e.Text, &e.CreatedAt); err != nil {
-			return nil, fmt.Errorf("scan event: %w", err)
-		}
-		if parentID.Valid {
-			e.ParentID = &parentID.Int64
-		}
-		events = append(events, e)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate events: %w", err)
-	}
-
-	// Load metadata for each event.
-	for i := range events {
-		meta, err := loadMeta(db, events[i].ID)
-		if err != nil {
-			return nil, err
-		}
-		events[i].Meta = meta
-	}
-
-	return events, nil
+	return scanEvents(db, rows)
 }
 
 // GetSubtree retrieves an event and all its descendants using a recursive CTE.
 // The root event must exist or an error is returned. Results are ordered by
 // created_at ASC and each event includes its metadata.
 func GetSubtree(db *sql.DB, rootID int64) ([]Event, error) {
-	// Validate root exists.
-	if _, err := GetEvent(db, rootID); err != nil {
-		return nil, err
+	var exists int
+	if err := db.QueryRow("SELECT 1 FROM events WHERE id = ?", rootID).Scan(&exists); err != nil {
+		return nil, fmt.Errorf("event %d not found", rootID)
 	}
 
 	rows, err := db.Query(`
@@ -248,12 +234,16 @@ func GetSubtree(db *sql.DB, rootID int64) ([]Event, error) {
 	}
 	defer rows.Close()
 
+	return scanEvents(db, rows)
+}
+
+func scanEvents(db *sql.DB, rows *sql.Rows) ([]Event, error) {
 	var events []Event
 	for rows.Next() {
 		var e Event
 		var parentID sql.NullInt64
 		if err := rows.Scan(&e.ID, &parentID, &e.Text, &e.CreatedAt); err != nil {
-			return nil, fmt.Errorf("scan subtree event: %w", err)
+			return nil, fmt.Errorf("scan event: %w", err)
 		}
 		if parentID.Valid {
 			e.ParentID = &parentID.Int64
@@ -261,10 +251,9 @@ func GetSubtree(db *sql.DB, rootID int64) ([]Event, error) {
 		events = append(events, e)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate subtree: %w", err)
+		return nil, fmt.Errorf("iterate events: %w", err)
 	}
 
-	// Load metadata for each event.
 	for i := range events {
 		meta, err := loadMeta(db, events[i].ID)
 		if err != nil {

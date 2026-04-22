@@ -7,8 +7,6 @@ import (
 	"time"
 )
 
-func ptr(i int64) *int64 { return &i }
-
 func makeEvent(id int64, parentID *int64, text string, date string, author string) Event {
 	t, _ := time.Parse("2006-01-02", date)
 	return Event{
@@ -48,8 +46,8 @@ func TestRenderTree_FlatList(t *testing.T) {
 func TestRenderTree_NestedChildren(t *testing.T) {
 	events := []Event{
 		makeEvent(1, nil, "Parent event", "2026-04-10", "nicolas"),
-		makeEvent(2, ptr(1), "First child", "2026-04-10", "nicolas"),
-		makeEvent(3, ptr(1), "Second child", "2026-04-11", "nicolas"),
+		makeEvent(2, new(int64(1)), "First child", "2026-04-10", "nicolas"),
+		makeEvent(3, new(int64(1)), "Second child", "2026-04-11", "nicolas"),
 	}
 
 	want := "" +
@@ -66,8 +64,8 @@ func TestRenderTree_NestedChildren(t *testing.T) {
 func TestRenderTree_DeepNesting(t *testing.T) {
 	events := []Event{
 		makeEvent(1, nil, "Root", "2026-04-10", "nicolas"),
-		makeEvent(2, ptr(1), "Child", "2026-04-10", "nicolas"),
-		makeEvent(3, ptr(2), "Grandchild", "2026-04-11", "nicolas"),
+		makeEvent(2, new(int64(1)), "Child", "2026-04-10", "nicolas"),
+		makeEvent(3, new(int64(2)), "Grandchild", "2026-04-11", "nicolas"),
 	}
 
 	want := "" +
@@ -84,9 +82,9 @@ func TestRenderTree_DeepNesting(t *testing.T) {
 func TestRenderTree_MixedRootsAndChildren(t *testing.T) {
 	events := []Event{
 		makeEvent(1, nil, "Sprint 12 #work", "2026-04-10", "nicolas"),
-		makeEvent(2, ptr(1), "Planning meeting", "2026-04-10", "nicolas"),
-		makeEvent(4, ptr(2), "Decided on architecture", "2026-04-10", "nicolas"),
-		makeEvent(3, ptr(1), "Deploy v2.0 #ops", "2026-04-11", "nicolas"),
+		makeEvent(2, new(int64(1)), "Planning meeting", "2026-04-10", "nicolas"),
+		makeEvent(4, new(int64(2)), "Decided on architecture", "2026-04-10", "nicolas"),
+		makeEvent(3, new(int64(1)), "Deploy v2.0 #ops", "2026-04-11", "nicolas"),
 		makeEvent(5, nil, "Lunch with Sarah", "2026-04-12", "nicolas"),
 	}
 
@@ -106,7 +104,7 @@ func TestRenderTree_MixedRootsAndChildren(t *testing.T) {
 func TestRenderFlat(t *testing.T) {
 	events := []Event{
 		makeEvent(1, nil, "Parent event", "2026-04-10", "nicolas"),
-		makeEvent(2, ptr(1), "Child event", "2026-04-11", "nicolas"),
+		makeEvent(2, new(int64(1)), "Child event", "2026-04-11", "nicolas"),
 	}
 
 	want := "" +
