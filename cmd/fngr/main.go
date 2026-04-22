@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/alecthomas/kong"
 	"github.com/monolithiclab/fngr/internal"
@@ -45,7 +46,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	db, err := internal.OpenDB(dbPath, ctx.Command() == "add")
+	db, err := internal.OpenDB(dbPath, strings.HasPrefix(ctx.Command(), "add"))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)

@@ -225,6 +225,57 @@ func ListEvents(db *sql.DB, opts ListOpts) ([]Event, error) {
 	return events, nil
 }
 
+// GetSubtree retrieves an event and all its descendants using a recursive CTE.
+// The root event must exist or an error is returned. Results are ordered by
+// created_at ASC and each event includes its metadata.
+func GetSubtree(db *sql.DB, rootID int64) ([]Event, error) {
+	// Validate root exists.
+	if _, err := GetEvent(db, rootID); err != nil {
+		return nil, err
+	}
+
+	rows, err := db.Query(`
+		WITH RECURSIVE subtree AS (
+			SELECT id, parent_id, text, created_at FROM events WHERE id = ?
+			UNION ALL
+			SELECT e.id, e.parent_id, e.text, e.created_at
+			FROM events e JOIN subtree s ON e.parent_id = s.id
+		)
+		SELECT id, parent_id, text, created_at FROM subtree ORDER BY created_at ASC
+	`, rootID)
+	if err != nil {
+		return nil, fmt.Errorf("query subtree: %w", err)
+	}
+	defer rows.Close()
+
+	var events []Event
+	for rows.Next() {
+		var e Event
+		var parentID sql.NullInt64
+		if err := rows.Scan(&e.ID, &parentID, &e.Text, &e.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan subtree event: %w", err)
+		}
+		if parentID.Valid {
+			e.ParentID = &parentID.Int64
+		}
+		events = append(events, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate subtree: %w", err)
+	}
+
+	// Load metadata for each event.
+	for i := range events {
+		meta, err := loadMeta(db, events[i].ID)
+		if err != nil {
+			return nil, err
+		}
+		events[i].Meta = meta
+	}
+
+	return events, nil
+}
+
 // loadMeta queries all metadata for a given event ID, ordered by key then value.
 func loadMeta(db *sql.DB, eventID int64) ([]Meta, error) {
 	rows, err := db.Query(
