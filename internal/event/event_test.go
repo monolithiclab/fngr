@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -15,9 +16,15 @@ import (
 
 var ctx = context.Background()
 
+// testDB returns a fresh per-test database backed by a temporary file. We
+// avoid SQLite's bare `:memory:` URI because each connection in a *sql.DB
+// pool sees its own empty in-memory database — which breaks any function
+// that runs a follow-up query (e.g. loadMetaBatch) on a second connection
+// while the first still holds an open Rows iterator.
 func testDB(t *testing.T) *sql.DB {
 	t.Helper()
-	database, err := db.Open(":memory:", true)
+	path := filepath.Join(t.TempDir(), "fngr.db")
+	database, err := db.Open(path, true)
 	if err != nil {
 		t.Fatalf("open test db: %v", err)
 	}

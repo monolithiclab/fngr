@@ -289,14 +289,12 @@ type ListOpts struct {
 	Ascending bool       // oldest first when true; default is newest first
 }
 
-// ListSeq yields events matching opts one at a time, fetching from the
-// database and loading metadata in batches of metaBatchSize. The second
-// yielded value is the first error encountered; iteration stops after an
-// error is yielded.
+// ListSeq yields events matching opts one at a time, accumulating
+// metaBatchSize rows from the events query, loading their metadata in one
+// batched lookup, then yielding. Peak in-flight memory is one batch.
 //
-// Note: event rows are materialized before metadata loading begins, as
-// modernc.org/sqlite does not support concurrent queries on a single
-// connection.
+// The second yielded value is the first error encountered; iteration stops
+// after an error is yielded.
 func ListSeq(ctx context.Context, db *sql.DB, opts ListOpts) iter.Seq2[Event, error] {
 	return func(yield func(Event, error) bool) {
 		query, args := buildListQuery(opts)
@@ -307,9 +305,24 @@ func ListSeq(ctx context.Context, db *sql.DB, opts ListOpts) iter.Seq2[Event, er
 		}
 		defer rows.Close()
 
-		// Materialize event rows (ID, ParentID, Text, CreatedAt) before metadata
-		// queries to avoid concurrent query conflicts with modernc.org/sqlite.
-		var events []Event
+		batch := make([]Event, 0, metaBatchSize)
+		flush := func() bool {
+			if len(batch) == 0 {
+				return true
+			}
+			if err := loadMetaBatch(ctx, db, batch); err != nil {
+				yield(Event{}, err)
+				return false
+			}
+			for _, ev := range batch {
+				if !yield(ev, nil) {
+					return false
+				}
+			}
+			batch = batch[:0]
+			return true
+		}
+
 		for rows.Next() {
 			var e Event
 			var parentID sql.NullInt64
@@ -320,28 +333,18 @@ func ListSeq(ctx context.Context, db *sql.DB, opts ListOpts) iter.Seq2[Event, er
 			if parentID.Valid {
 				e.ParentID = &parentID.Int64
 			}
-			events = append(events, e)
+			batch = append(batch, e)
+			if len(batch) >= metaBatchSize {
+				if !flush() {
+					return
+				}
+			}
 		}
 		if err := rows.Err(); err != nil {
 			yield(Event{}, fmt.Errorf("iterate events: %w", err))
 			return
 		}
-		_ = rows.Close()
-
-		// Load and yield in batches
-		for start := 0; start < len(events); start += metaBatchSize {
-			end := min(start+metaBatchSize, len(events))
-			batch := events[start:end]
-			if err := loadMetaBatch(ctx, db, batch); err != nil {
-				yield(Event{}, err)
-				return
-			}
-			for _, ev := range batch {
-				if !yield(ev, nil) {
-					return
-				}
-			}
-		}
+		flush()
 	}
 }
 
