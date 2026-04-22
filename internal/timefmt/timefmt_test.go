@@ -201,3 +201,41 @@ func TestParsePartial(t *testing.T) {
 		})
 	}
 }
+
+func TestSpliceTime(t *testing.T) {
+	t.Parallel()
+	loc := time.FixedZone("PT", -7*3600)
+	orig := time.Date(2026, 4, 22, 9, 0, 0, 0, loc)
+	newTime := time.Date(2030, 12, 1, 21, 32, 7, 123, time.UTC)
+
+	got := SpliceTime(orig, newTime)
+
+	if got.Year() != 2026 || got.Month() != 4 || got.Day() != 22 {
+		t.Errorf("date not preserved: %v", got)
+	}
+	if got.Hour() != 21 || got.Minute() != 32 || got.Second() != 7 || got.Nanosecond() != 123 {
+		t.Errorf("time not spliced: %v", got)
+	}
+	if got.Location() != loc {
+		t.Errorf("location not preserved: %v", got.Location())
+	}
+}
+
+func TestSpliceDate(t *testing.T) {
+	t.Parallel()
+	loc := time.FixedZone("PT", -7*3600)
+	orig := time.Date(2026, 4, 22, 21, 32, 7, 123, loc)
+	newDate := time.Date(2030, 12, 1, 9, 0, 0, 0, time.UTC)
+
+	got := SpliceDate(orig, newDate)
+
+	if got.Year() != 2030 || got.Month() != 12 || got.Day() != 1 {
+		t.Errorf("date not spliced: %v", got)
+	}
+	if got.Hour() != 21 || got.Minute() != 32 || got.Second() != 7 || got.Nanosecond() != 123 {
+		t.Errorf("time not preserved: %v", got)
+	}
+	if got.Location() != loc {
+		t.Errorf("location not preserved: %v", got.Location())
+	}
+}

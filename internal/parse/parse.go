@@ -11,12 +11,17 @@ type Meta struct {
 	Value string
 }
 
+// metaNamePattern is the character class accepted for @person / #tag names
+// and for keys in `key=value` arguments. Word chars plus '/' and '-',
+// starting with a word char.
+const metaNamePattern = `[\w][\w/\-]*`
+
 var tagPatterns = []struct {
 	re  *regexp.Regexp
 	key string
 }{
-	{regexp.MustCompile(`@([\w][\w/\-]*)`), "people"},
-	{regexp.MustCompile(`#([\w][\w/\-]*)`), "tag"},
+	{regexp.MustCompile(`@(` + metaNamePattern + `)`), "people"},
+	{regexp.MustCompile(`#(` + metaNamePattern + `)`), "tag"},
 }
 
 func BodyTags(text string) []Meta {
@@ -46,10 +51,9 @@ func KeyValue(s string) (key, value string, err error) {
 	return key, value, nil
 }
 
-// metaArgRe matches the body of an @person or #tag arg. Same character
-// class as the body-tag patterns: word chars plus '/' and '-', starting
-// with a word char.
-var metaArgRe = regexp.MustCompile(`^[\w][\w/\-]*$`)
+// MetaNameRe matches a single @person / #tag name or a `key=value` key
+// in isolation (no surrounding chars). Anchored form of metaNamePattern.
+var MetaNameRe = regexp.MustCompile(`^` + metaNamePattern + `$`)
 
 // MetaArg parses a single CLI argument into a Meta entry. Supported forms:
 //
@@ -67,13 +71,13 @@ func MetaArg(s string) (Meta, error) {
 	switch s[0] {
 	case '@':
 		name := s[1:]
-		if !metaArgRe.MatchString(name) {
+		if !MetaNameRe.MatchString(name) {
 			return Meta{}, fmt.Errorf("invalid @person arg %q: name must match [\\w][\\w/\\-]*", s)
 		}
 		return Meta{Key: "people", Value: name}, nil
 	case '#':
 		name := s[1:]
-		if !metaArgRe.MatchString(name) {
+		if !MetaNameRe.MatchString(name) {
 			return Meta{}, fmt.Errorf("invalid #tag arg %q: name must match [\\w][\\w/\\-]*", s)
 		}
 		return Meta{Key: "tag", Value: name}, nil

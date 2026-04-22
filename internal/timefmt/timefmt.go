@@ -123,3 +123,24 @@ func ParseDate(s string) (time.Time, error) {
 	}
 	return t, nil
 }
+
+// SpliceTime returns orig with its wall-clock time replaced by the
+// hour/minute/second/nanosecond of newTime. Date and timezone come from
+// orig.
+func SpliceTime(orig, newTime time.Time) time.Time {
+	return time.Date(
+		orig.Year(), orig.Month(), orig.Day(),
+		newTime.Hour(), newTime.Minute(), newTime.Second(), newTime.Nanosecond(),
+		orig.Location(),
+	)
+}
+
+// SpliceDate returns orig with its date replaced by the year/month/day of
+// newDate. Wall-clock time and timezone come from orig.
+func SpliceDate(orig, newDate time.Time) time.Time {
+	return time.Date(
+		newDate.Year(), newDate.Month(), newDate.Day(),
+		orig.Hour(), orig.Minute(), orig.Second(), orig.Nanosecond(),
+		orig.Location(),
+	)
+}

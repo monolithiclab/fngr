@@ -2,7 +2,6 @@
 package render
 
 import (
-	"cmp"
 	"fmt"
 	"io"
 	"iter"
@@ -62,11 +61,11 @@ func renderMarkdownEvent(w io.Writer, lastDate *string, ev event.Event) error {
 	}
 
 	if len(ev.Meta) > 0 {
-		pairs := make([]string, 0, len(ev.Meta))
-		for _, m := range ev.Meta {
-			pairs = append(pairs, fmt.Sprintf("%s=%s", m.Key, m.Value))
+		pairs := make([]string, len(ev.Meta))
+		for i, m := range ev.Meta {
+			pairs[i] = m.Key + "=" + m.Value
 		}
-		slices.SortFunc(pairs, cmp.Compare)
+		slices.Sort(pairs)
 		if _, err := fmt.Fprintf(w, "  %s\n", strings.Join(pairs, " ")); err != nil {
 			return err
 		}

@@ -272,24 +272,17 @@ func TestSingleEvent_Dispatch(t *testing.T) {
 	}
 }
 
-func TestMetaValue(t *testing.T) {
+func TestEventAuthor(t *testing.T) {
 	t.Parallel()
-	meta := []parse.Meta{
+	ev := event.Event{Meta: []parse.Meta{
 		{Key: "author", Value: "nicolas"},
 		{Key: "tag", Value: "work"},
+	}}
+	if got := eventAuthor(ev); got != "nicolas" {
+		t.Errorf("eventAuthor = %q, want %q", got, "nicolas")
 	}
-
-	if got := metaValue(meta, "author"); got != "nicolas" {
-		t.Errorf("metaValue(author) = %q, want %q", got, "nicolas")
-	}
-	if got := metaValue(meta, "tag"); got != "work" {
-		t.Errorf("metaValue(tag) = %q, want %q", got, "work")
-	}
-	if got := metaValue(meta, "missing"); got != "" {
-		t.Errorf("metaValue(missing) = %q, want %q", got, "")
-	}
-	if got := metaValue(nil, "author"); got != "" {
-		t.Errorf("metaValue(nil, author) = %q, want %q", got, "")
+	if got := eventAuthor(event.Event{}); got != "" {
+		t.Errorf("eventAuthor(empty) = %q, want %q", got, "")
 	}
 }
 

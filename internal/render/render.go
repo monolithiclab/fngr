@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/monolithiclab/fngr/internal/event"
-	"github.com/monolithiclab/fngr/internal/parse"
 	"github.com/monolithiclab/fngr/internal/timefmt"
 )
 
@@ -46,17 +45,13 @@ func formatLocalDateTime(t time.Time) string {
 	return t.Local().Format(timefmt.DateTimeFormat)
 }
 
-func metaValue(meta []parse.Meta, key string) string {
-	for _, m := range meta {
-		if m.Key == key {
+func eventAuthor(ev event.Event) string {
+	for _, m := range ev.Meta {
+		if m.Key == event.MetaKeyAuthor {
 			return m.Value
 		}
 	}
 	return ""
-}
-
-func eventAuthor(ev event.Event) string {
-	return metaValue(ev.Meta, event.MetaKeyAuthor)
 }
 
 func formatEventLine(id int64, date, author, text string) string {
@@ -183,9 +178,9 @@ func toJSONEvent(ev event.Event) jsonEvent {
 	if len(ev.Meta) == 0 {
 		return out
 	}
-	pairs := make([][2]string, 0, len(ev.Meta))
-	for _, m := range ev.Meta {
-		pairs = append(pairs, [2]string{m.Key, m.Value})
+	pairs := make([][2]string, len(ev.Meta))
+	for i, m := range ev.Meta {
+		pairs[i] = [2]string{m.Key, m.Value}
 	}
 	slices.SortFunc(pairs, func(a, b [2]string) int {
 		if c := cmp.Compare(a[0], b[0]); c != 0 {

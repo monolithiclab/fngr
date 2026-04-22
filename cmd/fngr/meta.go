@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"strings"
 
 	"github.com/monolithiclab/fngr/internal/event"
@@ -146,10 +145,6 @@ func (c *MetaDeleteCmd) Run(s eventStore, io ioStreams) error {
 	return nil
 }
 
-// metaNameRe matches the body-tag character class — same shape parse.MetaArg
-// uses internally. Local copy avoids exporting parse.metaArgRe.
-var metaNameRe = regexp.MustCompile(`^[\w][\w/\-]*$`)
-
 // parseMetaFilter accepts the same shorthand as parse.MetaArg
 // (@person, #tag, key=value) plus a bare key (e.g. "tag") that filters
 // by key only. Returned Meta carries an empty Value for the bare-key
@@ -159,7 +154,7 @@ func parseMetaFilter(s string) (parse.Meta, error) {
 		return parse.Meta{}, nil
 	}
 	if s[0] != '@' && s[0] != '#' && !strings.Contains(s, "=") {
-		if !metaNameRe.MatchString(s) {
+		if !parse.MetaNameRe.MatchString(s) {
 			return parse.Meta{}, fmt.Errorf("invalid filter %q: bare key must match [\\w][\\w/\\-]*", s)
 		}
 		return parse.Meta{Key: s}, nil

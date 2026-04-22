@@ -93,12 +93,7 @@ func (c *EventTimeCmd) Run(s eventStore, io ioStreams) error {
 		if err != nil {
 			return err
 		}
-		orig := ev.CreatedAt.Local()
-		when = time.Date(
-			orig.Year(), orig.Month(), orig.Day(),
-			parsed.Hour(), parsed.Minute(), parsed.Second(), parsed.Nanosecond(),
-			orig.Location(),
-		)
+		when = timefmt.SpliceTime(ev.CreatedAt.Local(), parsed)
 	}
 
 	if err := s.Update(ctx, c.ID, nil, &when); err != nil {
@@ -134,12 +129,7 @@ func (c *EventDateCmd) Run(s eventStore, io ioStreams) error {
 		if err != nil {
 			return err
 		}
-		orig := ev.CreatedAt.Local()
-		when = time.Date(
-			parsed.Year(), parsed.Month(), parsed.Day(),
-			orig.Hour(), orig.Minute(), orig.Second(), orig.Nanosecond(),
-			orig.Location(),
-		)
+		when = timefmt.SpliceDate(ev.CreatedAt.Local(), parsed)
 	}
 
 	if err := s.Update(ctx, c.ID, nil, &when); err != nil {
