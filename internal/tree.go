@@ -119,7 +119,10 @@ func RenderJSON(events []Event) string {
 			Meta:      meta,
 		}
 	}
-	data, _ := json.MarshalIndent(out, "", "  ")
+	data, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		return fmt.Sprintf("error: %v\n", err)
+	}
 	return string(data) + "\n"
 }
 

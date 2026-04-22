@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/user"
 	"strings"
 
 	"github.com/alecthomas/kong"
@@ -25,7 +26,12 @@ func currentUser() string {
 	if u := os.Getenv("USER"); u != "" {
 		return u
 	}
-	return "unknown"
+	if u, err := user.Current(); err == nil {
+		return u.Username
+	}
+	fmt.Fprintln(os.Stderr, "error: cannot determine current user; use --author or set FNGR_AUTHOR")
+	os.Exit(1)
+	return ""
 }
 
 func main() {
