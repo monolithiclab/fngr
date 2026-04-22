@@ -1,0 +1,6 @@
+.claude/
+.DS_Store
+*.log
+build/
+cover.out
+GEMINI.md
