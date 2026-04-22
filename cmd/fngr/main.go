@@ -15,7 +15,7 @@ var version = "dev"
 type CLI struct {
 	DB string `help:"Path to database file." env:"FNGR_DB" type:"path"`
 
-	Add    AddCmd    `cmd:"" default:"withargs" help:"Add an event (default command)."`
+	Add    AddCmd    `cmd:"" help:"Add an event."`
 	List   ListCmd   `cmd:"" help:"List events."`
 	Show   ShowCmd   `cmd:"" help:"Show a single event."`
 	Delete DeleteCmd `cmd:"" help:"Delete an event."`
