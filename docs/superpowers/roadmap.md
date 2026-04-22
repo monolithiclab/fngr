@@ -19,17 +19,15 @@ cycle. Specs land under `docs/superpowers/specs/`, plans under
   single body; `cmd | fngr add` reads stdin; bare `fngr add` in a TTY (or
   with `-e`) launches `$VISUAL`/`$EDITOR`; empty editor save cancels
   cleanly. Conflicts (args+stdin, --edit+stdin) error loudly.
-
-## Add command ergonomics
-
-- **`--format=json` import** — accept a single event or an array of events on
-  stdin / in a file for bulk import.
+- **`add --format=json` import + meta JSON shape** — `fngr add --format=json`
+  accepts a single event object or an array on stdin or args; per-record
+  defaults flow JSON value > CLI flag > built-in; batches are atomic. JSON
+  meta shape across both input and `fngr list --format=json` output is now
+  `[[key, value], ...]` sorted by `(key, value)` — replaces the prior
+  `{key: [values]}` map.
 
 ## Output format polish
 
-- **JSON tag shape** — switch `meta` from `{key: [values]}` to
-  `[[key, value], ...]`. Shorter on the wire and naturally extends to
-  per-tuple multi-value semantics down the road.
 - **Markdown format** (`--format=md`) — one `##` header per date followed by
   a bullet list of `<time> — <content>` entries.
 

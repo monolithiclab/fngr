@@ -30,7 +30,9 @@ make ci             # codefix + format + lint + test
   every list-ish command uses `-S`). `add` accepts variadic positional `Args` (joined with
   spaces); body source resolved by `cmd/fngr/body.go::resolveBody` via the
   (args, `-e`, stdin TTY-ness) dispatch table; `-e/--edit` forces the editor; bare `fngr add`
-  in a TTY auto-launches `$VISUAL`/`$EDITOR`. `event` hosts a sub-command tree: `fngr event N`
+  in a TTY auto-launches `$VISUAL`/`$EDITOR`. With `--format=json` the body is parsed as a
+  JSON event record (or array) by `cmd/fngr/add_json.go`; per-record defaults flow JSON value
+  > CLI flag > built-in. `event` hosts a sub-command tree: `fngr event N`
   reads (shorthand for `event show N`); `text`, `time`, `date`, `attach`, `detach`, `tag`,
   `untag` mutate. Each verb owns its own `ID` arg, syntax `fngr event <verb> <id> [<args>]`.
   `meta` is a sub-command tree too: `fngr meta` lists with optional `-S` filter (bare key,
@@ -44,6 +46,13 @@ make ci             # codefix + format + lint + test
   from one of {joined args, stdin, editor} per the (args, `-e`, `IsTTY`) dispatch table.
   `launchEditor` is a `var` for test stubbing; `realLaunchEditor` execs `$VISUAL`/`$EDITOR` on a
   temp file; `errCancel` signals empty-save (handled as exit-0 by `AddCmd.Run`).
+- `cmd/fngr/add_json.go` — `--format=json` import path. `jsonAddInput` is the wire shape
+  `{text, parent_id?, created_at?, meta?: [[k,v],...]}`; `parseJSONAddInput` tries
+  array-then-single unmarshal; `jsonInputToAddInput` applies CLI defaults, runs body-tag
+  extraction via `mergeMetaForJSON` (a small private helper that mirrors `event.CollectMeta`
+  but suppresses default-author injection when explicit meta has an `author` key OR when
+  defaultAuthor is empty), and validates that every record has an author from some source.
+  `runJSON` calls `s.AddMany` for atomic batch insert.
 - `cmd/fngr/pager.go` — `withPager(io, disabled) (ioStreams, closer)` wraps `Out` in a pipe to
   `$PAGER` (fallback `less -FRX`) when stdout is a TTY. Used by `list`.
 - `internal/db/db.go` — DB path resolution (explicit > `.fngr.db` in cwd > `~/.fngr.db`), connection
@@ -65,7 +74,9 @@ make ci             # codefix + format + lint + test
 - `internal/event/meta.go` — Domain meta key constants (`MetaKeyAuthor`, etc.), `CollectMeta`
   merges all meta sources (author, body tags, flags) with dedup.
 - `internal/event/event.go` — Data access functions: `Add` (transactional event + meta + FTS),
-  `Get`, `Update` (text and/or timestamp; on text change body-derived tags are *synced* —
+  `AddMany` (batched same shape, atomic), `AddInput` value type. Both `Add` and `AddMany`
+  delegate to a private `addInTx` that runs the per-record INSERT loop using a caller-owned
+  `*sql.Tx`. `Get`, `Update` (text and/or timestamp; on text change body-derived tags are *synced* —
   `parse.BodyTags(oldText)` deleted then `parse.BodyTags(newText)` inserted via
   `ON CONFLICT DO NOTHING`; FTS rebuilt), `Reparent` (set/clear `parent_id`; rejects self and
   ancestry cycles via `ErrCycle`), `AddTags` / `RemoveTags` (event-scoped meta CRUD with FTS
@@ -86,6 +97,8 @@ make ci             # codefix + format + lint + test
   underlying writers. List/flat use a relative-aware compact stamp via `timefmt.FormatRelative`;
   event detail keeps full ISO. Streaming variants consume `iter.Seq2[Event, error]` so memory
   stays flat regardless of result size; tree still buffers because it needs the topology.
+  Meta in JSON output is `[[key, value], ...]`, sorted by `(key, value)`. Each `event_meta`
+  row maps to one tuple — multiple values for the same key produce multiple tuples.
 
 ## Conventions
 

@@ -46,6 +46,15 @@ fngr add "yesterday's standup" --time 2026-04-16
 fngr add "earlier this morning"  --time 09:30
 fngr add "after lunch sync"      --time 2:15PM
 
+# Bulk import a single event from JSON
+echo '{"text":"hi","meta":[["tag","ops"]]}' | fngr add --format=json
+
+# Bulk import an array of events (atomic; any error rolls back the batch)
+fngr add --format=json < events.json
+
+# Round-trip via stdout pipe (e.g. copy events between databases)
+fngr --db src.db --format=json | fngr --db dst.db add --format=json
+
 # Default command — list everything (newest first, tree view, paginated on TTY)
 fngr
 
