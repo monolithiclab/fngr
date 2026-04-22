@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/monolithiclab/fngr/internal/event"
+	"github.com/monolithiclab/fngr/internal/timefmt"
 )
 
 type AddCmd struct {
@@ -13,7 +14,7 @@ type AddCmd struct {
 	Author string   `help:"Event author." env:"FNGR_AUTHOR" default:"${USER}"`
 	Parent *int64   `help:"Parent event ID to create a child event."`
 	Meta   []string `help:"Metadata key=value pairs (e.g. --meta env=prod)." short:"m"`
-	Time   string   `help:"Override event timestamp (ISO 8601, e.g. 2026-04-15T14:30:00)." short:"t"`
+	Time   string   `help:"Override event timestamp (YYYY-MM-DD, ISO 8601, RFC3339, or HH:MM for today)." short:"t"`
 }
 
 func (c *AddCmd) Run(s eventStore, io ioStreams) error {
@@ -33,9 +34,9 @@ func (c *AddCmd) Run(s eventStore, io ioStreams) error {
 
 	var createdAt *time.Time
 	if c.Time != "" {
-		t, err := parseTime(c.Time)
+		t, err := timefmt.Parse(c.Time)
 		if err != nil {
-			return fmt.Errorf("invalid --time value %q: %w", c.Time, err)
+			return fmt.Errorf("invalid --time value: %w", err)
 		}
 		createdAt = &t
 	}
@@ -47,22 +48,4 @@ func (c *AddCmd) Run(s eventStore, io ioStreams) error {
 
 	fmt.Fprintf(io.Out, "Added event %d\n", id)
 	return nil
-}
-
-var timeFormats = []string{
-	time.RFC3339,
-	"2006-01-02T15:04:05",
-	"2006-01-02 15:04:05",
-	"2006-01-02T15:04",
-	"2006-01-02 15:04",
-	"2006-01-02",
-}
-
-func parseTime(s string) (time.Time, error) {
-	for _, layout := range timeFormats {
-		if t, err := time.ParseInLocation(layout, s, time.Local); err == nil {
-			return t, nil
-		}
-	}
-	return time.Time{}, fmt.Errorf("supported formats: YYYY-MM-DD, YYYY-MM-DDTHH:MM, YYYY-MM-DDTHH:MM:SS, RFC3339")
 }

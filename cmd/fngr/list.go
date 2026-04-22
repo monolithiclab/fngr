@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/monolithiclab/fngr/internal/event"
 	"github.com/monolithiclab/fngr/internal/render"
+	"github.com/monolithiclab/fngr/internal/timefmt"
 )
 
 type ListCmd struct {
@@ -17,7 +19,24 @@ type ListCmd struct {
 func (c *ListCmd) Run(s eventStore, io ioStreams) error {
 	ctx := context.Background()
 
-	events, err := s.List(ctx, event.ListOpts{Filter: c.Filter, From: c.From, To: c.To})
+	opts := event.ListOpts{Filter: c.Filter}
+	if c.From != "" {
+		from, err := timefmt.ParseDate(c.From)
+		if err != nil {
+			return fmt.Errorf("--from: %w", err)
+		}
+		opts.From = &from
+	}
+	if c.To != "" {
+		to, err := timefmt.ParseDate(c.To)
+		if err != nil {
+			return fmt.Errorf("--to: %w", err)
+		}
+		end := to.AddDate(0, 0, 1)
+		opts.To = &end
+	}
+
+	events, err := s.List(ctx, opts)
 	if err != nil {
 		return err
 	}

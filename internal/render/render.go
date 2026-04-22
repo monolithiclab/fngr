@@ -10,14 +10,15 @@ import (
 
 	"github.com/monolithiclab/fngr/internal/event"
 	"github.com/monolithiclab/fngr/internal/parse"
+	"github.com/monolithiclab/fngr/internal/timefmt"
 )
 
 func formatLocalDate(t time.Time) string {
-	return t.Local().Format(parse.DateFormat)
+	return t.Local().Format(timefmt.DateFormat)
 }
 
 func formatLocalDateTime(t time.Time) string {
-	return t.Local().Format(parse.DateTimeFormat)
+	return t.Local().Format(timefmt.DateTimeFormat)
 }
 
 func metaValue(meta []parse.Meta, key string) string {

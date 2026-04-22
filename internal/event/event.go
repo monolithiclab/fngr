@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/monolithiclab/fngr/internal/parse"
+	"github.com/monolithiclab/fngr/internal/timefmt"
 )
 
 var ErrNotFound = errors.New("not found")
@@ -49,7 +50,7 @@ func Add(ctx context.Context, db *sql.DB, text string, parentID *int64, meta []p
 	if createdAt != nil {
 		res, err = tx.ExecContext(ctx,
 			"INSERT INTO events (parent_id, text, created_at) VALUES (?, ?, ?)",
-			parentID, text, createdAt.UTC().Format(parse.DateTimeFormat),
+			parentID, text, createdAt.UTC().Format(timefmt.DateTimeFormat),
 		)
 	} else {
 		res, err = tx.ExecContext(ctx,
@@ -209,8 +210,8 @@ func ListMeta(ctx context.Context, db *sql.DB) ([]MetaCount, error) {
 
 type ListOpts struct {
 	Filter string
-	From   string
-	To     string
+	From   *time.Time // inclusive lower bound
+	To     *time.Time // exclusive upper bound (compute end-of-day in caller)
 }
 
 func List(ctx context.Context, db *sql.DB, opts ListOpts) ([]Event, error) {
@@ -239,13 +240,13 @@ func List(ctx context.Context, db *sql.DB, opts ListOpts) ([]Event, error) {
 			WHERE 1=1`
 	}
 
-	if opts.From != "" {
+	if opts.From != nil {
 		query += " AND e.created_at >= ?"
-		args = append(args, opts.From)
+		args = append(args, opts.From.UTC().Format(timefmt.DateTimeFormat))
 	}
-	if opts.To != "" {
-		query += " AND e.created_at <= datetime(?, '+1 day')"
-		args = append(args, opts.To)
+	if opts.To != nil {
+		query += " AND e.created_at < ?"
+		args = append(args, opts.To.UTC().Format(timefmt.DateTimeFormat))
 	}
 
 	query += " ORDER BY e.created_at ASC"

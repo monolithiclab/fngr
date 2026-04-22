@@ -55,6 +55,18 @@ func TestListCmd_JSON(t *testing.T) {
 	}
 }
 
+func TestListCmd_InvalidFromDate(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, _ := newTestIO("")
+
+	cmd := &ListCmd{From: "not-a-date"}
+	err := cmd.Run(s, io)
+	if err == nil || !strings.Contains(err.Error(), "--from") {
+		t.Errorf("error = %v, want --from parse error", err)
+	}
+}
+
 func TestListCmd_FilterAndDateRange(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)

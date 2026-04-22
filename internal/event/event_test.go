@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/monolithiclab/fngr/internal/db"
 	"github.com/monolithiclab/fngr/internal/parse"
@@ -285,37 +286,33 @@ func TestList_WithDateRange(t *testing.T) {
 		t.Fatalf("insert new FTS: %v", err)
 	}
 
-	events, err := List(ctx, database, ListOpts{From: "2026-03-01"})
+	mar1 := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	feb2 := time.Date(2026, 2, 2, 0, 0, 0, 0, time.UTC)
+	feb1 := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+	apr2 := time.Date(2026, 4, 2, 0, 0, 0, 0, time.UTC)
+
+	events, err := List(ctx, database, ListOpts{From: &mar1})
 	if err != nil {
 		t.Fatalf("List with From: %v", err)
 	}
-	if len(events) != 1 {
-		t.Fatalf("len(events) = %d, want 1", len(events))
-	}
-	if events[0].Text != "new event" {
-		t.Errorf("events[0].Text = %q, want %q", events[0].Text, "new event")
+	if len(events) != 1 || events[0].Text != "new event" {
+		t.Errorf("From only got %d events; want [new event]", len(events))
 	}
 
-	events, err = List(ctx, database, ListOpts{To: "2026-02-01"})
+	events, err = List(ctx, database, ListOpts{To: &feb2})
 	if err != nil {
 		t.Fatalf("List with To: %v", err)
 	}
-	if len(events) != 1 {
-		t.Fatalf("len(events) = %d, want 1", len(events))
-	}
-	if events[0].Text != "old event" {
-		t.Errorf("events[0].Text = %q, want %q", events[0].Text, "old event")
+	if len(events) != 1 || events[0].Text != "old event" {
+		t.Errorf("To only got %d events; want [old event]", len(events))
 	}
 
-	events, err = List(ctx, database, ListOpts{From: "2026-02-01", To: "2026-04-01"})
+	events, err = List(ctx, database, ListOpts{From: &feb1, To: &apr2})
 	if err != nil {
 		t.Fatalf("List with From and To: %v", err)
 	}
-	if len(events) != 1 {
-		t.Fatalf("len(events) = %d, want 1", len(events))
-	}
-	if events[0].Text != "new event" {
-		t.Errorf("events[0].Text = %q, want %q", events[0].Text, "new event")
+	if len(events) != 1 || events[0].Text != "new event" {
+		t.Errorf("From+To got %d events; want [new event]", len(events))
 	}
 }
 
