@@ -504,6 +504,31 @@ func TestFTSIsolation_BodyWordsNotMatchedByMetaFilter(t *testing.T) {
 	}
 }
 
+func TestList_LoadMetaAcrossChunkBoundary(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	const n = metaBatchSize + 50
+	for i := range n {
+		if _, err := Add(ctx, database, "evt", nil, []parse.Meta{{Key: MetaKeyAuthor, Value: "alice"}}, nil); err != nil {
+			t.Fatalf("Add %d: %v", i, err)
+		}
+	}
+
+	events, err := List(ctx, database, ListOpts{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(events) != n {
+		t.Fatalf("len(events) = %d, want %d", len(events), n)
+	}
+	for i, ev := range events {
+		if len(ev.Meta) != 1 || ev.Meta[0].Key != MetaKeyAuthor || ev.Meta[0].Value != "alice" {
+			t.Fatalf("events[%d].Meta = %v, want [{author alice}]", i, ev.Meta)
+		}
+	}
+}
+
 func TestList_ComplexFilters(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)

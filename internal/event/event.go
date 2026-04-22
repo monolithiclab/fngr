@@ -298,12 +298,30 @@ func scanEvents(ctx context.Context, db *sql.DB, rows *sql.Rows) ([]Event, error
 	return events, nil
 }
 
+// metaBatchSize keeps the IN clause well under SQLite's default
+// SQLITE_MAX_VARIABLE_NUMBER (historically 999) so that loading metadata for
+// large result sets cannot fail at runtime.
+const metaBatchSize = 500
+
 func loadMetaBatch(ctx context.Context, db *sql.DB, events []Event) error {
-	ids := make([]any, len(events))
 	idIdx := make(map[int64]int, len(events))
 	for i, e := range events {
-		ids[i] = e.ID
 		idIdx[e.ID] = i
+	}
+
+	for start := 0; start < len(events); start += metaBatchSize {
+		end := min(start+metaBatchSize, len(events))
+		if err := loadMetaChunk(ctx, db, events, idIdx, start, end); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func loadMetaChunk(ctx context.Context, db *sql.DB, events []Event, idIdx map[int64]int, start, end int) error {
+	ids := make([]any, end-start)
+	for i, e := range events[start:end] {
+		ids[i] = e.ID
 	}
 
 	placeholders := strings.Repeat("?,", len(ids))
