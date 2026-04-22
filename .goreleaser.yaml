@@ -1,0 +1,119 @@
+version: 2
+
+project_name: fngr
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: fngr
+    main: ./cmd/fngr
+    binary: fngr
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+
+archives:
+  - id: fngr
+    ids: [fngr]
+    name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+    formats: [tar.gz]
+    files: [LICENSE, README.md]
+
+checksum:
+  name_template: 'SHA256SUMS'
+
+signs:
+  - id: cosign-checksums
+    cmd: cosign
+    signature: '${artifact}.sig'
+    certificate: '${artifact}.pem'
+    args:
+      - sign-blob
+      - '--output-certificate=${certificate}'
+      - '--output-signature=${signature}'
+      - '${artifact}'
+      - '--yes'
+    artifacts: checksum
+
+dockers:
+  - id: fngr-amd64
+    image_templates: ['ghcr.io/monolithiclab/fngr:{{ .Version }}-amd64']
+    use: buildx
+    dockerfile: Dockerfile
+    build_flag_templates:
+      - '--platform=linux/amd64'
+      - '--label=org.opencontainers.image.source=https://github.com/monolithiclab/fngr'
+      - '--label=org.opencontainers.image.version={{ .Version }}'
+      - '--label=org.opencontainers.image.revision={{ .FullCommit }}'
+  - id: fngr-arm64
+    image_templates: ['ghcr.io/monolithiclab/fngr:{{ .Version }}-arm64']
+    use: buildx
+    dockerfile: Dockerfile
+    goarch: arm64
+    build_flag_templates:
+      - '--platform=linux/arm64'
+      - '--label=org.opencontainers.image.source=https://github.com/monolithiclab/fngr'
+      - '--label=org.opencontainers.image.version={{ .Version }}'
+      - '--label=org.opencontainers.image.revision={{ .FullCommit }}'
+
+docker_manifests:
+  - name_template: 'ghcr.io/monolithiclab/fngr:{{ .Version }}'
+    image_templates:
+      - 'ghcr.io/monolithiclab/fngr:{{ .Version }}-amd64'
+      - 'ghcr.io/monolithiclab/fngr:{{ .Version }}-arm64'
+  - name_template: 'ghcr.io/monolithiclab/fngr:latest'
+    skip_push: auto
+    image_templates:
+      - 'ghcr.io/monolithiclab/fngr:{{ .Version }}-amd64'
+      - 'ghcr.io/monolithiclab/fngr:{{ .Version }}-arm64'
+
+docker_signs:
+  - cmd: cosign
+    args: ['sign', '--yes', '${artifact}@${digest}']
+    artifacts: manifests
+
+brews:
+  - name: fngr
+    repository:
+      owner: monolithiclab
+      name: homebrew-tap
+      token: '{{ .Env.HOMEBREW_TAP_TOKEN }}'
+    homepage: 'https://github.com/monolithiclab/fngr'
+    description: 'Command-line journal for logging events with FTS, tags, and trees.'
+    license: 'MIT'
+    skip_upload: auto
+    install: |
+      bin.install "fngr"
+    test: |
+      assert_match "fngr", shell_output("#{bin}/fngr --version")
+
+changelog:
+  use: git
+  sort: asc
+  filters:
+    exclude:
+      - '^Merge'
+      - '^chore'
+  groups:
+    - title: 'Features'
+      regexp: '^.*?feat(\(.+\))?:'
+      order: 0
+    - title: 'Bug fixes'
+      regexp: '^.*?fix(\(.+\))?:'
+      order: 1
+    - title: 'Documentation'
+      regexp: '^.*?docs(\(.+\))?:'
+      order: 2
+    - title: 'Other'
+      order: 999
+
+release:
+  github:
+    owner: monolithiclab
+    name: fngr
+  prerelease: auto
