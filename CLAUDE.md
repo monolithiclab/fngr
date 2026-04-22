@@ -45,14 +45,17 @@ make ci             # codefix + format + lint + test
 - `cmd/fngr/body.go` — Body-source dispatch for `fngr add`. `resolveBody` returns the body string
   from one of {joined args, stdin, editor} per the (args, `-e`, `IsTTY`) dispatch table.
   `launchEditor` is a `var` for test stubbing; `realLaunchEditor` execs `$VISUAL`/`$EDITOR` on a
-  temp file; `errCancel` signals empty-save (handled as exit-0 by `AddCmd.Run`).
+  temp file; `errCancel` signals empty-save (handled as exit-0 by `AddCmd.Run`). `readStdin`
+  caps reads at `maxStdinBytes` (16 MiB) via `io.LimitReader` so a runaway pipe can't OOM.
 - `cmd/fngr/add_json.go` — `--format=json` import path. `jsonAddInput` is the wire shape
-  `{text, parent_id?, created_at?, meta?: [[k,v],...]}`; `parseJSONAddInput` tries
-  array-then-single unmarshal; `jsonInputToAddInput` applies CLI defaults, runs body-tag
-  extraction via `mergeMetaForJSON` (a small private helper that mirrors `event.CollectMeta`
-  but suppresses default-author injection when explicit meta has an `author` key OR when
-  defaultAuthor is empty), and validates that every record has an author from some source.
-  `runJSON` calls `s.AddMany` for atomic batch insert.
+  `{text, parent_id?, created_at?, meta?: [[k,v],...]}`; `parseJSONAddInput` dispatches on the
+  first non-whitespace char (`[` → array, else single object) and uses `json.Decoder` with
+  `DisallowUnknownFields` so typos surface instead of being silently dropped. Batches are
+  capped at `maxJSONBatchSize` (10 000 records). `jsonInputToAddInput` applies CLI defaults,
+  runs body-tag extraction via `mergeMetaForJSON` (a small private helper that mirrors
+  `event.CollectMeta` but suppresses default-author injection when explicit meta has an
+  `author` key OR when defaultAuthor is empty), and validates that every record has an
+  author from some source. `runJSON` calls `s.AddMany` for atomic batch insert.
 - `cmd/fngr/pager.go` — `withPager(io, disabled) (ioStreams, closer)` wraps `Out` in a pipe to
   `$PAGER` (fallback `less -FRX`) when stdout is a TTY. Used by `list`.
 - `internal/db/db.go` — DB path resolution (explicit > `.fngr.db` in cwd > `~/.fngr.db`), connection
@@ -65,12 +68,15 @@ make ci             # codefix + format + lint + test
   `#tag` → tag), `KeyValue` helper for `key=value` strings, `FlagMeta` for `--meta` flag arrays
   (delegates to `KeyValue`), `MetaArg` for individual CLI tag args (`@person`, `#tag`, or
   `key=value`; used by `event tag` / `event untag`), `FTSContent` for FTS index content building.
+  Tag and meta-name regexes share the private `metaNamePattern` constant; the anchored form is
+  exported as `MetaNameRe` for reuse by `cmd/fngr/meta.go::parseMetaFilter`.
 - `internal/timefmt/timefmt.go` — Single source of truth for accepted time inputs. `Parse` returns
   just the parsed timestamp; `ParsePartial` also reports whether the input had a date and/or time
   component, so `event time` / `event date` can splice into an existing timestamp instead of
-  replacing it. `FormatRelative(t, now)` returns the compact list-line stamp via the layout
-  constants `LayoutToday` / `LayoutThisYear` / `LayoutOlder`. Canonical `DateFormat` /
-  `DateTimeFormat` layouts used for storage and event-detail display.
+  replacing it via `SpliceTime` / `SpliceDate` (mirror-image helpers that mix orig/new
+  date+time around the existing timezone). `FormatRelative(t, now)` returns the compact list-line
+  stamp via the layout constants `LayoutToday` / `LayoutThisYear` / `LayoutOlder`. Canonical
+  `DateFormat` / `DateTimeFormat` layouts used for storage and event-detail display.
 - `internal/event/meta.go` — Domain meta key constants (`MetaKeyAuthor`, etc.), `CollectMeta`
   merges all meta sources (author, body tags, flags) with dedup.
 - `internal/event/event.go` — Data access functions: `Add` (transactional event + meta + FTS),
