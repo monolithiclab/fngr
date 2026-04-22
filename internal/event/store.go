@@ -22,6 +22,10 @@ func (s *Store) Add(ctx context.Context, text string, parentID *int64, meta []pa
 	return Add(ctx, s.DB, text, parentID, meta, createdAt)
 }
 
+func (s *Store) AddMany(ctx context.Context, inputs []AddInput) ([]int64, error) {
+	return AddMany(ctx, s.DB, inputs)
+}
+
 func (s *Store) Get(ctx context.Context, id int64) (*Event, error) {
 	return Get(ctx, s.DB, id)
 }

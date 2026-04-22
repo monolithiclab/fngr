@@ -1328,3 +1328,114 @@ func TestUpdate_TextDedupsRepeatedBodyTags(t *testing.T) {
 		t.Errorf("tag=ops count = %d, want 1", n)
 	}
 }
+
+func TestAddMany_Empty(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	ids, err := AddMany(ctx, database, nil)
+	if err != nil {
+		t.Fatalf("AddMany(nil): %v", err)
+	}
+	if ids != nil {
+		t.Errorf("ids = %v, want nil for empty input", ids)
+	}
+
+	ids, err = AddMany(ctx, database, []AddInput{})
+	if err != nil {
+		t.Fatalf("AddMany([]): %v", err)
+	}
+	if ids != nil {
+		t.Errorf("ids = %v, want nil for empty input", ids)
+	}
+
+	var count int
+	if err := database.QueryRow("SELECT COUNT(*) FROM events").Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("created %d rows, want 0", count)
+	}
+}
+
+func TestAddMany_HappyPath(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	inputs := []AddInput{
+		{Text: "a", Meta: []parse.Meta{{Key: "tag", Value: "x"}}},
+		{Text: "b"},
+		{Text: "c", Meta: []parse.Meta{{Key: "tag", Value: "y"}, {Key: "people", Value: "alice"}}},
+	}
+	ids, err := AddMany(ctx, database, inputs)
+	if err != nil {
+		t.Fatalf("AddMany: %v", err)
+	}
+	if len(ids) != 3 {
+		t.Fatalf("got %d ids, want 3", len(ids))
+	}
+	for i := 1; i < len(ids); i++ {
+		if ids[i] <= ids[i-1] {
+			t.Errorf("ids not strictly increasing: %v", ids)
+		}
+	}
+
+	for i, id := range ids {
+		ev, err := Get(ctx, database, id)
+		if err != nil {
+			t.Fatalf("Get(%d): %v", id, err)
+		}
+		if ev.Text != inputs[i].Text {
+			t.Errorf("event %d text = %q, want %q", id, ev.Text, inputs[i].Text)
+		}
+		if len(ev.Meta) != len(inputs[i].Meta) {
+			t.Errorf("event %d meta count = %d, want %d", id, len(ev.Meta), len(inputs[i].Meta))
+		}
+	}
+}
+
+func TestAddMany_AtomicOnError(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	bogusParent := int64(9999)
+	inputs := []AddInput{
+		{Text: "good 1"},
+		{Text: "good 2"},
+		{Text: "bad", ParentID: &bogusParent}, // parent does not exist
+		{Text: "good 3"},
+	}
+	_, err := AddMany(ctx, database, inputs)
+	if err == nil {
+		t.Fatal("AddMany returned nil err, want parent-not-found")
+	}
+
+	var count int
+	if err := database.QueryRow("SELECT COUNT(*) FROM events").Scan(&count); err != nil {
+		t.Fatalf("count: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("created %d rows, want 0 (batch should roll back atomically)", count)
+	}
+}
+
+func TestAddMany_FTSPopulatedPerRecord(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	inputs := []AddInput{
+		{Text: "deploy ops", Meta: []parse.Meta{{Key: "tag", Value: "ops"}}},
+		{Text: "lunch chat", Meta: []parse.Meta{{Key: "tag", Value: "personal"}}},
+	}
+	if _, err := AddMany(ctx, database, inputs); err != nil {
+		t.Fatalf("AddMany: %v", err)
+	}
+
+	matches, err := List(ctx, database, ListOpts{Filter: "deploy"})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(matches) != 1 || matches[0].Text != "deploy ops" {
+		t.Errorf("FTS not populated: matches = %v", matches)
+	}
+}

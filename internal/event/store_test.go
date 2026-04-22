@@ -360,3 +360,19 @@ func TestStore_RemoveTags(t *testing.T) {
 		t.Errorf("removed = %d, want 1", n)
 	}
 }
+
+func TestStore_AddMany(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+
+	ids, err := s.AddMany(ctx, []AddInput{
+		{Text: "a"},
+		{Text: "b"},
+	})
+	if err != nil {
+		t.Fatalf("AddMany: %v", err)
+	}
+	if len(ids) != 2 {
+		t.Errorf("got %d ids, want 2", len(ids))
+	}
+}

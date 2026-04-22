@@ -33,6 +33,16 @@ type MetaCount struct {
 	Count int
 }
 
+// AddInput holds the fields needed to insert one event. Used by AddMany;
+// the single-event Add keeps its positional signature so existing call
+// sites don't need to construct a struct literal.
+type AddInput struct {
+	Text      string
+	ParentID  *int64
+	Meta      []parse.Meta
+	CreatedAt *time.Time
+}
+
 func Add(ctx context.Context, db *sql.DB, text string, parentID *int64, meta []parse.Meta, createdAt *time.Time) (int64, error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -40,64 +50,108 @@ func Add(ctx context.Context, db *sql.DB, text string, parentID *int64, meta []p
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if parentID != nil {
-		var exists int
-		err := tx.QueryRowContext(ctx, "SELECT 1 FROM events WHERE id = ?", *parentID).Scan(&exists)
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return 0, fmt.Errorf("parent event %d: %w", *parentID, ErrNotFound)
-			}
-			return 0, fmt.Errorf("query parent event: %w", err)
-		}
-	}
-
-	var res sql.Result
-	if createdAt != nil {
-		res, err = tx.ExecContext(ctx,
-			"INSERT INTO events (parent_id, text, created_at) VALUES (?, ?, ?)",
-			parentID, text, createdAt.UTC().Format(timefmt.DateTimeFormat),
-		)
-	} else {
-		res, err = tx.ExecContext(ctx,
-			"INSERT INTO events (parent_id, text) VALUES (?, ?)",
-			parentID, text,
-		)
-	}
+	ids, err := addInTx(ctx, tx, []AddInput{{Text: text, ParentID: parentID, Meta: meta, CreatedAt: createdAt}})
 	if err != nil {
-		return 0, fmt.Errorf("insert event: %w", err)
+		return 0, err
 	}
-
-	id, err := res.LastInsertId()
-	if err != nil {
-		return 0, fmt.Errorf("last insert id: %w", err)
-	}
-
-	if len(meta) > 0 {
-		stmt, err := tx.PrepareContext(ctx, "INSERT INTO event_meta (event_id, key, value) VALUES (?, ?, ?)")
-		if err != nil {
-			return 0, fmt.Errorf("prepare meta insert: %w", err)
-		}
-		defer stmt.Close()
-		for _, m := range meta {
-			if _, err := stmt.ExecContext(ctx, id, m.Key, m.Value); err != nil {
-				return 0, fmt.Errorf("insert meta: %w", err)
-			}
-		}
-	}
-
-	ftsContent := parse.FTSContent(text, meta)
-	if _, err := tx.ExecContext(ctx,
-		"INSERT INTO events_fts (rowid, content) VALUES (?, ?)",
-		id, ftsContent,
-	); err != nil {
-		return 0, fmt.Errorf("insert FTS content: %w", err)
-	}
-
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("commit transaction: %w", err)
 	}
+	return ids[0], nil
+}
 
-	return id, nil
+// AddMany inserts the given events in a single transaction. Empty input
+// is a no-op returning (nil, nil). Any per-record error rolls the entire
+// batch back. Returns generated IDs in input order.
+func AddMany(ctx context.Context, db *sql.DB, inputs []AddInput) ([]int64, error) {
+	if len(inputs) == 0 {
+		return nil, nil
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	ids, err := addInTx(ctx, tx, inputs)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit transaction: %w", err)
+	}
+	return ids, nil
+}
+
+// addInTx inserts events using the given tx. Caller owns commit/rollback.
+// Each input becomes one INSERT into events, zero-or-more INSERTs into
+// event_meta, and one INSERT into events_fts. Per-record errors abort
+// the loop with a wrapped error; the caller's deferred Rollback fires.
+func addInTx(ctx context.Context, tx *sql.Tx, inputs []AddInput) ([]int64, error) {
+	insertMeta, err := tx.PrepareContext(ctx,
+		"INSERT INTO event_meta (event_id, key, value) VALUES (?, ?, ?)",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("prepare meta insert: %w", err)
+	}
+	defer insertMeta.Close()
+
+	insertFTS, err := tx.PrepareContext(ctx,
+		"INSERT INTO events_fts (rowid, content) VALUES (?, ?)",
+	)
+	if err != nil {
+		return nil, fmt.Errorf("prepare FTS insert: %w", err)
+	}
+	defer insertFTS.Close()
+
+	ids := make([]int64, 0, len(inputs))
+	for _, in := range inputs {
+		if in.ParentID != nil {
+			var exists int
+			err := tx.QueryRowContext(ctx, "SELECT 1 FROM events WHERE id = ?", *in.ParentID).Scan(&exists)
+			if err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return nil, fmt.Errorf("parent event %d: %w", *in.ParentID, ErrNotFound)
+				}
+				return nil, fmt.Errorf("query parent event: %w", err)
+			}
+		}
+
+		var res sql.Result
+		if in.CreatedAt != nil {
+			res, err = tx.ExecContext(ctx,
+				"INSERT INTO events (parent_id, text, created_at) VALUES (?, ?, ?)",
+				in.ParentID, in.Text, in.CreatedAt.UTC().Format(timefmt.DateTimeFormat),
+			)
+		} else {
+			res, err = tx.ExecContext(ctx,
+				"INSERT INTO events (parent_id, text) VALUES (?, ?)",
+				in.ParentID, in.Text,
+			)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("insert event: %w", err)
+		}
+
+		id, err := res.LastInsertId()
+		if err != nil {
+			return nil, fmt.Errorf("last insert id: %w", err)
+		}
+
+		for _, m := range in.Meta {
+			if _, err := insertMeta.ExecContext(ctx, id, m.Key, m.Value); err != nil {
+				return nil, fmt.Errorf("insert meta: %w", err)
+			}
+		}
+
+		if _, err := insertFTS.ExecContext(ctx, id, parse.FTSContent(in.Text, in.Meta)); err != nil {
+			return nil, fmt.Errorf("insert FTS content: %w", err)
+		}
+
+		ids = append(ids, id)
+	}
+	return ids, nil
 }
 
 func Get(ctx context.Context, db *sql.DB, id int64) (*Event, error) {

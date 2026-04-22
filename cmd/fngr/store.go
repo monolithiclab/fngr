@@ -14,6 +14,7 @@ import (
 // satisfies it for production; tests provide their own implementations.
 type eventStore interface {
 	Add(ctx context.Context, text string, parentID *int64, meta []parse.Meta, createdAt *time.Time) (int64, error)
+	AddMany(ctx context.Context, inputs []event.AddInput) ([]int64, error)
 	AddTags(ctx context.Context, id int64, tags []parse.Meta) (int64, error)
 	Get(ctx context.Context, id int64) (*event.Event, error)
 	Delete(ctx context.Context, id int64) error
