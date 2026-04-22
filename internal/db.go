@@ -54,5 +54,34 @@ func OpenDB(path string, create bool) (*sql.DB, error) {
 }
 
 func initSchema(db *sql.DB) error {
-	return nil
+	schema := `
+		CREATE TABLE IF NOT EXISTS events (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			parent_id  INTEGER REFERENCES events(id) ON DELETE CASCADE,
+			text       TEXT NOT NULL,
+			created_at DATETIME NOT NULL DEFAULT (datetime('now'))
+		);
+
+		CREATE TABLE IF NOT EXISTS event_meta (
+			event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+			key      TEXT NOT NULL,
+			value    TEXT NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_event_meta_key_value ON event_meta(key, value);
+		CREATE INDEX IF NOT EXISTS idx_event_meta_event_id ON event_meta(event_id);
+
+		CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(
+			content,
+			tokenize = "unicode61 tokenchars '=/'"
+		);
+
+		CREATE TRIGGER IF NOT EXISTS trg_events_fts_delete
+		AFTER DELETE ON events
+		BEGIN
+			DELETE FROM events_fts WHERE rowid = OLD.id;
+		END;
+	`
+	_, err := db.Exec(schema)
+	return err
 }
