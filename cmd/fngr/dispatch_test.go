@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"strings"
 	"testing"
 
@@ -11,7 +12,7 @@ import (
 // dispatch parses argv, sets up the same bindings main() does, and runs the
 // chosen command. Tests that go through this path catch wiring bugs (missing
 // Kong bindings, wrong Run signatures, etc.) that direct cmd.Run() calls miss.
-func dispatch(t *testing.T, argv []string, stdin string) (string, error) {
+func dispatch(t *testing.T, argv []string, stdin string, isTTY bool) (string, error) {
 	t.Helper()
 
 	var cli CLI
@@ -32,7 +33,12 @@ func dispatch(t *testing.T, argv []string, stdin string) (string, error) {
 
 	out := &bytes.Buffer{}
 	kctx.BindTo(newTestStore(t), (*eventStore)(nil))
-	kctx.Bind(ioStreams{In: strings.NewReader(stdin), Out: out})
+	kctx.Bind(ioStreams{
+		In:    strings.NewReader(stdin),
+		Out:   out,
+		Err:   io.Discard,
+		IsTTY: isTTY,
+	})
 
 	if err := kctx.Run(); err != nil {
 		return out.String(), err
@@ -79,7 +85,7 @@ func TestKongDispatch_AllCommands(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := dispatch(t, tc.argv, tc.stdin)
+			_, err := dispatch(t, tc.argv, tc.stdin, true)
 			if err != nil && strings.Contains(err.Error(), "couldn't find binding") {
 				t.Fatalf("kong binding error for %q: %v", tc.argv, err)
 			}
@@ -113,7 +119,12 @@ func TestKongDispatch_AddThenListEndToEnd(t *testing.T) {
 		}
 		out := &bytes.Buffer{}
 		kctx.BindTo(store, (*eventStore)(nil))
-		kctx.Bind(ioStreams{In: strings.NewReader(""), Out: out})
+		kctx.Bind(ioStreams{
+			In:    strings.NewReader(""),
+			Out:   out,
+			Err:   io.Discard,
+			IsTTY: true,
+		})
 		err = kctx.Run()
 		return out.String(), err
 	}

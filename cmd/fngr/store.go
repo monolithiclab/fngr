@@ -33,6 +33,8 @@ type eventStore interface {
 // ioStreams bundles the input and output streams used by command handlers,
 // kept injectable so commands can be exercised in tests without touching os.
 type ioStreams struct {
-	In  io.Reader
-	Out io.Writer
+	In    io.Reader
+	Out   io.Writer
+	Err   io.Writer // editor cancel notice; stays out of stdout for script piping
+	IsTTY bool      // true when stdin is an interactive terminal
 }

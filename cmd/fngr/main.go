@@ -10,6 +10,7 @@ import (
 	"github.com/monolithiclab/fngr/internal/db"
 	"github.com/monolithiclab/fngr/internal/event"
 	"github.com/monolithiclab/fngr/internal/render"
+	"golang.org/x/term"
 )
 
 var version = "dev"
@@ -73,6 +74,11 @@ func main() {
 	defer database.Close()
 
 	ctx.BindTo(event.NewStore(database), (*eventStore)(nil))
-	ctx.Bind(ioStreams{In: os.Stdin, Out: os.Stdout})
+	ctx.Bind(ioStreams{
+		In:    os.Stdin,
+		Out:   os.Stdout,
+		Err:   os.Stderr,
+		IsTTY: term.IsTerminal(int(os.Stdin.Fd())), // #nosec G115 -- fd is a small int, cannot overflow
+	})
 	ctx.FatalIfErrorf(ctx.Run())
 }

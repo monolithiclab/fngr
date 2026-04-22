@@ -13,7 +13,7 @@ import (
 func TestWithPager_DisabledNoOps(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
-	io := ioStreams{In: strings.NewReader(""), Out: &out}
+	io := ioStreams{In: strings.NewReader(""), Out: &out, Err: io.Discard, IsTTY: false}
 
 	wrapped, closer := withPager(io, true)
 	if wrapped.Out != &out {
@@ -27,7 +27,7 @@ func TestWithPager_DisabledNoOps(t *testing.T) {
 func TestWithPager_NonTTYOutNoOps(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
-	io := ioStreams{In: strings.NewReader(""), Out: &out}
+	io := ioStreams{In: strings.NewReader(""), Out: &out, Err: io.Discard, IsTTY: false}
 
 	wrapped, closer := withPager(io, false)
 	if wrapped.Out != &out {
