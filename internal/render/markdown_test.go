@@ -2,6 +2,8 @@ package render
 
 import (
 	"bytes"
+	"errors"
+	"iter"
 	"strings"
 	"testing"
 	"time"
@@ -237,5 +239,89 @@ func TestMarkdown_LocalTimezoneBucketing(t *testing.T) {
 	}
 	if !strings.Contains(b.String(), "7.00pm") {
 		t.Errorf("expected 7.00pm time, got:\n%s", b.String())
+	}
+}
+
+// markdownSeq returns an iter.Seq2 that yields events with nil errors. Local
+// to markdown_test.go; the existing staticSeq in render_test.go is fine to
+// rely on, but a duplicate keeps the file self-contained.
+func markdownSeq(events []event.Event) iter.Seq2[event.Event, error] {
+	return func(yield func(event.Event, error) bool) {
+		for _, ev := range events {
+			if !yield(ev, nil) {
+				return
+			}
+		}
+	}
+}
+
+// markdownErrAt yields events through index errAt-1, then yields an error.
+func markdownErrAt(events []event.Event, errAt int, err error) iter.Seq2[event.Event, error] {
+	return func(yield func(event.Event, error) bool) {
+		for i, ev := range events {
+			if i == errAt {
+				yield(event.Event{}, err)
+				return
+			}
+			if !yield(ev, nil) {
+				return
+			}
+		}
+		if errAt >= len(events) {
+			yield(event.Event{}, err)
+		}
+	}
+}
+
+func TestMarkdownStream_Empty(t *testing.T) {
+	t.Parallel()
+	var b bytes.Buffer
+	if err := MarkdownStream(&b, markdownSeq(nil)); err != nil {
+		t.Fatalf("MarkdownStream: %v", err)
+	}
+	if got := b.String(); got != "" {
+		t.Errorf("empty stream produced %q, want empty", got)
+	}
+}
+
+func TestMarkdownStream_MatchesMarkdown(t *testing.T) {
+	t.Parallel()
+	events := []event.Event{
+		mdEvent(time.Date(2026, 4, 22, 8, 15, 0, 0, time.Local), "first",
+			parse.Meta{Key: "author", Value: "nicolas"},
+		),
+		mdEvent(time.Date(2026, 4, 22, 21, 32, 0, 0, time.Local), "second\nsecond line"),
+		mdEvent(time.Date(2026, 4, 21, 11, 4, 0, 0, time.Local), "previous day",
+			parse.Meta{Key: "tag", Value: "ship"},
+		),
+	}
+
+	var slow, fast bytes.Buffer
+	if err := Markdown(&slow, events); err != nil {
+		t.Fatalf("Markdown: %v", err)
+	}
+	if err := MarkdownStream(&fast, markdownSeq(events)); err != nil {
+		t.Fatalf("MarkdownStream: %v", err)
+	}
+	if slow.String() != fast.String() {
+		t.Errorf("MarkdownStream != Markdown\n--- Markdown ---\n%s\n--- Stream ---\n%s",
+			slow.String(), fast.String())
+	}
+}
+
+func TestMarkdownStream_PropagatesError(t *testing.T) {
+	t.Parallel()
+	events := []event.Event{
+		mdEvent(time.Date(2026, 4, 22, 8, 15, 0, 0, time.Local), "ok"),
+	}
+	wantErr := errors.New("boom")
+
+	var b bytes.Buffer
+	err := MarkdownStream(&b, markdownErrAt(events, 1, wantErr))
+	if !errors.Is(err, wantErr) {
+		t.Errorf("err = %v, want %v", err, wantErr)
+	}
+	if !strings.Contains(b.String(), "ok") {
+		t.Errorf("partial output not flushed:\n%s", b.String())
 	}
 }

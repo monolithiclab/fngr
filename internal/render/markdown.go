@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"fmt"
 	"io"
+	"iter"
 	"slices"
 	"strings"
 
@@ -68,6 +69,23 @@ func renderMarkdownEvent(w io.Writer, lastDate *string, ev event.Event) error {
 		slices.SortFunc(pairs, cmp.Compare)
 		if _, err := fmt.Fprintf(w, "  %s\n", strings.Join(pairs, " ")); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// MarkdownStream is the streaming counterpart to Markdown. It writes one
+// bullet per event as the iterator yields, emitting a new ## YYYY-MM-DD
+// section header whenever the local date changes between consecutive
+// events. The first error from seq aborts and is returned.
+func MarkdownStream(w io.Writer, seq iter.Seq2[event.Event, error]) error {
+	var lastDate string
+	for ev, err := range seq {
+		if err != nil {
+			return err
+		}
+		if rerr := renderMarkdownEvent(w, &lastDate, ev); rerr != nil {
+			return rerr
 		}
 	}
 	return nil
