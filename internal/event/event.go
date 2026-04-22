@@ -168,15 +168,8 @@ func Update(ctx context.Context, db *sql.DB, id int64, text *string, createdAt *
 	}
 
 	if text != nil {
-		meta, err := readMetaTx(ctx, tx, id)
-		if err != nil {
+		if err := rebuildEventFTS(ctx, tx, id); err != nil {
 			return err
-		}
-		if _, err := tx.ExecContext(ctx,
-			"UPDATE events_fts SET content = ? WHERE rowid = ?",
-			parse.FTSContent(*text, meta), id,
-		); err != nil {
-			return fmt.Errorf("update FTS: %w", err)
 		}
 	}
 
@@ -202,6 +195,26 @@ func readMetaTx(ctx context.Context, tx *sql.Tx, id int64) ([]parse.Meta, error)
 		meta = append(meta, m)
 	}
 	return meta, rows.Err()
+}
+
+// rebuildEventFTS reads the event's current text + meta inside tx and
+// writes parse.FTSContent into events_fts.
+func rebuildEventFTS(ctx context.Context, tx *sql.Tx, id int64) error {
+	var text string
+	if err := tx.QueryRowContext(ctx, "SELECT text FROM events WHERE id = ?", id).Scan(&text); err != nil {
+		return fmt.Errorf("read event text for FTS: %w", err)
+	}
+	meta, err := readMetaTx(ctx, tx, id)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		"UPDATE events_fts SET content = ? WHERE rowid = ?",
+		parse.FTSContent(text, meta), id,
+	); err != nil {
+		return fmt.Errorf("update FTS: %w", err)
+	}
+	return nil
 }
 
 func HasChildren(ctx context.Context, db *sql.DB, id int64) (bool, error) {
