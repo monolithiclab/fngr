@@ -147,17 +147,16 @@ func Update(ctx context.Context, db *sql.DB, id int64, text *string, createdAt *
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var existing string
-	err = tx.QueryRowContext(ctx, "SELECT text FROM events WHERE id = ?", id).Scan(&existing)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return fmt.Errorf("event %d: %w", id, ErrNotFound)
-		}
-		return fmt.Errorf("query event: %w", err)
+	if err := requireEventExists(ctx, tx, id); err != nil {
+		return err
 	}
 
 	if text != nil {
 		// Body-tag sync, step 1: remove tags parsed from the *previous* text.
+		var existing string
+		if err := tx.QueryRowContext(ctx, "SELECT text FROM events WHERE id = ?", id).Scan(&existing); err != nil {
+			return fmt.Errorf("query event text: %w", err)
+		}
 		oldBodyTags := parse.BodyTags(existing)
 		if err := deleteMetaTuples(ctx, tx, id, oldBodyTags); err != nil {
 			return err
