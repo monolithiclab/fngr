@@ -40,12 +40,38 @@ aliased.
 - No body-tag *removal* on `text` edits. The roadmap intentionally chose
   add-with-dedup so users don't lose meta they previously set; explicit
   `untag` removes.
-- No new schema migration. App-level dedup (`SELECT existing → diff →
-  INSERT`) covers the `tag` and `text`-re-parse cases without a UNIQUE
-  constraint on `event_meta`.
 - No alias for `show` or `edit`. Pre-public ⇒ straight removal.
 
 ## Architecture
+
+### `internal/db` — migration 2: UNIQUE on event_meta
+
+Add a new entry at the bottom of `migrations` in
+`internal/db/migrate.go`:
+
+```sql
+-- Deduplicate any pre-existing rows (none expected in practice — Add
+-- already dedups via parse.CollectMeta — but the migration must be
+-- safe regardless).
+DELETE FROM event_meta
+ WHERE rowid NOT IN (
+   SELECT MIN(rowid) FROM event_meta GROUP BY event_id, key, value
+ );
+
+-- Replace the non-unique (key, value) index with a UNIQUE index on
+-- (key, value, event_id). Same prefix-lookup performance for
+-- ListMeta / CountMeta plus DB-level uniqueness for ON CONFLICT.
+DROP INDEX IF EXISTS idx_event_meta_key_value;
+CREATE UNIQUE INDEX idx_event_meta_key_value_event_id
+    ON event_meta(key, value, event_id);
+```
+
+The pre-existing `idx_event_meta_event_id` on `(event_id, key, value)`
+stays as-is (still the right shape for `loadMetaBatch`).
+
+`event.AddTags` and the body-tag re-parse path in `event.Update` now use
+`INSERT INTO event_meta (event_id, key, value) VALUES (?, ?, ?)
+ON CONFLICT DO NOTHING` — no app-side `SELECT existing → diff` step.
 
 ### `internal/timefmt` — partial parse
 
@@ -111,9 +137,11 @@ var ErrCycle = errors.New("would create a parent cycle")
 // Returns ErrNotFound if id or newParent does not exist.
 func Reparent(ctx context.Context, db *sql.DB, id int64, newParent *int64) error
 
-// AddTags inserts the given meta entries for event id, skipping any that
-// already exist on the event ((event_id, key, value) tuple). FTS rebuilt
-// in the same transaction. Returns ErrNotFound if the event is missing.
+// AddTags inserts the given meta entries for event id. Duplicates are
+// dropped at the database via INSERT ... ON CONFLICT DO NOTHING (the
+// UNIQUE index on (key, value, event_id) added in migration 2). FTS
+// rebuilt in the same transaction. Returns ErrNotFound if the event is
+// missing.
 func AddTags(ctx context.Context, db *sql.DB, id int64, tags []parse.Meta) error
 
 // RemoveTags deletes (event_id, key, value) rows matching tags. Returns
@@ -217,8 +245,9 @@ context.
    - Verify event 5 exists (`SELECT 1 FROM events WHERE id = ?`).
    - `UPDATE events SET text = ? WHERE id = ?`.
    - Re-parse body tags from the new text → `[{people, Sarah}, {tag, urgent}]`.
-   - Read existing meta for event 5; build set of `(key, value)` tuples.
-   - For each parsed tag not in the set, `INSERT INTO event_meta (event_id, key, value) VALUES (?, ?, ?)`.
+   - For each parsed tag, `INSERT INTO event_meta (event_id, key, value)
+     VALUES (?, ?, ?) ON CONFLICT DO NOTHING`. The UNIQUE index added by
+     migration 2 silently drops any tag that already exists on the event.
    - `rebuildEventFTS(ctx, tx, 5)` reads `text` + final meta and writes
      `parse.FTSContent(text, meta)` to `events_fts`.
    - Commit.
@@ -258,10 +287,19 @@ helper.
   `key=val=ue`, malformed (bare `urgent`, `@`, `#`, `=value`, `key=`),
   hierarchical `#work/project-x` (allowed by the regex).
 
+### `internal/db`
+- `TestMigrate_DedupesEventMetaAndAddsUniqueIndex` — seed event_meta
+  with intentional duplicate rows on a fresh DB at user_version=1, run
+  the migration, assert duplicates are gone and that a follow-up insert
+  of the same tuple raises a UNIQUE-constraint error (or is silently
+  dropped by `ON CONFLICT DO NOTHING`).
+
 ### `internal/event`
 - `TestUpdate_TextRefreshesMetaAndFTS` — pre-existing meta preserved,
   new body tags added, removed body tags NOT removed, FTS reflects new
   text.
+- `TestUpdate_TextDedupsRepeatedBodyTags` — text containing a tag the
+  event already has produces no error and no duplicate row.
 - `TestReparent_RejectsSelf`, `TestReparent_RejectsAncestryCycle` (3-deep
   cycle), `TestReparent_AllowsValidMove`, `TestReparent_DetachClearsParent`,
   `TestReparent_NotFound`, `TestReparent_NewParentNotFound`.
@@ -286,10 +324,6 @@ helper.
 
 ## Out of scope (will not implement here)
 
-- UNIQUE constraint on `(event_meta.event_id, event_meta.key,
-  event_meta.value)`. App-level dedup is enough for current call sites;
-  adding the constraint is a separate concern (race tolerance) that
-  belongs with bulk-insert features if any ever land.
 - A confirmation/preview mechanism for the verbs. The user explicitly
   chose "never prompt" — `fngr event N` is the inspection tool.
 - Multi-event verbs (`event 1,2,3 tag ...`). One ID per invocation.
@@ -307,3 +341,8 @@ Pre-public, so the breaking changes are documented but not gated:
 - `event.Update` gains the body-tag re-parse + dedup behaviour. Callers
   inside the repo (only `cmd/fngr/event.go`) will use it; no external
   consumers.
+- Schema migration 2 deduplicates `event_meta` and adds a UNIQUE index
+  on `(key, value, event_id)`. Existing databases run the dedupe step
+  at first launch; the dedupe is a no-op when no duplicates are present
+  (which is expected, since `Add` already dedups via
+  `parse.CollectMeta`).
