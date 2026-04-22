@@ -97,6 +97,41 @@ func TestBodyTags(t *testing.T) {
 	}
 }
 
+func TestKeyValue(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name      string
+		input     string
+		wantKey   string
+		wantValue string
+		wantErr   bool
+	}{
+		{name: "ok", input: "env=prod", wantKey: "env", wantValue: "prod"},
+		{name: "value contains =", input: "note=a=b", wantKey: "note", wantValue: "a=b"},
+		{name: "empty value", input: "tag=", wantKey: "tag", wantValue: ""},
+		{name: "missing =", input: "noeq", wantErr: true},
+		{name: "empty input", input: "", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			k, v, err := KeyValue(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("KeyValue(%q) expected error", tt.input)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("KeyValue(%q) unexpected error: %v", tt.input, err)
+			}
+			if k != tt.wantKey || v != tt.wantValue {
+				t.Errorf("KeyValue(%q) = (%q, %q), want (%q, %q)", tt.input, k, v, tt.wantKey, tt.wantValue)
+			}
+		})
+	}
+}
+
 func TestFlagMeta(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

@@ -1,14 +1,13 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"database/sql"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/monolithiclab/fngr/internal/event"
+	"github.com/monolithiclab/fngr/internal/parse"
 )
 
 type MetaCmd struct {
@@ -58,13 +57,13 @@ type MetaUpdateCmd struct {
 func (c *MetaUpdateCmd) Run(db *sql.DB) error {
 	ctx := context.Background()
 
-	oldKey, oldValue, ok := strings.Cut(c.Old, "=")
-	if !ok {
-		return fmt.Errorf("invalid old meta %q: expected key=value", c.Old)
+	oldKey, oldValue, err := parse.KeyValue(c.Old)
+	if err != nil {
+		return err
 	}
-	newKey, newValue, ok := strings.Cut(c.New, "=")
-	if !ok {
-		return fmt.Errorf("invalid new meta %q: expected key=value", c.New)
+	newKey, newValue, err := parse.KeyValue(c.New)
+	if err != nil {
+		return err
 	}
 
 	count, err := event.CountMeta(ctx, db, oldKey, oldValue)
@@ -76,11 +75,12 @@ func (c *MetaUpdateCmd) Run(db *sql.DB) error {
 	}
 
 	if !c.Force {
-		fmt.Printf("Update %d occurrence(s) of %s=%s to %s=%s? [Y/n] ", count, oldKey, oldValue, newKey, newValue)
-		reader := bufio.NewReader(os.Stdin)
-		answer, _ := reader.ReadString('\n')
-		answer = strings.TrimSpace(strings.ToLower(answer))
-		if answer != "" && answer != "y" && answer != "yes" {
+		prompt := fmt.Sprintf("Update %d occurrence(s) of %s=%s to %s=%s? [Y/n] ", count, oldKey, oldValue, newKey, newValue)
+		ok, err := confirm(os.Stdin, os.Stdout, prompt)
+		if err != nil {
+			return err
+		}
+		if !ok {
 			fmt.Println("Aborted.")
 			return nil
 		}
@@ -103,9 +103,9 @@ type MetaDeleteCmd struct {
 func (c *MetaDeleteCmd) Run(db *sql.DB) error {
 	ctx := context.Background()
 
-	key, value, ok := strings.Cut(c.Meta, "=")
-	if !ok {
-		return fmt.Errorf("invalid meta %q: expected key=value", c.Meta)
+	key, value, err := parse.KeyValue(c.Meta)
+	if err != nil {
+		return err
 	}
 
 	count, err := event.CountMeta(ctx, db, key, value)
@@ -117,11 +117,12 @@ func (c *MetaDeleteCmd) Run(db *sql.DB) error {
 	}
 
 	if !c.Force {
-		fmt.Printf("Delete %d occurrence(s) of %s=%s? [Y/n] ", count, key, value)
-		reader := bufio.NewReader(os.Stdin)
-		answer, _ := reader.ReadString('\n')
-		answer = strings.TrimSpace(strings.ToLower(answer))
-		if answer != "" && answer != "y" && answer != "yes" {
+		prompt := fmt.Sprintf("Delete %d occurrence(s) of %s=%s? [Y/n] ", count, key, value)
+		ok, err := confirm(os.Stdin, os.Stdout, prompt)
+		if err != nil {
+			return err
+		}
+		if !ok {
 			fmt.Println("Aborted.")
 			return nil
 		}

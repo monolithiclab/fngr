@@ -1,12 +1,10 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"database/sql"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/monolithiclab/fngr/internal/event"
 )
@@ -35,15 +33,15 @@ func (c *DeleteCmd) Run(db *sql.DB) error {
 	}
 
 	if !c.Force {
+		prompt := fmt.Sprintf("Delete event %d? [Y/n] ", ev.ID)
 		if hasChildren {
-			fmt.Printf("Delete event %d and all its children? [Y/n] ", ev.ID)
-		} else {
-			fmt.Printf("Delete event %d? [Y/n] ", ev.ID)
+			prompt = fmt.Sprintf("Delete event %d and all its children? [Y/n] ", ev.ID)
 		}
-		reader := bufio.NewReader(os.Stdin)
-		answer, _ := reader.ReadString('\n')
-		answer = strings.TrimSpace(strings.ToLower(answer))
-		if answer != "" && answer != "y" && answer != "yes" {
+		ok, err := confirm(os.Stdin, os.Stdout, prompt)
+		if err != nil {
+			return err
+		}
+		if !ok {
 			fmt.Println("Aborted.")
 			return nil
 		}

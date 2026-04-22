@@ -41,6 +41,16 @@ func BodyTags(text string) []Meta {
 	return result
 }
 
+// KeyValue splits s on the first '=' and returns the key and value.
+// It returns an error if s does not contain '='.
+func KeyValue(s string) (key, value string, err error) {
+	key, value, ok := strings.Cut(s, "=")
+	if !ok {
+		return "", "", fmt.Errorf("invalid key=value pair %q", s)
+	}
+	return key, value, nil
+}
+
 func FlagMeta(flags []string) ([]Meta, error) {
 	if len(flags) == 0 {
 		return nil, nil
@@ -48,9 +58,9 @@ func FlagMeta(flags []string) ([]Meta, error) {
 
 	result := make([]Meta, 0, len(flags))
 	for _, f := range flags {
-		key, value, ok := strings.Cut(f, "=")
-		if !ok {
-			return nil, fmt.Errorf("invalid meta flag %q: missing '='", f)
+		key, value, err := KeyValue(f)
+		if err != nil {
+			return nil, fmt.Errorf("invalid --meta flag: %w", err)
 		}
 		result = append(result, Meta{Key: key, Value: value})
 	}
