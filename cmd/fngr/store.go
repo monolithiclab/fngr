@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"io"
+	"iter"
 	"time"
 
 	"github.com/monolithiclab/fngr/internal/event"
@@ -18,6 +19,7 @@ type eventStore interface {
 	Update(ctx context.Context, id int64, text *string, createdAt *time.Time) error
 	HasChildren(ctx context.Context, id int64) (bool, error)
 	List(ctx context.Context, opts event.ListOpts) ([]event.Event, error)
+	ListSeq(ctx context.Context, opts event.ListOpts) iter.Seq2[event.Event, error]
 	GetSubtree(ctx context.Context, rootID int64) ([]event.Event, error)
 	ListMeta(ctx context.Context) ([]event.MetaCount, error)
 	CountMeta(ctx context.Context, key, value string) (int64, error)

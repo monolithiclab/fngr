@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -154,5 +155,32 @@ func TestListCmd_FilterAndDateRange(t *testing.T) {
 	got := out.String()
 	if !strings.Contains(got, "match") || strings.Contains(got, "skip") {
 		t.Errorf("output = %q, want only 'match'", got)
+	}
+}
+
+func TestListCmd_JSONUsesStreamingPath(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, out := newTestIO("")
+
+	for i := range 3 {
+		if _, err := s.Add(context.Background(), fmt.Sprintf("e%d", i), nil, []parse.Meta{
+			{Key: "author", Value: "alice"},
+		}, nil); err != nil {
+			t.Fatalf("Add %d: %v", i, err)
+		}
+	}
+
+	cmd := &ListCmd{Format: "json"}
+	if err := cmd.Run(s, io); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var parsed []map[string]any
+	if err := json.Unmarshal(out.Bytes(), &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v\noutput:\n%s", err, out.String())
+	}
+	if len(parsed) != 3 {
+		t.Errorf("got %d entries, want 3; output:\n%s", len(parsed), out.String())
 	}
 }

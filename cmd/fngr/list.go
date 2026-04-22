@@ -21,6 +21,22 @@ type ListCmd struct {
 func (c *ListCmd) Run(s eventStore, io ioStreams) error {
 	ctx := context.Background()
 
+	opts, err := c.toListOpts()
+	if err != nil {
+		return err
+	}
+
+	if c.Format == "tree" {
+		events, err := s.List(ctx, opts)
+		if err != nil {
+			return err
+		}
+		return render.Tree(io.Out, events)
+	}
+	return render.EventsStream(io.Out, c.Format, s.ListSeq(ctx, opts))
+}
+
+func (c *ListCmd) toListOpts() (event.ListOpts, error) {
 	opts := event.ListOpts{
 		Filter:    c.Filter,
 		Limit:     c.Limit,
@@ -29,22 +45,17 @@ func (c *ListCmd) Run(s eventStore, io ioStreams) error {
 	if c.From != "" {
 		from, err := timefmt.ParseDate(c.From)
 		if err != nil {
-			return fmt.Errorf("--from: %w", err)
+			return opts, fmt.Errorf("--from: %w", err)
 		}
 		opts.From = &from
 	}
 	if c.To != "" {
 		to, err := timefmt.ParseDate(c.To)
 		if err != nil {
-			return fmt.Errorf("--to: %w", err)
+			return opts, fmt.Errorf("--to: %w", err)
 		}
 		end := to.AddDate(0, 0, 1)
 		opts.To = &end
 	}
-
-	events, err := s.List(ctx, opts)
-	if err != nil {
-		return err
-	}
-	return render.Events(io.Out, c.Format, events)
+	return opts, nil
 }
