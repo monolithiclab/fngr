@@ -289,3 +289,41 @@ func TestOpenDB_WALMode(t *testing.T) {
 		t.Errorf("journal_mode = %q, want %q", journalMode, "wal")
 	}
 }
+
+func TestOpenDB_BusyTimeout(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "busy.db")
+
+	db, err := OpenDB(dbPath, true)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+
+	var timeout int
+	if err := db.QueryRow("PRAGMA busy_timeout").Scan(&timeout); err != nil {
+		t.Fatalf("PRAGMA busy_timeout: %v", err)
+	}
+	if timeout != 5000 {
+		t.Errorf("busy_timeout = %d, want 5000", timeout)
+	}
+}
+
+func TestOpenDB_SynchronousNormal(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "sync.db")
+
+	db, err := OpenDB(dbPath, true)
+	if err != nil {
+		t.Fatalf("OpenDB: %v", err)
+	}
+	defer db.Close()
+
+	var syncMode int
+	if err := db.QueryRow("PRAGMA synchronous").Scan(&syncMode); err != nil {
+		t.Fatalf("PRAGMA synchronous: %v", err)
+	}
+	if syncMode != 1 {
+		t.Errorf("synchronous = %d, want 1 (NORMAL)", syncMode)
+	}
+}

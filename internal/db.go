@@ -47,6 +47,16 @@ func OpenDB(path string, create bool) (*sql.DB, error) {
 		return nil, fmt.Errorf("cannot enable WAL mode: %w", err)
 	}
 
+	if _, err := db.Exec("PRAGMA busy_timeout = 5000"); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("cannot set busy timeout: %w", err)
+	}
+
+	if _, err := db.Exec("PRAGMA synchronous = NORMAL"); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("cannot set synchronous mode: %w", err)
+	}
+
 	if err := initSchema(db); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("cannot initialize schema: %w", err)
@@ -70,8 +80,11 @@ func initSchema(db *sql.DB) error {
 			value    TEXT NOT NULL
 		);
 
+		CREATE INDEX IF NOT EXISTS idx_events_parent_id ON events(parent_id);
+		CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at);
+
 		CREATE INDEX IF NOT EXISTS idx_event_meta_key_value ON event_meta(key, value);
-		CREATE INDEX IF NOT EXISTS idx_event_meta_event_id ON event_meta(event_id);
+		CREATE INDEX IF NOT EXISTS idx_event_meta_event_id ON event_meta(event_id, key, value);
 
 		CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(
 			content,
