@@ -124,6 +124,25 @@ func TestTree_MixedRootsAndChildren(t *testing.T) {
 	}
 }
 
+func TestTree_OrphanedChildren(t *testing.T) {
+	t.Parallel()
+	missingParent := int64(99)
+	another := int64(100)
+	events := []event.Event{
+		makeEvent(1, &missingParent, "Filtered child", "2026-04-10", "nicolas"),
+		makeEvent(2, &another, "Another orphan", "2026-04-11", "nicolas"),
+	}
+
+	want := "" +
+		"1   2026-04-10  nicolas  Filtered child\n" +
+		"2   2026-04-11  nicolas  Another orphan\n"
+
+	got := renderTreeString(t, events)
+	if got != want {
+		t.Errorf("Tree orphaned children:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
 func TestFlat(t *testing.T) {
 	t.Parallel()
 	p1 := int64(1)

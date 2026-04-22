@@ -44,10 +44,16 @@ func Tree(w io.Writer, events []event.Event) error {
 
 	for i, ev := range events {
 		byID[ev.ID] = i
+	}
+	for _, ev := range events {
 		if ev.ParentID == nil {
 			roots = append(roots, ev.ID)
-		} else {
+			continue
+		}
+		if _, parentInSet := byID[*ev.ParentID]; parentInSet {
 			children[*ev.ParentID] = append(children[*ev.ParentID], ev.ID)
+		} else {
+			roots = append(roots, ev.ID)
 		}
 	}
 
