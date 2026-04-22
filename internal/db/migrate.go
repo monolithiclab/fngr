@@ -120,6 +120,12 @@ func hasLegacyV1Schema(db *sql.DB) (bool, error) {
 	return n == 1, nil
 }
 
+// applyMigration runs the migration body and bumps user_version inside a
+// single transaction; failure on either step rolls back both. Migration
+// SQL should still prefer `CREATE ... IF NOT EXISTS` and `DROP ... IF
+// EXISTS` clauses so manual recovery (e.g. after a crash mid-Exec) finds
+// a re-runnable script even if the planner ever surfaces a path that
+// commits before tx.Commit returns.
 func applyMigration(db *sql.DB, m migration) error {
 	tx, err := db.Begin()
 	if err != nil {

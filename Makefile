@@ -2,7 +2,7 @@ include common-go.mk
 
 ROOT_DIR := $(dir $(realpath $(firstword $(MAKEFILE_LIST))))
 
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+VERSION ?= $(shell git describe --tags --dirty 2>/dev/null || echo "dev-$$(git rev-parse --short HEAD 2>/dev/null || echo unknown)")
 LDFLAGS := -ldflags "-X main.version=$(VERSION)"
 
 

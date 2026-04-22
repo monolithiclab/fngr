@@ -87,7 +87,7 @@ func MetaArg(s string) (Meta, error) {
 	}
 	key, value, err := KeyValue(s)
 	if err != nil {
-		return Meta{}, err
+		return Meta{}, fmt.Errorf("parse meta arg %q: %w", s, err)
 	}
 	if key == "" {
 		return Meta{}, fmt.Errorf("expected @person, #tag, or key=value, got %q (empty key)", s)
