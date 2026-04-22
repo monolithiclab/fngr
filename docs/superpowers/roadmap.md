@@ -5,7 +5,7 @@ sub-project below ships through its own brainstorm → spec → plan → impleme
 cycle. Specs land under `docs/superpowers/specs/`, plans under
 `docs/superpowers/plans/`.
 
-## S1 — `list` UX overhaul (in progress)
+## S1 — `list` UX overhaul (done)
 
 - `fngr` (no args) ≡ `fngr list`.
 - Default sort is descending on `created_at` (newest first); replace
@@ -17,7 +17,7 @@ cycle. Specs land under `docs/superpowers/specs/`, plans under
   json, csv can stream in batches).
 - Auto-paginate when stdout is a TTY.
 
-## S2 — `event` namespace + subcommands
+## S2 — `event` namespace + subcommands (done)
 
 - Rename `show` → `event`. `fngr event 5` shows event 5 (replaces current
   `fngr show 5`); `fngr event 5 --tree` keeps the subtree view.
@@ -37,7 +37,7 @@ cycle. Specs land under `docs/superpowers/specs/`, plans under
 - The current `fngr edit` is removed (its behaviour folds into
   `fngr event N text/time/date`).
 
-## S3 — `meta` UX
+## S3 — `meta` UX (done)
 
 - `fngr meta` (no subcommand) ≡ `fngr meta list`.
 - `fngr meta` accepts a filter argument (key only, value only, or `key=value`).
