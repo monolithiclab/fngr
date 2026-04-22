@@ -33,6 +33,38 @@ func eventAuthor(ev event.Event) string {
 	return metaValue(ev.Meta, event.MetaKeyAuthor)
 }
 
+func formatEventLine(id int64, date, author, text string) string {
+	return fmt.Sprintf("%-4d%s  %s  %s", id, date, author, text)
+}
+
+// Events writes a list of events in the requested format. Supported formats
+// are "tree" (default), "flat", "json", "csv".
+func Events(w io.Writer, format string, events []event.Event) error {
+	switch format {
+	case "csv":
+		return CSV(w, events)
+	case "flat":
+		return Flat(w, events)
+	case "json":
+		return JSON(w, events)
+	default:
+		return Tree(w, events)
+	}
+}
+
+// SingleEvent writes one event in the requested format. Supported formats are
+// "text" (default), "json", "csv".
+func SingleEvent(w io.Writer, format string, ev *event.Event) error {
+	switch format {
+	case "csv":
+		return CSV(w, []event.Event{*ev})
+	case "json":
+		return JSON(w, []event.Event{*ev})
+	default:
+		return Event(w, ev)
+	}
+}
+
 func Tree(w io.Writer, events []event.Event) error {
 	if len(events) == 0 {
 		return nil
@@ -68,10 +100,9 @@ func Tree(w io.Writer, events []event.Event) error {
 func renderNode(w io.Writer, events []event.Event, byID map[int64]int, children map[int64][]int64, id int64, linePrefix, childPrefix string) error {
 	idx := byID[id]
 	ev := events[idx]
-	date := formatLocalDate(ev.CreatedAt)
-	author := eventAuthor(ev)
+	line := formatEventLine(ev.ID, formatLocalDate(ev.CreatedAt), eventAuthor(ev), ev.Text)
 
-	if _, err := fmt.Fprintf(w, "%s%-4d%s  %s  %s\n", linePrefix, ev.ID, date, author, ev.Text); err != nil {
+	if _, err := fmt.Fprintf(w, "%s%s\n", linePrefix, line); err != nil {
 		return err
 	}
 
@@ -96,9 +127,8 @@ func renderNode(w io.Writer, events []event.Event, byID map[int64]int, children 
 
 func Flat(w io.Writer, events []event.Event) error {
 	for _, ev := range events {
-		date := formatLocalDate(ev.CreatedAt)
-		author := eventAuthor(ev)
-		if _, err := fmt.Fprintf(w, "%-4d%s  %s  %s\n", ev.ID, date, author, ev.Text); err != nil {
+		line := formatEventLine(ev.ID, formatLocalDate(ev.CreatedAt), eventAuthor(ev), ev.Text)
+		if _, err := fmt.Fprintln(w, line); err != nil {
 			return err
 		}
 	}

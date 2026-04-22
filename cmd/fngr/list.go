@@ -23,15 +23,5 @@ func (c *ListCmd) Run(db *sql.DB) error {
 	if err != nil {
 		return err
 	}
-
-	switch c.Format {
-	case "json":
-		return render.JSON(os.Stdout, events)
-	case "csv":
-		return render.CSV(os.Stdout, events)
-	case "flat":
-		return render.Flat(os.Stdout, events)
-	default:
-		return render.Tree(os.Stdout, events)
-	}
+	return render.Events(os.Stdout, c.Format, events)
 }

@@ -23,27 +23,12 @@ func (c *ShowCmd) Run(db *sql.DB) error {
 		if err != nil {
 			return err
 		}
-		switch c.Format {
-		case "json":
-			return render.JSON(os.Stdout, events)
-		case "csv":
-			return render.CSV(os.Stdout, events)
-		default:
-			return render.Tree(os.Stdout, events)
-		}
+		return render.Events(os.Stdout, c.Format, events)
 	}
 
 	ev, err := event.Get(ctx, db, c.ID)
 	if err != nil {
 		return err
 	}
-
-	switch c.Format {
-	case "json":
-		return render.JSON(os.Stdout, []event.Event{*ev})
-	case "csv":
-		return render.CSV(os.Stdout, []event.Event{*ev})
-	default:
-		return render.Event(os.Stdout, ev)
-	}
+	return render.SingleEvent(os.Stdout, c.Format, ev)
 }

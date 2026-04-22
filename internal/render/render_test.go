@@ -165,6 +165,62 @@ func TestFlat(t *testing.T) {
 	}
 }
 
+func TestEvents_Dispatch(t *testing.T) {
+	t.Parallel()
+	events := []event.Event{makeEvent(1, nil, "hi", "2026-04-10", "nicolas")}
+
+	tests := []struct {
+		format string
+		check  func(string) bool
+	}{
+		{"tree", func(s string) bool { return strings.Contains(s, "1   2026-04-10  nicolas  hi") }},
+		{"flat", func(s string) bool { return strings.Contains(s, "1   2026-04-10  nicolas  hi") }},
+		{"json", func(s string) bool { return strings.HasPrefix(s, "[\n") }},
+		{"csv", func(s string) bool { return strings.HasPrefix(s, "id,parent_id,") }},
+		{"unknown", func(s string) bool { return strings.Contains(s, "1   2026-04-10  nicolas  hi") }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.format, func(t *testing.T) {
+			t.Parallel()
+			var b bytes.Buffer
+			if err := Events(&b, tt.format, events); err != nil {
+				t.Fatalf("Events: %v", err)
+			}
+			if !tt.check(b.String()) {
+				t.Errorf("Events(%q) unexpected output:\n%s", tt.format, b.String())
+			}
+		})
+	}
+}
+
+func TestSingleEvent_Dispatch(t *testing.T) {
+	t.Parallel()
+	ev := makeEvent(1, nil, "hi", "2026-04-10", "nicolas")
+
+	tests := []struct {
+		format string
+		check  func(string) bool
+	}{
+		{"text", func(s string) bool { return strings.Contains(s, "ID:     1") }},
+		{"json", func(s string) bool { return strings.HasPrefix(s, "[\n") }},
+		{"csv", func(s string) bool { return strings.HasPrefix(s, "id,parent_id,") }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.format, func(t *testing.T) {
+			t.Parallel()
+			var b bytes.Buffer
+			if err := SingleEvent(&b, tt.format, &ev); err != nil {
+				t.Fatalf("SingleEvent: %v", err)
+			}
+			if !tt.check(b.String()) {
+				t.Errorf("SingleEvent(%q) unexpected output:\n%s", tt.format, b.String())
+			}
+		})
+	}
+}
+
 func TestMetaValue(t *testing.T) {
 	t.Parallel()
 	meta := []parse.Meta{
