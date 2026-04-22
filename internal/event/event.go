@@ -171,6 +171,18 @@ func DeleteMeta(ctx context.Context, db *sql.DB, key, value string) (int64, erro
 	return res.RowsAffected()
 }
 
+func CountMeta(ctx context.Context, db *sql.DB, key, value string) (int64, error) {
+	var n int64
+	err := db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM event_meta WHERE key = ? AND value = ?",
+		key, value,
+	).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("count meta: %w", err)
+	}
+	return n, nil
+}
+
 func ListMeta(ctx context.Context, db *sql.DB) ([]MetaCount, error) {
 	rows, err := db.QueryContext(ctx,
 		"SELECT key, value, COUNT(*) AS count FROM event_meta GROUP BY key, value ORDER BY key, value",

@@ -319,6 +319,40 @@ func TestList_WithDateRange(t *testing.T) {
 	}
 }
 
+func TestCountMeta(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	for range 3 {
+		if _, err := Add(ctx, database, "evt", nil, []parse.Meta{
+			{Key: MetaKeyTag, Value: "ops"},
+		}, nil); err != nil {
+			t.Fatalf("Add: %v", err)
+		}
+	}
+	if _, err := Add(ctx, database, "other", nil, []parse.Meta{
+		{Key: MetaKeyTag, Value: "work"},
+	}, nil); err != nil {
+		t.Fatalf("Add other: %v", err)
+	}
+
+	got, err := CountMeta(ctx, database, MetaKeyTag, "ops")
+	if err != nil {
+		t.Fatalf("CountMeta: %v", err)
+	}
+	if got != 3 {
+		t.Errorf("CountMeta(tag, ops) = %d, want 3", got)
+	}
+
+	got, err = CountMeta(ctx, database, MetaKeyTag, "missing")
+	if err != nil {
+		t.Fatalf("CountMeta missing: %v", err)
+	}
+	if got != 0 {
+		t.Errorf("CountMeta(tag, missing) = %d, want 0", got)
+	}
+}
+
 func TestListMeta(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)

@@ -67,16 +67,16 @@ func (c *MetaUpdateCmd) Run(db *sql.DB) error {
 		return fmt.Errorf("invalid new meta %q: expected key=value", c.New)
 	}
 
-	affected, err := event.UpdateMeta(ctx, db, oldKey, oldValue, newKey, newValue)
+	count, err := event.CountMeta(ctx, db, oldKey, oldValue)
 	if err != nil {
 		return err
 	}
-	if affected == 0 {
+	if count == 0 {
 		return fmt.Errorf("no metadata matching %s=%s", oldKey, oldValue)
 	}
 
 	if !c.Force {
-		fmt.Printf("Update %d occurrence(s) of %s=%s to %s=%s? [Y/n] ", affected, oldKey, oldValue, newKey, newValue)
+		fmt.Printf("Update %d occurrence(s) of %s=%s to %s=%s? [Y/n] ", count, oldKey, oldValue, newKey, newValue)
 		reader := bufio.NewReader(os.Stdin)
 		answer, _ := reader.ReadString('\n')
 		answer = strings.TrimSpace(strings.ToLower(answer))
@@ -86,7 +86,7 @@ func (c *MetaUpdateCmd) Run(db *sql.DB) error {
 		}
 	}
 
-	affected, err = event.UpdateMeta(ctx, db, oldKey, oldValue, newKey, newValue)
+	affected, err := event.UpdateMeta(ctx, db, oldKey, oldValue, newKey, newValue)
 	if err != nil {
 		return err
 	}
@@ -108,24 +108,16 @@ func (c *MetaDeleteCmd) Run(db *sql.DB) error {
 		return fmt.Errorf("invalid meta %q: expected key=value", c.Meta)
 	}
 
-	// Dry-run count first
-	counts, err := event.ListMeta(ctx, db)
+	count, err := event.CountMeta(ctx, db, key, value)
 	if err != nil {
 		return err
 	}
-	var affected int
-	for _, mc := range counts {
-		if mc.Key == key && mc.Value == value {
-			affected = mc.Count
-			break
-		}
-	}
-	if affected == 0 {
+	if count == 0 {
 		return fmt.Errorf("no metadata matching %s=%s", key, value)
 	}
 
 	if !c.Force {
-		fmt.Printf("Delete %d occurrence(s) of %s=%s? [Y/n] ", affected, key, value)
+		fmt.Printf("Delete %d occurrence(s) of %s=%s? [Y/n] ", count, key, value)
 		reader := bufio.NewReader(os.Stdin)
 		answer, _ := reader.ReadString('\n')
 		answer = strings.TrimSpace(strings.ToLower(answer))
