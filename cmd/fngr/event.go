@@ -27,7 +27,7 @@ type EventCmd struct {
 type EventShowCmd struct {
 	ID     int64  `arg:"" help:"Event ID."`
 	Tree   bool   `help:"Show subtree." short:"t"`
-	Format string `help:"Output format: text (default), json, csv." enum:"text,json,csv" default:"text"`
+	Format string `help:"Output format: text (default), json, csv." enum:"${EVENT_FORMATS}" default:"${EVENT_FORMAT_DEFAULT}"`
 }
 
 func (c *EventShowCmd) Run(s eventStore, io ioStreams) error {

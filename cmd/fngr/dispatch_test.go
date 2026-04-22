@@ -17,7 +17,7 @@ func dispatch(t *testing.T, argv []string, stdin string) (string, error) {
 	var cli CLI
 	parser, err := kong.New(&cli,
 		kong.Name("fngr"),
-		kong.Vars{"version": "test", "USER": "tester"},
+		kongVars("test", "tester"),
 		kong.Exit(func(int) {}),
 		kong.Writers(&bytes.Buffer{}, &bytes.Buffer{}),
 	)
@@ -98,7 +98,7 @@ func TestKongDispatch_AddThenListEndToEnd(t *testing.T) {
 	var cli CLI
 	parser, err := kong.New(&cli,
 		kong.Name("fngr"),
-		kong.Vars{"version": "test", "USER": "tester"},
+		kongVars("test", "tester"),
 		kong.Exit(func(int) {}),
 	)
 	if err != nil {

@@ -5,52 +5,52 @@ sub-project below ships through its own brainstorm → spec → plan → impleme
 cycle. Specs land under `docs/superpowers/specs/`, plans under
 `docs/superpowers/plans/`.
 
-## S1 — `list` UX overhaul (done)
+## Done
 
-- `fngr` (no args) ≡ `fngr list`.
-- Default sort is descending on `created_at` (newest first); replace
-  `--sort asc|desc` with `-r` / `--reverse`.
-- Time display in human formats: `Dec 09 9.32pm` (no year, period in time,
-  lowercase am/pm).
-- Stream rows from the database to the renderer wherever the renderer allows
-  (tree must still load all events to compute parent/child topology; flat,
-  json, csv can stream in batches).
-- Auto-paginate when stdout is a TTY.
+- **`list` UX overhaul** — `fngr` ≡ `fngr list`, descending default, human
+  time formats (`Dec 09 9.32pm`), streaming renderers, auto-pagination on TTY.
+- **`event` namespace** — `fngr event N` shows event N; verbs
+  `text` / `time` / `date` / `attach` / `detach` / `tag` / `untag` mutate.
+  Old `fngr edit` and `fngr show` removed.
+- **`meta` UX** — `fngr meta` ≡ `fngr meta list`; `-S` filter accepts bare
+  key / `key=value` / `@person` / `#tag`; `meta rename` (was `meta update`)
+  and `meta delete` mutate.
 
-## S2 — `event` namespace + subcommands (done)
+## Add command ergonomics
 
-- Rename `show` → `event`. `fngr event 5` shows event 5 (replaces current
-  `fngr show 5`); `fngr event 5 --tree` keeps the subtree view.
-- Subcommand verbs:
-  - `fngr event 5 text "..."` — replace text. Re-parse `@person` / `#tag`
-    body tags and merge with existing meta (`INSERT … ON CONFLICT DO NOTHING`
-    semantics).
-  - `fngr event 5 time "..."` — replace clock time, keep original date when
-    only a time is given; full timestamp replaces both.
-  - `fngr event 5 date "..."` — replace date, keep original time when only a
-    date is given; full timestamp replaces both.
-  - `fngr event 5 attach <id>` — set `parent_id`.
-  - `fngr event 5 detach` — clear `parent_id`.
-  - `fngr event 5 tag @Mila env=prod` — add one or more tags (n args, mixes
-    `@`/`#`/`key=value`).
-  - `fngr event 5 untag @Mila tag=ops` — remove one or more tags (n args).
-- The current `fngr edit` is removed (its behaviour folds into
-  `fngr event N text/time/date`).
+- **Multi-arg body** — `fngr add foo bar baz` consolidates positional args
+  into a single body string so casual entries don't need quoting.
+- **Stdin body** — when stdin is not a TTY (`echo ... | fngr add` or
+  `fngr add < file`), use the piped content as the body.
+- **`$EDITOR` support** — with no args on an interactive TTY (or via an
+  explicit flag) launch `$EDITOR` on a temp file and use the saved contents
+  as the body.
+- **`--format=json` import** — accept a single event or an array of events on
+  stdin / in a file for bulk import.
 
-## S3 — `meta` UX (done)
+## Output format polish
 
-- `fngr meta` (no subcommand) ≡ `fngr meta list`.
-- `fngr meta` accepts a filter argument (key only, value only, or `key=value`).
-- `meta update` renamed to `meta rename`.
+- **JSON tag shape** — switch `meta` from `{key: [values]}` to
+  `[[key, value], ...]`. Shorter on the wire and naturally extends to
+  per-tuple multi-value semantics down the road.
+- **Markdown format** (`--format=md`) — one `##` header per date followed by
+  a bullet list of `<time> — <content>` entries.
 
-## S4 — `help` alias
+## CLI surface alignment
 
-- `fngr help` ≡ `fngr --help`.
-- `fngr help <cmd>` ≡ `fngr <cmd> --help`.
+- **Compact help** — reformat help output to
+  `command args [flags]   description`, one line per command, column-aligned.
+- **`-S` for search everywhere** — `fngr -S "..."` for list and
+  `fngr meta -S "..."` for meta share the same flag spelling. Meta requires
+  `-S` because of its subcommand tree; list mirrors the idiom so users learn
+  one form. Now load-bearing: `fngr add` is gaining multi-arg input, so
+  positional search on the bare command would be ambiguous.
+- **`help` alias** — `fngr help` ≡ `fngr --help`; `fngr help <cmd>` ≡
+  `fngr <cmd> --help`.
 
-## S5 — Auto-tag character expansion (deferred)
+## Deferred
 
-Open question, not a feature. Brainstorm separately before commitment. Goal:
-explore whether other shorthand symbols (e.g. `^location`, `+company`,
-`~mood`) are worth adding given the existing `@person` / `#tag` system, and
-which symbols are unambiguous enough to use.
+- **Auto-tag character expansion** — explore whether other shorthand symbols
+  (e.g. `^location`, `+company`, `~mood`) are worth adding alongside the
+  existing `@person` / `#tag` system, and which symbols are unambiguous
+  enough. Open question; brainstorm separately before commitment.

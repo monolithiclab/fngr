@@ -14,6 +14,23 @@ import (
 	"github.com/monolithiclab/fngr/internal/timefmt"
 )
 
+// Output format identifiers used by the CLI's --format flag and the
+// render dispatchers below. cmd/fngr wires these into Kong via kongVars
+// so the flag enum and default stay in lockstep with this package.
+const (
+	FormatTree = "tree"
+	FormatFlat = "flat"
+	FormatJSON = "json"
+	FormatCSV  = "csv"
+	FormatText = "text"
+)
+
+// ListFormats are the formats accepted by Events and EventsStream.
+var ListFormats = []string{FormatTree, FormatFlat, FormatJSON, FormatCSV}
+
+// EventFormats are the formats accepted by SingleEvent.
+var EventFormats = []string{FormatText, FormatJSON, FormatCSV}
+
 // nowFunc is the relative-stamp anchor. Production never reassigns it;
 // tests swap it via pinNow inside non-parallel subtests.
 var nowFunc = time.Now
@@ -44,27 +61,27 @@ func formatEventLine(id int64, date, author, text string) string {
 }
 
 // Events writes a list of events in the requested format. Supported formats
-// are "tree" (default), "flat", "json", "csv".
+// are FormatTree (default), FormatFlat, FormatJSON, FormatCSV.
 func Events(w io.Writer, format string, events []event.Event) error {
 	switch format {
-	case "csv":
+	case FormatCSV:
 		return CSV(w, events)
-	case "flat":
+	case FormatFlat:
 		return Flat(w, events)
-	case "json":
+	case FormatJSON:
 		return JSON(w, events)
 	default:
 		return Tree(w, events)
 	}
 }
 
-// SingleEvent writes one event in the requested format. Supported formats are
-// "text" (default), "json", "csv".
+// SingleEvent writes one event in the requested format. Supported formats
+// are FormatText (default), FormatJSON, FormatCSV.
 func SingleEvent(w io.Writer, format string, ev *event.Event) error {
 	switch format {
-	case "csv":
+	case FormatCSV:
 		return CSV(w, []event.Event{*ev})
-	case "json":
+	case FormatJSON:
 		return JSON(w, []event.Event{*ev})
 	default:
 		return Event(w, ev)
@@ -319,13 +336,13 @@ func JSONStream(w io.Writer, seq iter.Seq2[event.Event, error]) error {
 // tree must use Events with a materialized []Event.
 func EventsStream(w io.Writer, format string, seq iter.Seq2[event.Event, error]) error {
 	switch format {
-	case "csv":
+	case FormatCSV:
 		return CSVStream(w, seq)
-	case "json":
+	case FormatJSON:
 		return JSONStream(w, seq)
-	case "flat":
+	case FormatFlat:
 		return FlatStream(w, seq)
-	case "tree":
+	case FormatTree:
 		return fmt.Errorf("EventsStream: tree format requires the full slice; use Events instead")
 	default:
 		return FlatStream(w, seq)

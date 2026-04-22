@@ -9,6 +9,7 @@ import (
 	"github.com/alecthomas/kong"
 	"github.com/monolithiclab/fngr/internal/db"
 	"github.com/monolithiclab/fngr/internal/event"
+	"github.com/monolithiclab/fngr/internal/render"
 )
 
 var version = "dev"
@@ -34,6 +35,19 @@ func currentUser() string {
 	return ""
 }
 
+// kongVars centralizes the template variables Kong tags reference. Both
+// main() and the dispatch tests use this so the two call sites can't drift.
+func kongVars(version, username string) kong.Vars {
+	return kong.Vars{
+		"version":              version,
+		"USER":                 username,
+		"LIST_FORMATS":         strings.Join(render.ListFormats, ","),
+		"LIST_FORMAT_DEFAULT":  render.FormatTree,
+		"EVENT_FORMATS":        strings.Join(render.EventFormats, ","),
+		"EVENT_FORMAT_DEFAULT": render.FormatText,
+	}
+}
+
 func main() {
 	username := currentUser()
 
@@ -41,10 +55,7 @@ func main() {
 	ctx := kong.Parse(&cli,
 		kong.Name("fngr"),
 		kong.Description("A CLI to log and track events."),
-		kong.Vars{
-			"version": version,
-			"USER":    username,
-		},
+		kongVars(version, username),
 		kong.UsageOnError(),
 	)
 
