@@ -13,7 +13,8 @@ import (
 var version = "dev"
 
 type CLI struct {
-	DB string `help:"Path to database file." env:"FNGR_DB" type:"path"`
+	DB      string           `help:"Path to database file." env:"FNGR_DB" type:"path"`
+	Version kong.VersionFlag `help:"Print version and exit."`
 
 	Add    AddCmd    `cmd:"" help:"Add an event."`
 	List   ListCmd   `cmd:"" help:"List events."`
