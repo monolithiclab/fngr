@@ -12,7 +12,9 @@ import (
 )
 
 func makeEvent(id int64, parentID *int64, text string, date string, author string) event.Event {
-	t, _ := time.Parse("2006-01-02", date)
+	// Parse in local time so fixtures render at 12.00am regardless of the
+	// runner's timezone (FormatRelative converts via t.Local()).
+	t, _ := time.ParseInLocation("2006-01-02", date, time.Local)
 	return event.Event{
 		ID:        id,
 		ParentID:  parentID,
@@ -32,18 +34,13 @@ func renderTreeString(t *testing.T, events []event.Event) string {
 }
 
 // pinNow forces formatLocalStamp to use a fixed anchor so tree/flat output
-// is deterministic across runs and across calendar years.
+// is deterministic across runs and across calendar years. Tests calling
+// pinNow must NOT use t.Parallel(), since nowFunc is package-global.
 func pinNow(t *testing.T, now time.Time) {
 	t.Helper()
-	nowMu.Lock()
 	prev := nowFunc
 	nowFunc = func() time.Time { return now }
-	nowMu.Unlock()
-	t.Cleanup(func() {
-		nowMu.Lock()
-		defer nowMu.Unlock()
-		nowFunc = prev
-	})
+	t.Cleanup(func() { nowFunc = prev })
 }
 
 func TestTree_Empty(t *testing.T) {
@@ -64,8 +61,8 @@ func TestTree_FlatList(t *testing.T) {
 	}
 
 	want := "" +
-		"1   Apr 10 2026 2.00am  nicolas  First event\n" +
-		"2   Apr 11 2026 2.00am  nicolas  Second event\n"
+		"1   Apr 10 2026 12.00am  nicolas  First event\n" +
+		"2   Apr 11 2026 12.00am  nicolas  Second event\n"
 
 	got := renderTreeString(t, events)
 	if got != want {
@@ -83,9 +80,9 @@ func TestTree_NestedChildren(t *testing.T) {
 	}
 
 	want := "" +
-		"1   Apr 10 2026 2.00am  nicolas  Parent event\n" +
-		"\u251c\u2500 2   Apr 10 2026 2.00am  nicolas  First child\n" +
-		"\u2514\u2500 3   Apr 11 2026 2.00am  nicolas  Second child\n"
+		"1   Apr 10 2026 12.00am  nicolas  Parent event\n" +
+		"\u251c\u2500 2   Apr 10 2026 12.00am  nicolas  First child\n" +
+		"\u2514\u2500 3   Apr 11 2026 12.00am  nicolas  Second child\n"
 
 	got := renderTreeString(t, events)
 	if got != want {
@@ -104,9 +101,9 @@ func TestTree_DeepNesting(t *testing.T) {
 	}
 
 	want := "" +
-		"1   Apr 10 2026 2.00am  nicolas  Root\n" +
-		"\u2514\u2500 2   Apr 10 2026 2.00am  nicolas  Child\n" +
-		"   \u2514\u2500 3   Apr 11 2026 2.00am  nicolas  Grandchild\n"
+		"1   Apr 10 2026 12.00am  nicolas  Root\n" +
+		"\u2514\u2500 2   Apr 10 2026 12.00am  nicolas  Child\n" +
+		"   \u2514\u2500 3   Apr 11 2026 12.00am  nicolas  Grandchild\n"
 
 	got := renderTreeString(t, events)
 	if got != want {
@@ -127,11 +124,11 @@ func TestTree_MixedRootsAndChildren(t *testing.T) {
 	}
 
 	want := "" +
-		"1   Apr 10 2026 2.00am  nicolas  Sprint 12 #work\n" +
-		"\u251c\u2500 2   Apr 10 2026 2.00am  nicolas  Planning meeting\n" +
-		"\u2502  \u2514\u2500 4   Apr 10 2026 2.00am  nicolas  Decided on architecture\n" +
-		"\u2514\u2500 3   Apr 11 2026 2.00am  nicolas  Deploy v2.0 #ops\n" +
-		"5   Apr 12 2026 2.00am  nicolas  Lunch with Sarah\n"
+		"1   Apr 10 2026 12.00am  nicolas  Sprint 12 #work\n" +
+		"\u251c\u2500 2   Apr 10 2026 12.00am  nicolas  Planning meeting\n" +
+		"\u2502  \u2514\u2500 4   Apr 10 2026 12.00am  nicolas  Decided on architecture\n" +
+		"\u2514\u2500 3   Apr 11 2026 12.00am  nicolas  Deploy v2.0 #ops\n" +
+		"5   Apr 12 2026 12.00am  nicolas  Lunch with Sarah\n"
 
 	got := renderTreeString(t, events)
 	if got != want {
@@ -149,8 +146,8 @@ func TestTree_OrphanedChildren(t *testing.T) {
 	}
 
 	want := "" +
-		"1   Apr 10 2026 2.00am  nicolas  Filtered child\n" +
-		"2   Apr 11 2026 2.00am  nicolas  Another orphan\n"
+		"1   Apr 10 2026 12.00am  nicolas  Filtered child\n" +
+		"2   Apr 11 2026 12.00am  nicolas  Another orphan\n"
 
 	got := renderTreeString(t, events)
 	if got != want {
@@ -167,8 +164,8 @@ func TestFlat(t *testing.T) {
 	}
 
 	want := "" +
-		"1   Apr 10 2026 2.00am  nicolas  Parent event\n" +
-		"2   Apr 11 2026 2.00am  nicolas  Child event\n"
+		"1   Apr 10 2026 12.00am  nicolas  Parent event\n" +
+		"2   Apr 11 2026 12.00am  nicolas  Child event\n"
 
 	var b bytes.Buffer
 	if err := Flat(&b, events); err != nil {
@@ -222,11 +219,11 @@ func TestEvents_Dispatch(t *testing.T) {
 		format string
 		check  func(string) bool
 	}{
-		{"tree", func(s string) bool { return strings.Contains(s, "1   Apr 10 2026 2.00am  nicolas  hi") }},
-		{"flat", func(s string) bool { return strings.Contains(s, "1   Apr 10 2026 2.00am  nicolas  hi") }},
+		{"tree", func(s string) bool { return strings.Contains(s, "1   Apr 10 2026 12.00am  nicolas  hi") }},
+		{"flat", func(s string) bool { return strings.Contains(s, "1   Apr 10 2026 12.00am  nicolas  hi") }},
 		{"json", func(s string) bool { return strings.HasPrefix(s, "[\n") }},
 		{"csv", func(s string) bool { return strings.HasPrefix(s, "id,parent_id,") }},
-		{"unknown", func(s string) bool { return strings.Contains(s, "1   Apr 10 2026 2.00am  nicolas  hi") }},
+		{"unknown", func(s string) bool { return strings.Contains(s, "1   Apr 10 2026 12.00am  nicolas  hi") }},
 	}
 
 	for _, tt := range tests {

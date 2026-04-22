@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/monolithiclab/fngr/internal/event"
@@ -14,15 +13,11 @@ import (
 	"github.com/monolithiclab/fngr/internal/timefmt"
 )
 
-// nowFunc lets tests pin the relative-stamp anchor.
-var (
-	nowMu   sync.RWMutex
-	nowFunc = time.Now
-)
+// nowFunc is the relative-stamp anchor. Production never reassigns it;
+// tests swap it via pinNow inside non-parallel subtests.
+var nowFunc = time.Now
 
 func formatLocalStamp(t time.Time) string {
-	nowMu.RLock()
-	defer nowMu.RUnlock()
 	return timefmt.FormatRelative(t, nowFunc())
 }
 
