@@ -129,3 +129,7 @@ release:
     owner: monolithiclab
     name: fngr
   prerelease: auto
+  # Re-runs of a partially-failed release (e.g. brew step 401'd after the
+  # GitHub Release was already created) need to overwrite existing assets
+  # rather than 422-fail on already_exists.
+  replace_existing_artifacts: true
