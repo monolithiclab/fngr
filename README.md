@@ -12,12 +12,38 @@ Data is stored in a single SQLite file (pure-Go, no CGo).
 go install github.com/monolithiclab/fngr/cmd/fngr@latest
 ```
 
+Or via Homebrew (macOS / Linux):
+
+```
+brew install monolithiclab/tap/fngr
+```
+
 Or build from source:
 
 ```
 make build        # binary at build/fngr
 make install      # installs to $GOBIN
 ```
+
+### Container usage
+
+A multi-arch container image is published on each release at
+`ghcr.io/monolithiclab/fngr:<version>` (and `:latest` for stable
+releases). The image is ~6 MB, distroless-based.
+
+```
+docker run --rm \
+  -v "$HOME/.fngr.db:/data/fngr.db" \
+  -e FNGR_DB=/data/fngr.db \
+  -e TZ=America/New_York \
+  ghcr.io/monolithiclab/fngr:latest -S '#ops'
+```
+
+Caveats: the container is for scripted use (`add "note"`, `--format=json`,
+etc.). Interactive features are disabled — `fngr add -e` needs `$EDITOR`
+and a binary in the image (not provided), and the pager needs `less` +
+a TTY (also absent). Time-of-day rendering defaults to UTC unless `TZ`
+is passed.
 
 ## Quick start
 
