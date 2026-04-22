@@ -102,3 +102,102 @@ func TestFormatRelative(t *testing.T) {
 		})
 	}
 }
+
+func TestParsePartial(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	tests := []struct {
+		name        string
+		input       string
+		wantHasDate bool
+		wantHasTime bool
+		check       func(t *testing.T, got time.Time)
+	}{
+		{
+			name:        "date only",
+			input:       "2026-04-15",
+			wantHasDate: true,
+			wantHasTime: false,
+			check: func(t *testing.T, got time.Time) {
+				want := time.Date(2026, 4, 15, 0, 0, 0, 0, time.Local)
+				if !got.Equal(want) {
+					t.Errorf("got %v, want %v", got, want)
+				}
+			},
+		},
+		{
+			name:        "datetime",
+			input:       "2026-04-15T14:30",
+			wantHasDate: true,
+			wantHasTime: true,
+			check: func(t *testing.T, got time.Time) {
+				want := time.Date(2026, 4, 15, 14, 30, 0, 0, time.Local)
+				if !got.Equal(want) {
+					t.Errorf("got %v, want %v", got, want)
+				}
+			},
+		},
+		{
+			name:        "RFC3339",
+			input:       now.UTC().Format(time.RFC3339),
+			wantHasDate: true,
+			wantHasTime: true,
+			check:       nil,
+		},
+		{
+			name:        "24h time only",
+			input:       "09:30",
+			wantHasDate: false,
+			wantHasTime: true,
+			check: func(t *testing.T, got time.Time) {
+				if got.Hour() != 9 || got.Minute() != 30 {
+					t.Errorf("got h=%d m=%d, want 9:30", got.Hour(), got.Minute())
+				}
+				today := time.Now()
+				if got.Year() != today.Year() || got.Month() != today.Month() || got.Day() != today.Day() {
+					t.Errorf("got date %v, want today", got)
+				}
+			},
+		},
+		{
+			name:        "12h pm",
+			input:       "2:15PM",
+			wantHasDate: false,
+			wantHasTime: true,
+			check: func(t *testing.T, got time.Time) {
+				if got.Hour() != 14 || got.Minute() != 15 {
+					t.Errorf("got h=%d m=%d, want 14:15", got.Hour(), got.Minute())
+				}
+			},
+		},
+		{
+			name:        "garbage",
+			input:       "not a time",
+			wantHasDate: false,
+			wantHasTime: false,
+			check:       nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, hasDate, hasTime, err := ParsePartial(tt.input)
+			if tt.input == "not a time" {
+				if err == nil {
+					t.Fatalf("ParsePartial(%q) expected error", tt.input)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParsePartial(%q) err = %v", tt.input, err)
+			}
+			if hasDate != tt.wantHasDate || hasTime != tt.wantHasTime {
+				t.Errorf("ParsePartial(%q) hasDate=%v hasTime=%v, want %v/%v",
+					tt.input, hasDate, hasTime, tt.wantHasDate, tt.wantHasTime)
+			}
+			if tt.check != nil {
+				tt.check(t, got)
+			}
+		})
+	}
+}
