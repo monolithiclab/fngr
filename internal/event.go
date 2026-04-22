@@ -59,12 +59,16 @@ func AddEvent(db *sql.DB, text string, parentID *int64, meta []Meta) (int64, err
 		return 0, fmt.Errorf("last insert id: %w", err)
 	}
 
-	for _, m := range meta {
-		if _, err := tx.Exec(
-			"INSERT INTO event_meta (event_id, key, value) VALUES (?, ?, ?)",
-			id, m.Key, m.Value,
-		); err != nil {
-			return 0, fmt.Errorf("insert meta: %w", err)
+	if len(meta) > 0 {
+		stmt, err := tx.Prepare("INSERT INTO event_meta (event_id, key, value) VALUES (?, ?, ?)")
+		if err != nil {
+			return 0, fmt.Errorf("prepare meta insert: %w", err)
+		}
+		defer stmt.Close()
+		for _, m := range meta {
+			if _, err := stmt.Exec(id, m.Key, m.Value); err != nil {
+				return 0, fmt.Errorf("insert meta: %w", err)
+			}
 		}
 	}
 
@@ -217,14 +221,6 @@ func ListEvents(db *sql.DB, opts ListOpts) ([]Event, error) {
 // The root event must exist or an error is returned. Results are ordered by
 // created_at ASC and each event includes its metadata.
 func GetSubtree(db *sql.DB, rootID int64) ([]Event, error) {
-	var exists int
-	if err := db.QueryRow("SELECT 1 FROM events WHERE id = ?", rootID).Scan(&exists); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, fmt.Errorf("event %d: %w", rootID, ErrNotFound)
-		}
-		return nil, fmt.Errorf("query event: %w", err)
-	}
-
 	rows, err := db.Query(`
 		WITH RECURSIVE subtree AS (
 			SELECT id, parent_id, text, created_at FROM events WHERE id = ?
@@ -239,7 +235,14 @@ func GetSubtree(db *sql.DB, rootID int64) ([]Event, error) {
 	}
 	defer rows.Close()
 
-	return scanEvents(db, rows)
+	events, err := scanEvents(db, rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(events) == 0 {
+		return nil, fmt.Errorf("event %d: %w", rootID, ErrNotFound)
+	}
+	return events, nil
 }
 
 func scanEvents(db *sql.DB, rows *sql.Rows) ([]Event, error) {
@@ -259,15 +262,46 @@ func scanEvents(db *sql.DB, rows *sql.Rows) ([]Event, error) {
 		return nil, fmt.Errorf("iterate events: %w", err)
 	}
 
-	for i := range events {
-		meta, err := loadMeta(db, events[i].ID)
-		if err != nil {
+	if len(events) > 0 {
+		if err := loadMetaBatch(db, events); err != nil {
 			return nil, err
 		}
-		events[i].Meta = meta
 	}
 
 	return events, nil
+}
+
+func loadMetaBatch(db *sql.DB, events []Event) error {
+	ids := make([]any, len(events))
+	idIdx := make(map[int64]int, len(events))
+	for i, e := range events {
+		ids[i] = e.ID
+		idIdx[e.ID] = i
+	}
+
+	placeholders := strings.Repeat("?,", len(ids))
+	placeholders = placeholders[:len(placeholders)-1]
+
+	query := "SELECT event_id, key, value FROM event_meta WHERE event_id IN (" + placeholders + ") ORDER BY event_id, key, value" // #nosec G202 -- placeholders are "?" repeated, not user input
+	rows, err := db.Query(query,
+		ids...,
+	)
+	if err != nil {
+		return fmt.Errorf("query meta batch: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var eventID int64
+		var m Meta
+		if err := rows.Scan(&eventID, &m.Key, &m.Value); err != nil {
+			return fmt.Errorf("scan meta: %w", err)
+		}
+		if idx, ok := idIdx[eventID]; ok {
+			events[idx].Meta = append(events[idx].Meta, m)
+		}
+	}
+	return rows.Err()
 }
 
 // loadMeta queries all metadata for a given event ID, ordered by key then value.
