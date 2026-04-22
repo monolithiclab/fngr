@@ -1,6 +1,8 @@
 package internal
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -134,5 +136,49 @@ func TestMetaValue(t *testing.T) {
 	}
 	if got := metaValue(nil, "author"); got != "" {
 		t.Errorf("metaValue(nil, author) = %q, want %q", got, "")
+	}
+}
+
+func TestRenderJSON(t *testing.T) {
+	events := []Event{
+		makeEvent(1, nil, "Test event", "2026-04-10", "nicolas"),
+	}
+
+	got := RenderJSON(events)
+
+	// Must be valid JSON.
+	var parsed []json.RawMessage
+	if err := json.Unmarshal([]byte(got), &parsed); err != nil {
+		t.Fatalf("RenderJSON produced invalid JSON: %v\noutput:\n%s", err, got)
+	}
+
+	// Must contain exactly 1 item.
+	if len(parsed) != 1 {
+		t.Errorf("RenderJSON produced %d items, want 1", len(parsed))
+	}
+
+	// Must end with a trailing newline.
+	if !strings.HasSuffix(got, "\n") {
+		t.Error("RenderJSON output missing trailing newline")
+	}
+}
+
+func TestRenderCSV(t *testing.T) {
+	events := []Event{
+		makeEvent(1, nil, "Test event", "2026-04-10", "nicolas"),
+	}
+
+	got := RenderCSV(events)
+	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
+
+	// Must have header + 1 data row = 2 lines total.
+	if len(lines) != 2 {
+		t.Errorf("RenderCSV produced %d lines, want 2; output:\n%s", len(lines), got)
+	}
+
+	// Header must be correct.
+	wantHeader := "id,parent_id,created_at,author,text"
+	if lines[0] != wantHeader {
+		t.Errorf("RenderCSV header = %q, want %q", lines[0], wantHeader)
 	}
 }

@@ -2,7 +2,11 @@ package internal
 
 import (
 	"bytes"
+	"encoding/csv"
+	"encoding/json"
 	"fmt"
+	"strconv"
+	"time"
 )
 
 // metaValue returns the value of the first Meta entry matching key, or "" if not found.
@@ -84,5 +88,54 @@ func RenderFlat(events []Event) string {
 		author := metaValue(ev.Meta, MetaKeyAuthor)
 		fmt.Fprintf(&b, "%-4d%s  %s  %s\n", ev.ID, date, author, ev.Text)
 	}
+	return b.String()
+}
+
+type jsonEvent struct {
+	ID        int64               `json:"id"`
+	ParentID  *int64              `json:"parent_id,omitempty"`
+	Text      string              `json:"text"`
+	CreatedAt string              `json:"created_at"`
+	Meta      map[string][]string `json:"meta,omitempty"`
+}
+
+func RenderJSON(events []Event) string {
+	out := make([]jsonEvent, len(events))
+	for i, ev := range events {
+		meta := make(map[string][]string)
+		for _, m := range ev.Meta {
+			meta[m.Key] = append(meta[m.Key], m.Value)
+		}
+		out[i] = jsonEvent{
+			ID:        ev.ID,
+			ParentID:  ev.ParentID,
+			Text:      ev.Text,
+			CreatedAt: ev.CreatedAt.Format(time.RFC3339),
+			Meta:      meta,
+		}
+	}
+	data, _ := json.MarshalIndent(out, "", "  ")
+	return string(data) + "\n"
+}
+
+func RenderCSV(events []Event) string {
+	var b bytes.Buffer
+	w := csv.NewWriter(&b)
+	w.Write([]string{"id", "parent_id", "created_at", "author", "text"})
+	for _, ev := range events {
+		parentID := ""
+		if ev.ParentID != nil {
+			parentID = strconv.FormatInt(*ev.ParentID, 10)
+		}
+		author := metaValue(ev.Meta, MetaKeyAuthor)
+		w.Write([]string{
+			strconv.FormatInt(ev.ID, 10),
+			parentID,
+			ev.CreatedAt.Format(time.RFC3339),
+			author,
+			ev.Text,
+		})
+	}
+	w.Flush()
 	return b.String()
 }
