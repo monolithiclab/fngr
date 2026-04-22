@@ -189,3 +189,126 @@ func TestEventCmd_DateRejectsTimeOnly(t *testing.T) {
 		t.Errorf("err = %v, want time-only rejection", err)
 	}
 }
+
+func TestEventCmd_AttachAndDetach(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, _ := newTestIO("")
+
+	a, _ := s.Add(context.Background(), "a", nil, nil, nil)
+	b, _ := s.Add(context.Background(), "b", nil, nil, nil)
+
+	if err := (&EventAttachCmd{ID: b, Parent: a}).Run(s, io); err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	ev, _ := s.Get(context.Background(), b)
+	if ev.ParentID == nil || *ev.ParentID != a {
+		t.Fatalf("ParentID = %v, want %d", ev.ParentID, a)
+	}
+
+	if err := (&EventDetachCmd{ID: b}).Run(s, io); err != nil {
+		t.Fatalf("Detach: %v", err)
+	}
+	ev, _ = s.Get(context.Background(), b)
+	if ev.ParentID != nil {
+		t.Errorf("ParentID = %d, want nil", *ev.ParentID)
+	}
+}
+
+func TestEventCmd_AttachRejectsCycle(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, _ := newTestIO("")
+
+	a, _ := s.Add(context.Background(), "a", nil, nil, nil)
+	b, _ := s.Add(context.Background(), "b", &a, nil, nil)
+
+	err := (&EventAttachCmd{ID: a, Parent: b}).Run(s, io)
+	if !errors.Is(err, event.ErrCycle) {
+		t.Errorf("err = %v, want ErrCycle", err)
+	}
+}
+
+func TestEventCmd_TagAddsAndDedups(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, _ := newTestIO("")
+
+	id, _ := s.Add(context.Background(), "x", nil, []parse.Meta{
+		{Key: "tag", Value: "ops"},
+	}, nil)
+
+	cmd := &EventTagCmd{ID: id, Args: []string{"#ops", "@alice", "env=prod"}}
+	if err := cmd.Run(s, io); err != nil {
+		t.Fatalf("Tag: %v", err)
+	}
+
+	want := map[parse.Meta]bool{
+		{Key: "tag", Value: "ops"}:      true,
+		{Key: "people", Value: "alice"}: true,
+		{Key: "env", Value: "prod"}:     true,
+	}
+	ev, _ := s.Get(context.Background(), id)
+	if len(ev.Meta) != len(want) {
+		t.Errorf("got %d meta, want %d: %v", len(ev.Meta), len(want), ev.Meta)
+	}
+	for _, m := range ev.Meta {
+		if !want[m] {
+			t.Errorf("unexpected meta %v", m)
+		}
+	}
+}
+
+func TestEventCmd_TagInvalidArgErrors(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, _ := newTestIO("")
+
+	id, _ := s.Add(context.Background(), "x", nil, nil, nil)
+	cmd := &EventTagCmd{ID: id, Args: []string{"#ops", "bare-word", "env=prod"}}
+	err := cmd.Run(s, io)
+	if err == nil {
+		t.Fatal("expected error for bare-word arg")
+	}
+	// Confirm no partial write happened.
+	n, _ := s.CountMeta(context.Background(), "tag", "ops")
+	if n != 0 {
+		t.Errorf("partial write: tag=ops count = %d, want 0", n)
+	}
+}
+
+func TestEventCmd_UntagRemovesAndReportsCount(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, out := newTestIO("")
+
+	id, _ := s.Add(context.Background(), "x", nil, []parse.Meta{
+		{Key: "tag", Value: "ops"},
+		{Key: "people", Value: "alice"},
+	}, nil)
+
+	cmd := &EventUntagCmd{ID: id, Args: []string{"#ops", "@alice"}}
+	if err := cmd.Run(s, io); err != nil {
+		t.Fatalf("Untag: %v", err)
+	}
+	if !strings.Contains(out.String(), "Untagged event") {
+		t.Errorf("output = %q, want Untagged event", out.String())
+	}
+	ev, _ := s.Get(context.Background(), id)
+	if len(ev.Meta) != 0 {
+		t.Errorf("Meta = %v, want empty", ev.Meta)
+	}
+}
+
+func TestEventCmd_UntagNothingMatches(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, _ := newTestIO("")
+
+	id, _ := s.Add(context.Background(), "x", nil, nil, nil)
+	cmd := &EventUntagCmd{ID: id, Args: []string{"#ghost"}}
+	err := cmd.Run(s, io)
+	if err == nil || !strings.Contains(err.Error(), "nothing to untag") {
+		t.Errorf("err = %v, want 'nothing to untag'", err)
+	}
+}
