@@ -140,6 +140,17 @@ func jsonInputToAddInput(in jsonAddInput, defaults cliDefaults, defaultAuthor st
 	// here to honour an explicit JSON `author` entry instead.
 	merged := mergeMetaForJSON(text, explicit, defaultAuthor)
 
+	hasAuthor := false
+	for _, m := range merged {
+		if m.Key == event.MetaKeyAuthor {
+			hasAuthor = true
+			break
+		}
+	}
+	if !hasAuthor {
+		return event.AddInput{}, fmt.Errorf("--format=json: record %d: author is required (set meta.author, --author, FNGR_AUTHOR, or $USER)", index)
+	}
+
 	return event.AddInput{
 		Text:      text,
 		ParentID:  parent,
@@ -171,7 +182,7 @@ func mergeMetaForJSON(text string, explicit []parse.Meta, defaultAuthor string) 
 			break
 		}
 	}
-	if !hasExplicitAuthor {
+	if !hasExplicitAuthor && defaultAuthor != "" {
 		add(parse.Meta{Key: event.MetaKeyAuthor, Value: defaultAuthor})
 	}
 

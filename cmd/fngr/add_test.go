@@ -432,6 +432,46 @@ func TestAddCmd_FormatJSON_PerRecordError(t *testing.T) {
 	}
 }
 
+func TestAddCmd_FormatJSON_AuthorFromJSONOverride(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, out, _ := newTestIOFull(`{"text":"hi","meta":[["author","bob"]]}`, false)
+
+	// Empty CLI author is OK because the JSON record names its own author.
+	cmd := &AddCmd{Format: "json", Author: ""}
+	if err := cmd.Run(s, io); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.Contains(out.String(), "Imported 1 event") {
+		t.Errorf("output = %q, want 'Imported 1 event'", out.String())
+	}
+	ev, _ := s.Get(context.Background(), 1)
+	authorCount := 0
+	for _, m := range ev.Meta {
+		if m.Key == "author" {
+			authorCount++
+			if m.Value != "bob" {
+				t.Errorf("author = %q, want 'bob'", m.Value)
+			}
+		}
+	}
+	if authorCount != 1 {
+		t.Errorf("found %d author entries, want exactly 1 (no ghost {author, \"\"})", authorCount)
+	}
+}
+
+func TestAddCmd_FormatJSON_NoAuthorAnywhereRejects(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, _, _ := newTestIOFull(`{"text":"hi"}`, false)
+
+	cmd := &AddCmd{Format: "json", Author: ""}
+	err := cmd.Run(s, io)
+	if err == nil || !strings.Contains(err.Error(), "author is required") {
+		t.Errorf("err = %v, want 'author is required'", err)
+	}
+}
+
 func TestAddCmd_FormatJSON_MetaFlagFallback(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)

@@ -22,10 +22,6 @@ type AddCmd struct {
 }
 
 func (c *AddCmd) Run(s eventStore, io ioStreams) error {
-	if c.Author == "" {
-		return fmt.Errorf("author is required: use --author, FNGR_AUTHOR, or ensure $USER is set")
-	}
-
 	if c.Format == render.FormatJSON {
 		if c.Edit {
 			return fmt.Errorf("--edit conflicts with --format=json")
@@ -51,6 +47,9 @@ func (c *AddCmd) Run(s eventStore, io ioStreams) error {
 }
 
 func (c *AddCmd) runText(s eventStore, io ioStreams, text string) error {
+	if c.Author == "" {
+		return fmt.Errorf("author is required: use --author, FNGR_AUTHOR, or ensure $USER is set")
+	}
 	meta, err := event.CollectMeta(text, c.Meta, c.Author)
 	if err != nil {
 		return err
