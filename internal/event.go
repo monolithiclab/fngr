@@ -25,7 +25,7 @@ type MetaCount struct {
 	Count int
 }
 
-func AddEvent(ctx context.Context, db *sql.DB, text string, parentID *int64, meta []Meta) (int64, error) {
+func AddEvent(ctx context.Context, db *sql.DB, text string, parentID *int64, meta []Meta, createdAt *time.Time) (int64, error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("begin transaction: %w", err)
@@ -43,10 +43,18 @@ func AddEvent(ctx context.Context, db *sql.DB, text string, parentID *int64, met
 		}
 	}
 
-	res, err := tx.ExecContext(ctx,
-		"INSERT INTO events (parent_id, text) VALUES (?, ?)",
-		parentID, text,
-	)
+	var res sql.Result
+	if createdAt != nil {
+		res, err = tx.ExecContext(ctx,
+			"INSERT INTO events (parent_id, text, created_at) VALUES (?, ?, ?)",
+			parentID, text, createdAt.Format("2006-01-02 15:04:05"),
+		)
+	} else {
+		res, err = tx.ExecContext(ctx,
+			"INSERT INTO events (parent_id, text) VALUES (?, ?)",
+			parentID, text,
+		)
+	}
 	if err != nil {
 		return 0, fmt.Errorf("insert event: %w", err)
 	}

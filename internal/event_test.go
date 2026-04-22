@@ -18,7 +18,7 @@ func TestAddEvent(t *testing.T) {
 		{Key: "people", Value: "bob"},
 	}
 
-	id, err := AddEvent(ctx, db, "standup with @bob #meeting", nil, meta)
+	id, err := AddEvent(ctx, db, "standup with @bob #meeting", nil, meta, nil)
 	if err != nil {
 		t.Fatalf("AddEvent: %v", err)
 	}
@@ -61,12 +61,12 @@ func TestAddEvent_WithParent(t *testing.T) {
 	t.Parallel()
 	db := testDBWithSchema(t)
 
-	parentID, err := AddEvent(ctx, db, "parent event", nil, nil)
+	parentID, err := AddEvent(ctx, db, "parent event", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("AddEvent parent: %v", err)
 	}
 
-	childID, err := AddEvent(ctx, db, "child event", &parentID, nil)
+	childID, err := AddEvent(ctx, db, "child event", &parentID, nil, nil)
 	if err != nil {
 		t.Fatalf("AddEvent child: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestAddEvent_InvalidParent(t *testing.T) {
 	db := testDBWithSchema(t)
 
 	invalidParent := int64(9999)
-	_, err := AddEvent(ctx, db, "orphan event", &invalidParent, nil)
+	_, err := AddEvent(ctx, db, "orphan event", &invalidParent, nil, nil)
 	if err == nil {
 		t.Fatal("expected error for invalid parent, got nil")
 	}
@@ -105,7 +105,7 @@ func TestGetEvent(t *testing.T) {
 		{Key: "tag", Value: "work"},
 	}
 
-	id, err := AddEvent(ctx, db, "get me", nil, meta)
+	id, err := AddEvent(ctx, db, "get me", nil, meta, nil)
 	if err != nil {
 		t.Fatalf("AddEvent: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestDeleteEvent(t *testing.T) {
 	t.Parallel()
 	db := testDBWithSchema(t)
 
-	id, err := AddEvent(ctx, db, "to be deleted", nil, nil)
+	id, err := AddEvent(ctx, db, "to be deleted", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("AddEvent: %v", err)
 	}
@@ -177,12 +177,12 @@ func TestDeleteEvent_CascadesChildren(t *testing.T) {
 	t.Parallel()
 	db := testDBWithSchema(t)
 
-	parentID, err := AddEvent(ctx, db, "parent", nil, []Meta{{Key: "author", Value: "alice"}})
+	parentID, err := AddEvent(ctx, db, "parent", nil, []Meta{{Key: "author", Value: "alice"}}, nil)
 	if err != nil {
 		t.Fatalf("AddEvent parent: %v", err)
 	}
 
-	childID, err := AddEvent(ctx, db, "child", &parentID, []Meta{{Key: "tag", Value: "reply"}})
+	childID, err := AddEvent(ctx, db, "child", &parentID, []Meta{{Key: "tag", Value: "reply"}}, nil)
 	if err != nil {
 		t.Fatalf("AddEvent child: %v", err)
 	}
@@ -206,11 +206,11 @@ func TestListEvents_NoFilter(t *testing.T) {
 	t.Parallel()
 	db := testDBWithSchema(t)
 
-	_, err := AddEvent(ctx, db, "first event #work", nil, []Meta{{Key: "tag", Value: "work"}})
+	_, err := AddEvent(ctx, db, "first event #work", nil, []Meta{{Key: "tag", Value: "work"}}, nil)
 	if err != nil {
 		t.Fatalf("AddEvent 1: %v", err)
 	}
-	_, err = AddEvent(ctx, db, "second event #personal", nil, []Meta{{Key: "tag", Value: "personal"}})
+	_, err = AddEvent(ctx, db, "second event #personal", nil, []Meta{{Key: "tag", Value: "personal"}}, nil)
 	if err != nil {
 		t.Fatalf("AddEvent 2: %v", err)
 	}
@@ -234,11 +234,11 @@ func TestListEvents_WithFilter(t *testing.T) {
 	t.Parallel()
 	db := testDBWithSchema(t)
 
-	_, err := AddEvent(ctx, db, "deploy to prod #ops", nil, []Meta{{Key: "tag", Value: "ops"}})
+	_, err := AddEvent(ctx, db, "deploy to prod #ops", nil, []Meta{{Key: "tag", Value: "ops"}}, nil)
 	if err != nil {
 		t.Fatalf("AddEvent 1: %v", err)
 	}
-	_, err = AddEvent(ctx, db, "standup meeting #work", nil, []Meta{{Key: "tag", Value: "work"}})
+	_, err = AddEvent(ctx, db, "standup meeting #work", nil, []Meta{{Key: "tag", Value: "work"}}, nil)
 	if err != nil {
 		t.Fatalf("AddEvent 2: %v", err)
 	}
@@ -323,7 +323,7 @@ func TestListMeta(t *testing.T) {
 	_, err := AddEvent(ctx, db, "event one", nil, []Meta{
 		{Key: "author", Value: "alice"},
 		{Key: "tag", Value: "work"},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("AddEvent 1: %v", err)
 	}
@@ -331,7 +331,7 @@ func TestListMeta(t *testing.T) {
 	_, err = AddEvent(ctx, db, "event two", nil, []Meta{
 		{Key: "author", Value: "alice"},
 		{Key: "tag", Value: "personal"},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("AddEvent 2: %v", err)
 	}
@@ -371,23 +371,23 @@ func TestGetSubtree(t *testing.T) {
 	t.Parallel()
 	db := testDBWithSchema(t)
 
-	root, err := AddEvent(ctx, db, "root", nil, []Meta{{Key: MetaKeyAuthor, Value: "alice"}})
+	root, err := AddEvent(ctx, db, "root", nil, []Meta{{Key: MetaKeyAuthor, Value: "alice"}}, nil)
 	if err != nil {
 		t.Fatalf("AddEvent root: %v", err)
 	}
 
-	child, err := AddEvent(ctx, db, "child", &root, []Meta{{Key: MetaKeyAuthor, Value: "alice"}})
+	child, err := AddEvent(ctx, db, "child", &root, []Meta{{Key: MetaKeyAuthor, Value: "alice"}}, nil)
 	if err != nil {
 		t.Fatalf("AddEvent child: %v", err)
 	}
 
-	grandchild, err := AddEvent(ctx, db, "grandchild", &child, []Meta{{Key: MetaKeyAuthor, Value: "bob"}})
+	grandchild, err := AddEvent(ctx, db, "grandchild", &child, []Meta{{Key: MetaKeyAuthor, Value: "bob"}}, nil)
 	if err != nil {
 		t.Fatalf("AddEvent grandchild: %v", err)
 	}
 
 	// Add an unrelated event that should not appear in the subtree.
-	if _, err := AddEvent(ctx, db, "unrelated", nil, nil); err != nil {
+	if _, err := AddEvent(ctx, db, "unrelated", nil, nil, nil); err != nil {
 		t.Fatalf("AddEvent unrelated: %v", err)
 	}
 
@@ -419,7 +419,7 @@ func TestGetSubtree_LeafNode(t *testing.T) {
 	t.Parallel()
 	db := testDBWithSchema(t)
 
-	id, err := AddEvent(ctx, db, "leaf", nil, nil)
+	id, err := AddEvent(ctx, db, "leaf", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("AddEvent: %v", err)
 	}
@@ -457,7 +457,7 @@ func TestFTSIsolation_MetaTokensNotMatchedByBareWords(t *testing.T) {
 	_, err := AddEvent(ctx, db, "pushed to production", nil, []Meta{
 		{Key: MetaKeyAuthor, Value: "alice"},
 		{Key: MetaKeyTag, Value: "deploy"},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("AddEvent: %v", err)
 	}
@@ -489,7 +489,7 @@ func TestFTSIsolation_BodyWordsNotMatchedByMetaFilter(t *testing.T) {
 	// Event with "work" in body text but no tag=work metadata.
 	_, err := AddEvent(ctx, db, "heading to work early", nil, []Meta{
 		{Key: MetaKeyAuthor, Value: "alice"},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("AddEvent: %v", err)
 	}
@@ -523,7 +523,7 @@ func TestListEvents_ComplexFilters(t *testing.T) {
 		{Key: MetaKeyAuthor, Value: "alice"},
 		{Key: MetaKeyTag, Value: "ops"},
 		{Key: MetaKeyPeople, Value: "alice"},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("AddEvent 1: %v", err)
 	}
@@ -533,7 +533,7 @@ func TestListEvents_ComplexFilters(t *testing.T) {
 		{Key: MetaKeyAuthor, Value: "bob"},
 		{Key: MetaKeyTag, Value: "work"},
 		{Key: MetaKeyPeople, Value: "bob"},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("AddEvent 2: %v", err)
 	}
@@ -544,7 +544,7 @@ func TestListEvents_ComplexFilters(t *testing.T) {
 		{Key: MetaKeyTag, Value: "ops"},
 		{Key: MetaKeyTag, Value: "work"},
 		{Key: MetaKeyPeople, Value: "alice"},
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("AddEvent 3: %v", err)
 	}
