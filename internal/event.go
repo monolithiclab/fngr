@@ -137,6 +137,38 @@ func HasChildren(ctx context.Context, db *sql.DB, id int64) (bool, error) {
 	return count > 0, nil
 }
 
+var wellKnownMetaKeys = map[string]bool{
+	MetaKeyAuthor: true,
+}
+
+func UpdateMeta(ctx context.Context, db *sql.DB, oldKey, oldValue, newKey, newValue string) (int64, error) {
+	if wellKnownMetaKeys[oldKey] {
+		return 0, fmt.Errorf("cannot rename well-known meta key %q", oldKey)
+	}
+	res, err := db.ExecContext(ctx,
+		"UPDATE event_meta SET key = ?, value = ? WHERE key = ? AND value = ?",
+		newKey, newValue, oldKey, oldValue,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("update meta: %w", err)
+	}
+	return res.RowsAffected()
+}
+
+func DeleteMeta(ctx context.Context, db *sql.DB, key, value string) (int64, error) {
+	if wellKnownMetaKeys[key] {
+		return 0, fmt.Errorf("cannot delete well-known meta key %q", key)
+	}
+	res, err := db.ExecContext(ctx,
+		"DELETE FROM event_meta WHERE key = ? AND value = ?",
+		key, value,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("delete meta: %w", err)
+	}
+	return res.RowsAffected()
+}
+
 func ListMeta(ctx context.Context, db *sql.DB) ([]MetaCount, error) {
 	rows, err := db.QueryContext(ctx,
 		"SELECT key, value, COUNT(*) AS count FROM event_meta GROUP BY key, value ORDER BY key, value",
