@@ -120,6 +120,15 @@ func DeleteEvent(ctx context.Context, db *sql.DB, id int64) error {
 	return nil
 }
 
+func HasChildren(ctx context.Context, db *sql.DB, id int64) (bool, error) {
+	var count int
+	err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM events WHERE parent_id = ?", id).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("query children: %w", err)
+	}
+	return count > 0, nil
+}
+
 func ListMeta(ctx context.Context, db *sql.DB) ([]MetaCount, error) {
 	rows, err := db.QueryContext(ctx,
 		"SELECT key, value, COUNT(*) AS count FROM event_meta GROUP BY key, value ORDER BY key, value",
