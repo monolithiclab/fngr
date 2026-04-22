@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/monolithiclab/fngr/internal"
+	"github.com/monolithiclab/fngr/internal/event"
 )
 
 type AddCmd struct {
@@ -27,7 +27,7 @@ func (c *AddCmd) Run(db *sql.DB) error {
 		return fmt.Errorf("event text cannot be empty")
 	}
 
-	meta, err := internal.CollectMeta(c.Text, c.Meta, c.Author)
+	meta, err := event.CollectMeta(c.Text, c.Meta, c.Author)
 	if err != nil {
 		return err
 	}
@@ -41,7 +41,7 @@ func (c *AddCmd) Run(db *sql.DB) error {
 		createdAt = &t
 	}
 
-	id, err := internal.AddEvent(ctx, db, c.Text, c.Parent, meta, createdAt)
+	id, err := event.Add(ctx, db, c.Text, c.Parent, meta, createdAt)
 	if err != nil {
 		return err
 	}

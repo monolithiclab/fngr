@@ -5,7 +5,8 @@ import (
 	"database/sql"
 	"os"
 
-	"github.com/monolithiclab/fngr/internal"
+	"github.com/monolithiclab/fngr/internal/event"
+	"github.com/monolithiclab/fngr/internal/render"
 )
 
 type ShowCmd struct {
@@ -18,31 +19,31 @@ func (c *ShowCmd) Run(db *sql.DB) error {
 	ctx := context.Background()
 
 	if c.Tree {
-		events, err := internal.GetSubtree(ctx, db, c.ID)
+		events, err := event.GetSubtree(ctx, db, c.ID)
 		if err != nil {
 			return err
 		}
 		switch c.Format {
 		case "json":
-			return internal.RenderJSON(os.Stdout, events)
+			return render.JSON(os.Stdout, events)
 		case "csv":
-			return internal.RenderCSV(os.Stdout, events)
+			return render.CSV(os.Stdout, events)
 		default:
-			return internal.RenderTree(os.Stdout, events)
+			return render.Tree(os.Stdout, events)
 		}
 	}
 
-	event, err := internal.GetEvent(ctx, db, c.ID)
+	ev, err := event.Get(ctx, db, c.ID)
 	if err != nil {
 		return err
 	}
 
 	switch c.Format {
 	case "json":
-		return internal.RenderJSON(os.Stdout, []internal.Event{*event})
+		return render.JSON(os.Stdout, []event.Event{*ev})
 	case "csv":
-		return internal.RenderCSV(os.Stdout, []internal.Event{*event})
+		return render.CSV(os.Stdout, []event.Event{*ev})
 	default:
-		return internal.RenderEvent(os.Stdout, event)
+		return render.Event(os.Stdout, ev)
 	}
 }

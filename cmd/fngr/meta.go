@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/monolithiclab/fngr/internal"
+	"github.com/monolithiclab/fngr/internal/event"
 )
 
 type MetaCmd struct {
@@ -22,7 +22,7 @@ type MetaListCmd struct{}
 func (c *MetaListCmd) Run(db *sql.DB) error {
 	ctx := context.Background()
 
-	counts, err := internal.ListMeta(ctx, db)
+	counts, err := event.ListMeta(ctx, db)
 	if err != nil {
 		return err
 	}
@@ -67,7 +67,7 @@ func (c *MetaUpdateCmd) Run(db *sql.DB) error {
 		return fmt.Errorf("invalid new meta %q: expected key=value", c.New)
 	}
 
-	affected, err := internal.UpdateMeta(ctx, db, oldKey, oldValue, newKey, newValue)
+	affected, err := event.UpdateMeta(ctx, db, oldKey, oldValue, newKey, newValue)
 	if err != nil {
 		return err
 	}
@@ -86,7 +86,7 @@ func (c *MetaUpdateCmd) Run(db *sql.DB) error {
 		}
 	}
 
-	affected, err = internal.UpdateMeta(ctx, db, oldKey, oldValue, newKey, newValue)
+	affected, err = event.UpdateMeta(ctx, db, oldKey, oldValue, newKey, newValue)
 	if err != nil {
 		return err
 	}
@@ -109,7 +109,7 @@ func (c *MetaDeleteCmd) Run(db *sql.DB) error {
 	}
 
 	// Dry-run count first
-	counts, err := internal.ListMeta(ctx, db)
+	counts, err := event.ListMeta(ctx, db)
 	if err != nil {
 		return err
 	}
@@ -135,7 +135,7 @@ func (c *MetaDeleteCmd) Run(db *sql.DB) error {
 		}
 	}
 
-	n, err := internal.DeleteMeta(ctx, db, key, value)
+	n, err := event.DeleteMeta(ctx, db, key, value)
 	if err != nil {
 		return err
 	}

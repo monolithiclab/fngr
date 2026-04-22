@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/alecthomas/kong"
-	"github.com/monolithiclab/fngr/internal"
+	"github.com/monolithiclab/fngr/internal/db"
 )
 
 var version = "dev"
@@ -46,19 +46,19 @@ func main() {
 		kong.UsageOnError(),
 	)
 
-	dbPath, err := internal.ResolveDBPath(cli.DB)
+	dbPath, err := db.ResolvePath(cli.DB)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 
-	db, err := internal.OpenDB(dbPath, strings.HasPrefix(ctx.Command(), "add"))
+	database, err := db.Open(dbPath, strings.HasPrefix(ctx.Command(), "add"))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	defer db.Close()
+	defer database.Close()
 
-	err = ctx.Run(db)
+	err = ctx.Run(database)
 	ctx.FatalIfErrorf(err)
 }

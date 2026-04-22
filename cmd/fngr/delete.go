@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/monolithiclab/fngr/internal"
+	"github.com/monolithiclab/fngr/internal/event"
 )
 
 type DeleteCmd struct {
@@ -20,12 +20,12 @@ type DeleteCmd struct {
 func (c *DeleteCmd) Run(db *sql.DB) error {
 	ctx := context.Background()
 
-	event, err := internal.GetEvent(ctx, db, c.ID)
+	ev, err := event.Get(ctx, db, c.ID)
 	if err != nil {
 		return err
 	}
 
-	hasChildren, err := internal.HasChildren(ctx, db, c.ID)
+	hasChildren, err := event.HasChildren(ctx, db, c.ID)
 	if err != nil {
 		return err
 	}
@@ -36,9 +36,9 @@ func (c *DeleteCmd) Run(db *sql.DB) error {
 
 	if !c.Force {
 		if hasChildren {
-			fmt.Printf("Delete event %d and all its children? [Y/n] ", event.ID)
+			fmt.Printf("Delete event %d and all its children? [Y/n] ", ev.ID)
 		} else {
-			fmt.Printf("Delete event %d? [Y/n] ", event.ID)
+			fmt.Printf("Delete event %d? [Y/n] ", ev.ID)
 		}
 		reader := bufio.NewReader(os.Stdin)
 		answer, _ := reader.ReadString('\n')
@@ -49,7 +49,7 @@ func (c *DeleteCmd) Run(db *sql.DB) error {
 		}
 	}
 
-	if err := internal.DeleteEvent(ctx, db, c.ID); err != nil {
+	if err := event.Delete(ctx, db, c.ID); err != nil {
 		return err
 	}
 	fmt.Printf("Deleted event %d\n", c.ID)

@@ -5,7 +5,8 @@ import (
 	"database/sql"
 	"os"
 
-	"github.com/monolithiclab/fngr/internal"
+	"github.com/monolithiclab/fngr/internal/event"
+	"github.com/monolithiclab/fngr/internal/render"
 )
 
 type ListCmd struct {
@@ -18,19 +19,19 @@ type ListCmd struct {
 func (c *ListCmd) Run(db *sql.DB) error {
 	ctx := context.Background()
 
-	events, err := internal.ListEvents(ctx, db, internal.ListOpts{Filter: c.Filter, From: c.From, To: c.To})
+	events, err := event.List(ctx, db, event.ListOpts{Filter: c.Filter, From: c.From, To: c.To})
 	if err != nil {
 		return err
 	}
 
 	switch c.Format {
 	case "json":
-		return internal.RenderJSON(os.Stdout, events)
+		return render.JSON(os.Stdout, events)
 	case "csv":
-		return internal.RenderCSV(os.Stdout, events)
+		return render.CSV(os.Stdout, events)
 	case "flat":
-		return internal.RenderFlat(os.Stdout, events)
+		return render.Flat(os.Stdout, events)
 	default:
-		return internal.RenderTree(os.Stdout, events)
+		return render.Tree(os.Stdout, events)
 	}
 }
