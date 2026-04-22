@@ -79,7 +79,7 @@ func (c *EventTimeCmd) Run(s eventStore, io ioStreams) error {
 
 	parsed, hasDate, hasTime, err := timefmt.ParsePartial(c.Value)
 	if err != nil {
-		return fmt.Errorf("--time: %w", err)
+		return fmt.Errorf("event time: %w", err)
 	}
 	if !hasTime {
 		return fmt.Errorf("event time: expected a time or full timestamp, got date-only %q", c.Value)
@@ -120,7 +120,7 @@ func (c *EventDateCmd) Run(s eventStore, io ioStreams) error {
 
 	parsed, hasDate, hasTime, err := timefmt.ParsePartial(c.Value)
 	if err != nil {
-		return fmt.Errorf("--date: %w", err)
+		return fmt.Errorf("event date: %w", err)
 	}
 	if !hasDate {
 		return fmt.Errorf("event date: expected a date or full timestamp, got time-only %q", c.Value)
