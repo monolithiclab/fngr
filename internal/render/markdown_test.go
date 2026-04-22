@@ -3,7 +3,6 @@ package render
 import (
 	"bytes"
 	"errors"
-	"iter"
 	"strings"
 	"testing"
 	"time"
@@ -242,41 +241,10 @@ func TestMarkdown_LocalTimezoneBucketing(t *testing.T) {
 	}
 }
 
-// markdownSeq returns an iter.Seq2 that yields events with nil errors. Local
-// to markdown_test.go; the existing staticSeq in render_test.go is fine to
-// rely on, but a duplicate keeps the file self-contained.
-func markdownSeq(events []event.Event) iter.Seq2[event.Event, error] {
-	return func(yield func(event.Event, error) bool) {
-		for _, ev := range events {
-			if !yield(ev, nil) {
-				return
-			}
-		}
-	}
-}
-
-// markdownErrAt yields events through index errAt-1, then yields an error.
-func markdownErrAt(events []event.Event, errAt int, err error) iter.Seq2[event.Event, error] {
-	return func(yield func(event.Event, error) bool) {
-		for i, ev := range events {
-			if i == errAt {
-				yield(event.Event{}, err)
-				return
-			}
-			if !yield(ev, nil) {
-				return
-			}
-		}
-		if errAt >= len(events) {
-			yield(event.Event{}, err)
-		}
-	}
-}
-
 func TestMarkdownStream_Empty(t *testing.T) {
 	t.Parallel()
 	var b bytes.Buffer
-	if err := MarkdownStream(&b, markdownSeq(nil)); err != nil {
+	if err := MarkdownStream(&b, staticSeq(nil)); err != nil {
 		t.Fatalf("MarkdownStream: %v", err)
 	}
 	if got := b.String(); got != "" {
@@ -300,7 +268,7 @@ func TestMarkdownStream_MatchesMarkdown(t *testing.T) {
 	if err := Markdown(&slow, events); err != nil {
 		t.Fatalf("Markdown: %v", err)
 	}
-	if err := MarkdownStream(&fast, markdownSeq(events)); err != nil {
+	if err := MarkdownStream(&fast, staticSeq(events)); err != nil {
 		t.Fatalf("MarkdownStream: %v", err)
 	}
 	if slow.String() != fast.String() {
@@ -317,7 +285,7 @@ func TestMarkdownStream_PropagatesError(t *testing.T) {
 	wantErr := errors.New("boom")
 
 	var b bytes.Buffer
-	err := MarkdownStream(&b, markdownErrAt(events, 1, wantErr))
+	err := MarkdownStream(&b, errorAtSeq(events, 1, wantErr))
 	if !errors.Is(err, wantErr) {
 		t.Errorf("err = %v, want %v", err, wantErr)
 	}

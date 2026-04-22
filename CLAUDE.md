@@ -93,8 +93,8 @@ make ci             # codefix + format + lint + test
   `&`/`|`/`!` operators into FTS5 MATCH syntax. Escapes embedded double quotes.
 - `internal/render/render.go` — Output rendering to `io.Writer`. `Events(w, format, events)`,
   `SingleEvent(w, format, ev)`, and `EventsStream(w, format, seq)` are the dispatchers commands
-  call; `Tree`, `Flat`/`FlatStream`, `JSON`/`JSONStream`, `CSV`/`CSVStream`, `Event` are the
-  underlying writers. List/flat use a relative-aware compact stamp via `timefmt.FormatRelative`;
+  call; `Tree`, `Flat`/`FlatStream`, `JSON`/`JSONStream`, `CSV`/`CSVStream`,
+  `Markdown`/`MarkdownStream`, `Event` are the underlying writers. List/flat use a relative-aware compact stamp via `timefmt.FormatRelative`;
   event detail keeps full ISO. Streaming variants consume `iter.Seq2[Event, error]` so memory
   stays flat regardless of result size; tree still buffers because it needs the topology.
   Meta in JSON output is `[[key, value], ...]`, sorted by `(key, value)`. Each `event_meta`
