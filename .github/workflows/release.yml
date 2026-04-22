@@ -29,7 +29,11 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: sigstore/cosign-installer@v4.1.1  # no v4 major-alias tag; bump pin manually
+      # cosign v3 still ships .sig + .pem alongside the artifact; v4 changed to a single
+      # .sigstore.json bundle and deprecated the --output-signature/--output-certificate
+      # flags our .goreleaser.yaml signs args use. Stay on v3 until we migrate goreleaser's
+      # signs config to the new bundle shape.
+      - uses: sigstore/cosign-installer@v3
       - uses: goreleaser/goreleaser-action@v7
         with:
           version: latest
