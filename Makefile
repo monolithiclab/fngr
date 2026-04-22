@@ -11,7 +11,7 @@ build:  ## Build binary
 
 
 install:  ## Install fngr to $GOBIN (or $GOPATH/bin)
-	go install $(LDFLAGS) ./cmd/jnrl
+	go install $(LDFLAGS) ./cmd/fngr
 
 
 bench:  ## Run benchmarks with memory stats

@@ -207,12 +207,11 @@ func TestRenderCSV(t *testing.T) {
 	}
 }
 
-func TestRenderCSV_Sanitization(t *testing.T) {
+func TestRenderCSV_SpecialChars(t *testing.T) {
 	t.Parallel()
 	events := []Event{
-		makeEvent(1, nil, "=SUM(A1)", "2026-04-10", "nicolas"),
-		makeEvent(2, nil, "+cmd", "2026-04-10", "nicolas"),
-		makeEvent(3, nil, "@malicious", "2026-04-10", "nicolas"),
+		makeEvent(1, nil, `text with "quotes" and, commas`, "2026-04-10", "nicolas"),
+		makeEvent(2, nil, "=formula", "2026-04-10", "nicolas"),
 	}
 
 	var b bytes.Buffer
@@ -222,41 +221,13 @@ func TestRenderCSV_Sanitization(t *testing.T) {
 	got := b.String()
 	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
 
-	if len(lines) != 4 {
-		t.Fatalf("RenderCSV produced %d lines, want 4; output:\n%s", len(lines), got)
+	if len(lines) != 3 {
+		t.Fatalf("RenderCSV produced %d lines, want 3; output:\n%s", len(lines), got)
 	}
-
-	if !strings.Contains(lines[1], "'=SUM(A1)") {
-		t.Errorf("expected '=SUM(A1) sanitized, got line: %s", lines[1])
+	if !strings.Contains(lines[1], `"text with ""quotes"" and, commas"`) {
+		t.Errorf("csv.Writer should quote/escape special chars, got line: %s", lines[1])
 	}
-	if !strings.Contains(lines[2], "'+cmd") {
-		t.Errorf("expected '+cmd sanitized, got line: %s", lines[2])
-	}
-	if !strings.Contains(lines[3], "'@malicious") {
-		t.Errorf("expected '@malicious sanitized, got line: %s", lines[3])
-	}
-}
-
-func TestCsvSanitize(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{"normal text", "normal text"},
-		{"=formula", "'=formula"},
-		{"+cmd", "'+cmd"},
-		{"-negative", "'-negative"},
-		{"@mention", "'@mention"},
-		{"\ttab", "'\ttab"},
-		{"\rcarriage", "'\rcarriage"},
-		{"", ""},
-	}
-
-	for _, tt := range tests {
-		got := csvSanitize(tt.input)
-		if got != tt.want {
-			t.Errorf("csvSanitize(%q) = %q, want %q", tt.input, got, tt.want)
-		}
+	if !strings.Contains(lines[2], "=formula") {
+		t.Errorf("expected raw =formula (no sanitization prefix), got line: %s", lines[2])
 	}
 }

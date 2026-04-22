@@ -121,16 +121,6 @@ func RenderJSON(w io.Writer, events []Event) error {
 	return err
 }
 
-func csvSanitize(s string) string {
-	if len(s) > 0 {
-		switch s[0] {
-		case '=', '+', '-', '@', '\t', '\r':
-			return "'" + s
-		}
-	}
-	return s
-}
-
 func RenderCSV(w io.Writer, events []Event) error {
 	cw := csv.NewWriter(w)
 	_ = cw.Write([]string{"id", "parent_id", "created_at", "author", "text"})
@@ -139,13 +129,12 @@ func RenderCSV(w io.Writer, events []Event) error {
 		if ev.ParentID != nil {
 			parentID = strconv.FormatInt(*ev.ParentID, 10)
 		}
-		author := eventAuthor(ev)
 		_ = cw.Write([]string{
 			strconv.FormatInt(ev.ID, 10),
 			parentID,
 			ev.CreatedAt.Format(time.RFC3339),
-			csvSanitize(author),
-			csvSanitize(ev.Text),
+			eventAuthor(ev),
+			ev.Text,
 		})
 	}
 	cw.Flush()
