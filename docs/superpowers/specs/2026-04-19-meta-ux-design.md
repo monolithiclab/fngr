@@ -1,24 +1,39 @@
-# `meta` UX Design
+# `meta` UX + `list` filter harmonization
 
-Sub-project **S3** of the [roadmap](../roadmap.md). Three small wins in the
-metadata namespace:
+Sub-project **S3** of the [roadmap](../roadmap.md). Originally three small
+wins in the metadata namespace; expanded to also harmonize the existing
+`list` filter onto the same `-S` / `--search` shape so the two commands
+stay consistent.
 
-1. `fngr meta` (no subcommand) lists, optionally filtered.
-2. `meta update` is renamed to `meta rename`.
-3. The destructive verbs (`rename`, `delete`) accept the same `@person` /
-   `#tag` / `key=value` shorthand the new `meta` filter does.
+1. `fngr meta` (no subcommand) lists, optionally filtered via `-S`.
+2. `fngr list` / bare `fngr` filter migrates from positional to `-S`
+   (matches `git log -S`; sidesteps Kong's "can't mix positional + branching
+   subcommands" constraint we already hit in S2; frees the positional arg
+   slot for future use).
+3. `meta update` is renamed to `meta rename`.
+4. The destructive verbs (`meta rename`, `meta delete`) accept the same
+   `@person` / `#tag` / `key=value` shorthand the new `-S` filter does.
 
-The tool is pre-public; no compatibility shims for the rename.
+The tool is pre-public; no compatibility shims for the rename or the
+positional → flag move.
 
 ## Goals
 
 - `fngr meta` (no args) keeps its current behaviour: list every
   `(key, value, count)` row, sorted.
-- `fngr meta <filter>` lists only matching rows. Filter forms:
-  - bare key — `fngr meta tag` lists every `tag=*` row
+- `fngr meta -S <filter>` lists only matching rows. Filter forms (parsed
+  by the new `parseMetaFilter`):
+  - bare key — `-S tag` lists every `tag=*` row
   - `key=value` — exact match
   - `@name` — shorthand for `people=name`
   - `#name` — shorthand for `tag=name`
+- `fngr list -S <filter>` (and bare `fngr -S <filter>` via `default:"withargs"`)
+  filters the FTS expression. Same flag shape, same parser entry point.
+  Existing FTS expression syntax (`#tag`, `@person`, `&`, `|`, `!`,
+  bare words) is unchanged — `-S` just moves the *delivery mechanism*
+  from a positional arg to a flag. The list command keeps its richer
+  expression grammar; the meta command keeps its narrower
+  bare-key/exact/shorthand grammar.
 - `fngr meta rename <old> <new>` is the renamed-but-otherwise-identical
   verb (was `meta update`). Both args accept `key=value` / `@name` / `#name`.
   Confirm `[Y/n]` (default yes), `--force` skips. Existing well-known-key
@@ -31,7 +46,7 @@ The tool is pre-public; no compatibility shims for the rename.
 
 - No bare-key in `meta delete` (`fngr meta delete tag` would wipe every
   `tag=*` row). Footgun, won't fix.
-- No value-only filter (`fngr meta =ops`). Rare; users can pipe through
+- No value-only filter (`fngr meta -S =ops`). Rare; users can pipe through
   grep.
 - No JSON / CSV output for the filter. `meta` is an inspection tool;
   scripting against it is unusual. Not worth the dispatcher.
@@ -39,6 +54,9 @@ The tool is pre-public; no compatibility shims for the rename.
   cases.
 - No new `MetaArg`-style helper in `parse`. The bare-key fallback is a
   CLI presentation choice and lives next to its only caller.
+- No second flag for "value-only" search on either command. One flag, one
+  parser entry per command.
+- No `-S` on `fngr event N` — `event` is a fetch by ID, not a search.
 
 ## Architecture
 
@@ -87,7 +105,7 @@ type MetaCmd struct {
 }
 
 type MetaListCmd struct {
-    Filter string `arg:"" optional:"" help:"Filter: bare key (e.g. 'tag'), key=value, @person, or #tag."`
+    Search string `help:"Filter: bare key (e.g. 'tag'), key=value, @person, or #tag." short:"S"`
 }
 
 type MetaRenameCmd struct {
@@ -102,16 +120,19 @@ type MetaDeleteCmd struct {
 }
 ```
 
-Per Kong v1.x's "can't mix positional arguments and branching arguments"
-constraint (same as S2): the filter lives on `MetaListCmd` (NOT on
-`MetaCmd`). `default:"withargs"` lets `fngr meta tag` fall through to
-`MetaListCmd` with the trailing positional consumed as `Filter`.
+The filter lives on `MetaListCmd` as a `-S` / `--search` flag — no
+positional, so Kong's "can't mix positional + branching" constraint is
+not engaged at all. `default:"withargs"` is still useful so that
+`fngr meta -S tag` works whether the user types `meta` or omits it
+(once we wire `meta` as the `MetaCmd` default; today `meta` is its
+own subcommand under the root, and `MetaListCmd` is `MetaCmd`'s
+default — that's unchanged).
 
 `MetaListCmd.Run`:
 
-1. If `c.Filter` empty → call `s.ListMeta(ctx, ListMetaOpts{})`.
-2. Else parse the filter via the new local helper `parseMetaFilter` (see
-   below). Call `s.ListMeta(ctx, ListMetaOpts{Key: ..., Value: ...})`.
+1. If `c.Search` empty → call `s.ListMeta(ctx, ListMetaOpts{})`.
+2. Else parse via the new local helper `parseMetaFilter` (see below).
+   Call `s.ListMeta(ctx, ListMetaOpts{Key: ..., Value: ...})`.
 3. Render with the existing aligned `key=value (count)` block; on empty
    result print `No metadata found.` and return nil (not an error).
 
@@ -124,6 +145,28 @@ constraint (same as S2): the filter lives on `MetaListCmd` (NOT on
   arg's parsed key is in the well-known set (`MetaKeyAuthor` etc.),
   `event.UpdateMeta` rejects with the existing message.
 - `meta delete` likewise.
+
+### `cmd/fngr/list.go` — positional `Filter` becomes `-S`/`--search` flag
+
+```go
+type ListCmd struct {
+    From    string `help:"Start date (inclusive)." placeholder:"YYYY-MM-DD"`
+    To      string `help:"End date (inclusive)." placeholder:"YYYY-MM-DD"`
+    Format  string `help:"Output format: tree (default), flat, json, csv." enum:"tree,flat,json,csv" default:"tree"`
+    Limit   int    `help:"Maximum events to return (0 = no limit)." short:"n" default:"0"`
+    Reverse bool   `help:"Sort oldest first (default is newest first)." short:"r"`
+    NoPager bool   `help:"Disable the pager even when stdout is a TTY."`
+    Search  string `help:"Filter expression (#tag, @person, key=value, bare words). Operators: & (AND), | (OR), ! (NOT)." short:"S"`
+}
+```
+
+The struct loses `Filter string arg:"" optional:""` and gains
+`Search string short:"S"`. `ListCmd.toListOpts` reads `c.Search` instead
+of `c.Filter` and threads it into `event.ListOpts.Filter` (the
+internal struct field name doesn't change — only the CLI surface).
+
+The FTS expression grammar in `internal/event/filter.go` is unchanged;
+this is a pure delivery-mechanism move from positional to flag.
 
 ### `cmd/fngr/meta.go` — `parseMetaFilter`
 
@@ -158,18 +201,21 @@ func parseMetaFilter(s string) (parse.Meta, error) {
 | Invocation | Behaviour |
 | --- | --- |
 | `fngr meta` | List every meta row. Empty = "No metadata found." |
-| `fngr meta tag` | Bare key. List every `tag=*` row. |
-| `fngr meta tag=ops` | Exact match. One row or empty. |
-| `fngr meta @sarah` | ≡ `fngr meta people=sarah`. |
-| `fngr meta #ops` | ≡ `fngr meta tag=ops`. |
+| `fngr meta -S tag` | Bare key. List every `tag=*` row. |
+| `fngr meta -S tag=ops` | Exact match. One row or empty. |
+| `fngr meta -S @sarah` | ≡ `fngr meta -S people=sarah`. |
+| `fngr meta -S '#ops'` | ≡ `fngr meta -S tag=ops`. (Quote `#` so the shell doesn't strip it.) |
 | `fngr meta rename tag=wip tag=done` | As today's `meta update`. `[Y/n]`. `--force` skips. |
-| `fngr meta rename #wip #done` | Same as above (shorthand). |
+| `fngr meta rename '#wip' '#done'` | Same as above (shorthand). |
 | `fngr meta delete tag=obsolete` | As today. `[y/N]`. `--force` skips. |
-| `fngr meta delete #obsolete` | Same as above (shorthand). |
+| `fngr meta delete '#obsolete'` | Same as above (shorthand). |
+| `fngr` (or `fngr list`) | List all events (current behaviour). |
+| `fngr -S '#ops'` | List events matching the FTS expression. (Was `fngr '#ops'`.) |
+| `fngr -S '@sarah & #ops' --format flat` | Same expression grammar; just delivered via the flag. |
 
-## Data flow example: `fngr meta @sarah`
+## Data flow example: `fngr meta -S @sarah`
 
-1. Kong parses → `MetaCmd{List: MetaListCmd{Filter: "@sarah"}}`.
+1. Kong parses → `MetaCmd{List: MetaListCmd{Search: "@sarah"}}`.
 2. `MetaListCmd.Run`:
    - `parseMetaFilter("@sarah")` → `parse.MetaArg("@sarah")` →
      `{Key: "people", Value: "sarah"}`.
@@ -209,17 +255,25 @@ func parseMetaFilter(s string) (parse.Meta, error) {
 
 ### `cmd/fngr/meta_test.go`
 - Update `TestMetaListCmd_Format` for the new signature.
-- New: `TestMetaListCmd_FilterByKey`, `TestMetaListCmd_FilterByKeyValue`,
-  `TestMetaListCmd_FilterShorthand` (one each for `@`, `#`).
-- New: `TestMetaListCmd_InvalidFilter`.
+- New: `TestMetaListCmd_SearchByKey`, `TestMetaListCmd_SearchByKeyValue`,
+  `TestMetaListCmd_SearchShorthand` (one each for `@`, `#`).
+- New: `TestMetaListCmd_InvalidSearch`.
 - Rename `TestMetaUpdateCmd_*` → `TestMetaRenameCmd_*` and update verb name.
 - New: `TestMetaRenameCmd_AcceptsShorthand`, `TestMetaDeleteCmd_AcceptsShorthand`.
 - Existing prompt-flow tests stay; verify them against the renamed verb.
 
+### `cmd/fngr/list_test.go`
+- Existing `TestListCmd_*` that constructed `&ListCmd{Filter: "..."}`
+  switch to `&ListCmd{Search: "..."}`. No new tests required — the
+  filter behaviour is unchanged; only the field name moves.
+
 ### `cmd/fngr/dispatch_test.go`
 - Replace `meta-update` entry with `meta-rename`.
-- Add `meta-filter-key` (`["meta", "tag"]`), `meta-filter-keyvalue`
-  (`["meta", "tag=ops"]`), `meta-filter-shorthand` (`["meta", "#ops"]`).
+- Add `meta-search-key` (`["meta", "-S", "tag"]`),
+  `meta-search-keyvalue` (`["meta", "-S", "tag=ops"]`),
+  `meta-search-shorthand` (`["meta", "-S", "#ops"]`).
+- Existing list-related entries (e.g. any `["list", "#ops"]`-style
+  positional arg cases) move to `["list", "-S", "#ops"]`.
 
 All tests parallel-safe; per-test temp SQLite files (existing helpers).
 
@@ -239,7 +293,13 @@ All tests parallel-safe; per-test temp SQLite files (existing helpers).
 Pre-public, so the breaking changes are documented but not gated:
 
 - `fngr meta update` is removed. Use `fngr meta rename` (same args).
+- `fngr list` (and bare `fngr`) loses its positional filter arg. Old
+  invocation `fngr '#ops'` becomes `fngr -S '#ops'`. Same expression
+  grammar; same output; only the delivery mechanism changes.
 - `event.ListMeta` signature changes from `(ctx, db) ([]MetaCount, error)`
   to `(ctx, db, ListMetaOpts) ([]MetaCount, error)`. Internal — only
   `cmd/fngr/meta.go` and `cmd/fngr/store.go` update.
 - The `eventStore` interface's `ListMeta` follows.
+- `cmd/fngr/list.go::ListCmd` loses `Filter string arg:""` and gains
+  `Search string short:"S"`. `event.ListOpts.Filter` (the internal
+  field) is unchanged.
