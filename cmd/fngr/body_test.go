@@ -2,6 +2,9 @@ package main
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -52,6 +55,90 @@ func TestReadStdin_ReadError(t *testing.T) {
 type errReader struct{}
 
 func (errReader) Read(_ []byte) (int, error) { return 0, errors.New("boom") }
+
+func TestRealLaunchEditor_ExecAndReadback(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script editor stub is POSIX-only")
+	}
+
+	dir := t.TempDir()
+	editor := filepath.Join(dir, "fake-editor.sh")
+	// The fake editor appends "::edited" to whatever's in the file.
+	script := "#!/bin/sh\nprintf '%s::edited' \"$(cat \"$1\")\" > \"$1\"\n"
+	if err := os.WriteFile(editor, []byte(script), 0o755); err != nil { // #nosec G306 -- test-only fake editor must be executable
+		t.Fatalf("write fake editor: %v", err)
+	}
+
+	t.Setenv("VISUAL", "")
+	t.Setenv("EDITOR", editor)
+
+	got, err := realLaunchEditor("seed")
+	if err != nil {
+		t.Fatalf("realLaunchEditor: %v", err)
+	}
+	if got != "seed::edited" {
+		t.Errorf("body = %q, want %q", got, "seed::edited")
+	}
+}
+
+func TestRealLaunchEditor_NoEditorConfigured(t *testing.T) {
+	t.Setenv("VISUAL", "")
+	t.Setenv("EDITOR", "")
+
+	_, err := realLaunchEditor("")
+	if err == nil || !strings.Contains(err.Error(), "no editor configured") {
+		t.Errorf("err = %v, want 'no editor configured'", err)
+	}
+}
+
+func TestRealLaunchEditor_EmptySaveCancels(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script editor stub is POSIX-only")
+	}
+
+	dir := t.TempDir()
+	editor := filepath.Join(dir, "fake-editor.sh")
+	// Truncate the file to empty.
+	script := "#!/bin/sh\n: > \"$1\"\n"
+	if err := os.WriteFile(editor, []byte(script), 0o755); err != nil { // #nosec G306 -- test-only fake editor must be executable
+		t.Fatalf("write fake editor: %v", err)
+	}
+
+	t.Setenv("VISUAL", "")
+	t.Setenv("EDITOR", editor)
+
+	_, err := realLaunchEditor("seed")
+	if err != errCancel {
+		t.Errorf("err = %v, want errCancel", err)
+	}
+}
+
+func TestRealLaunchEditor_VisualOverridesEditor(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script editor stub is POSIX-only")
+	}
+
+	dir := t.TempDir()
+	visual := filepath.Join(dir, "visual.sh")
+	editor := filepath.Join(dir, "editor.sh")
+	if err := os.WriteFile(visual, []byte("#!/bin/sh\nprintf 'from-visual' > \"$1\"\n"), 0o755); err != nil { // #nosec G306 -- test-only fake editor must be executable
+		t.Fatalf("write visual: %v", err)
+	}
+	if err := os.WriteFile(editor, []byte("#!/bin/sh\nprintf 'from-editor' > \"$1\"\n"), 0o755); err != nil { // #nosec G306 -- test-only fake editor must be executable
+		t.Fatalf("write editor: %v", err)
+	}
+
+	t.Setenv("VISUAL", visual)
+	t.Setenv("EDITOR", editor)
+
+	got, err := realLaunchEditor("")
+	if err != nil {
+		t.Fatalf("realLaunchEditor: %v", err)
+	}
+	if got != "from-visual" {
+		t.Errorf("body = %q, want 'from-visual'", got)
+	}
+}
 
 func TestResolveBody(t *testing.T) {
 	t.Parallel()
