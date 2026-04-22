@@ -4,7 +4,20 @@ import (
 	"testing"
 )
 
+func assertMetaEqual(t *testing.T, got, want []Meta) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("got %d items, want %d\ngot:  %v\nwant: %v", len(got), len(want), got, want)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Errorf("[%d] = %v, want %v", i, got[i], want[i])
+		}
+	}
+}
+
 func TestParseBodyTags(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		text string
@@ -78,21 +91,14 @@ func TestParseBodyTags(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ParseBodyTags(tt.text)
-			if len(got) != len(tt.want) {
-				t.Fatalf("ParseBodyTags(%q) returned %d items, want %d\ngot:  %v\nwant: %v",
-					tt.text, len(got), len(tt.want), got, tt.want)
-			}
-			for i := range got {
-				if got[i] != tt.want[i] {
-					t.Errorf("ParseBodyTags(%q)[%d] = %v, want %v", tt.text, i, got[i], tt.want[i])
-				}
-			}
+			t.Parallel()
+			assertMetaEqual(t, ParseBodyTags(tt.text), tt.want)
 		})
 	}
 }
 
 func TestParseFlagMeta(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		flags   []string
@@ -131,6 +137,7 @@ func TestParseFlagMeta(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got, err := ParseFlagMeta(tt.flags)
 			if tt.wantErr {
 				if err == nil {
@@ -141,20 +148,13 @@ func TestParseFlagMeta(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ParseFlagMeta(%v) unexpected error: %v", tt.flags, err)
 			}
-			if len(got) != len(tt.want) {
-				t.Fatalf("ParseFlagMeta(%v) returned %d items, want %d\ngot:  %v\nwant: %v",
-					tt.flags, len(got), len(tt.want), got, tt.want)
-			}
-			for i := range got {
-				if got[i] != tt.want[i] {
-					t.Errorf("ParseFlagMeta(%v)[%d] = %v, want %v", tt.flags, i, got[i], tt.want[i])
-				}
-			}
+			assertMetaEqual(t, got, tt.want)
 		})
 	}
 }
 
 func TestCollectMeta(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		text    string
@@ -205,6 +205,7 @@ func TestCollectMeta(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got, err := CollectMeta(tt.text, tt.flags, tt.author)
 			if tt.wantErr {
 				if err == nil {
@@ -215,20 +216,13 @@ func TestCollectMeta(t *testing.T) {
 			if err != nil {
 				t.Fatalf("CollectMeta unexpected error: %v", err)
 			}
-			if len(got) != len(tt.want) {
-				t.Fatalf("CollectMeta returned %d items, want %d\ngot:  %v\nwant: %v",
-					len(got), len(tt.want), got, tt.want)
-			}
-			for i := range got {
-				if got[i] != tt.want[i] {
-					t.Errorf("CollectMeta[%d] = %v, want %v", i, got[i], tt.want[i])
-				}
-			}
+			assertMetaEqual(t, got, tt.want)
 		})
 	}
 }
 
 func TestBuildFTSContent(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		text string
@@ -268,6 +262,7 @@ func TestBuildFTSContent(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got := BuildFTSContent(tt.text, tt.meta)
 			if got != tt.want {
 				t.Errorf("BuildFTSContent(%q, %v) = %q, want %q", tt.text, tt.meta, got, tt.want)

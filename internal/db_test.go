@@ -39,6 +39,7 @@ func testDBWithSchema(t *testing.T) *sql.DB {
 }
 
 func TestInitSchema_CreatesAllTables(t *testing.T) {
+	t.Parallel()
 	db := testDB(t)
 
 	if err := initSchema(db); err != nil {
@@ -59,6 +60,7 @@ func TestInitSchema_CreatesAllTables(t *testing.T) {
 }
 
 func TestInitSchema_Idempotent(t *testing.T) {
+	t.Parallel()
 	db := testDB(t)
 
 	if err := initSchema(db); err != nil {
@@ -70,6 +72,7 @@ func TestInitSchema_Idempotent(t *testing.T) {
 }
 
 func TestCascadeDelete_RemovesChildrenAndMeta(t *testing.T) {
+	t.Parallel()
 	db := testDBWithSchema(t)
 
 	// Insert parent event.
@@ -118,6 +121,7 @@ func TestCascadeDelete_RemovesChildrenAndMeta(t *testing.T) {
 }
 
 func TestFTSDeleteTrigger(t *testing.T) {
+	t.Parallel()
 	db := testDBWithSchema(t)
 
 	// Insert an event.
@@ -156,6 +160,7 @@ func TestFTSDeleteTrigger(t *testing.T) {
 }
 
 func TestResolveDBPath_ExplicitPath(t *testing.T) {
+	t.Parallel()
 	got, err := ResolveDBPath("/tmp/custom.db")
 	if err != nil {
 		t.Fatalf("ResolveDBPath: %v", err)
@@ -220,6 +225,7 @@ func TestResolveDBPath_FallbackHome(t *testing.T) {
 }
 
 func TestOpenDB_CreateTrue(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
 
@@ -243,6 +249,7 @@ func TestOpenDB_CreateTrue(t *testing.T) {
 }
 
 func TestOpenDB_CreateFalseNotExists(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "nonexistent.db")
 
@@ -253,6 +260,7 @@ func TestOpenDB_CreateFalseNotExists(t *testing.T) {
 }
 
 func TestOpenDB_ForeignKeysEnabled(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "fk.db")
 
@@ -272,6 +280,7 @@ func TestOpenDB_ForeignKeysEnabled(t *testing.T) {
 }
 
 func TestOpenDB_WALMode(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "wal.db")
 
@@ -291,6 +300,7 @@ func TestOpenDB_WALMode(t *testing.T) {
 }
 
 func TestOpenDB_BusyTimeout(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "busy.db")
 
@@ -310,6 +320,7 @@ func TestOpenDB_BusyTimeout(t *testing.T) {
 }
 
 func TestOpenDB_SynchronousNormal(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "sync.db")
 

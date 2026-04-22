@@ -19,6 +19,7 @@ func makeEvent(id int64, parentID *int64, text string, date string, author strin
 }
 
 func TestRenderTree_Empty(t *testing.T) {
+	t.Parallel()
 	if got := RenderTree(nil); got != "" {
 		t.Errorf("RenderTree(nil) = %q, want %q", got, "")
 	}
@@ -28,6 +29,7 @@ func TestRenderTree_Empty(t *testing.T) {
 }
 
 func TestRenderTree_FlatList(t *testing.T) {
+	t.Parallel()
 	events := []Event{
 		makeEvent(1, nil, "First event", "2026-04-10", "nicolas"),
 		makeEvent(2, nil, "Second event", "2026-04-11", "nicolas"),
@@ -44,6 +46,7 @@ func TestRenderTree_FlatList(t *testing.T) {
 }
 
 func TestRenderTree_NestedChildren(t *testing.T) {
+	t.Parallel()
 	events := []Event{
 		makeEvent(1, nil, "Parent event", "2026-04-10", "nicolas"),
 		makeEvent(2, new(int64(1)), "First child", "2026-04-10", "nicolas"),
@@ -62,6 +65,7 @@ func TestRenderTree_NestedChildren(t *testing.T) {
 }
 
 func TestRenderTree_DeepNesting(t *testing.T) {
+	t.Parallel()
 	events := []Event{
 		makeEvent(1, nil, "Root", "2026-04-10", "nicolas"),
 		makeEvent(2, new(int64(1)), "Child", "2026-04-10", "nicolas"),
@@ -80,6 +84,7 @@ func TestRenderTree_DeepNesting(t *testing.T) {
 }
 
 func TestRenderTree_MixedRootsAndChildren(t *testing.T) {
+	t.Parallel()
 	events := []Event{
 		makeEvent(1, nil, "Sprint 12 #work", "2026-04-10", "nicolas"),
 		makeEvent(2, new(int64(1)), "Planning meeting", "2026-04-10", "nicolas"),
@@ -102,6 +107,7 @@ func TestRenderTree_MixedRootsAndChildren(t *testing.T) {
 }
 
 func TestRenderFlat(t *testing.T) {
+	t.Parallel()
 	events := []Event{
 		makeEvent(1, nil, "Parent event", "2026-04-10", "nicolas"),
 		makeEvent(2, new(int64(1)), "Child event", "2026-04-11", "nicolas"),
@@ -118,6 +124,7 @@ func TestRenderFlat(t *testing.T) {
 }
 
 func TestMetaValue(t *testing.T) {
+	t.Parallel()
 	meta := []Meta{
 		{Key: "author", Value: "nicolas"},
 		{Key: "tag", Value: "work"},
@@ -138,6 +145,7 @@ func TestMetaValue(t *testing.T) {
 }
 
 func TestRenderJSON(t *testing.T) {
+	t.Parallel()
 	events := []Event{
 		makeEvent(1, nil, "Test event", "2026-04-10", "nicolas"),
 	}
@@ -162,6 +170,7 @@ func TestRenderJSON(t *testing.T) {
 }
 
 func TestRenderCSV(t *testing.T) {
+	t.Parallel()
 	events := []Event{
 		makeEvent(1, nil, "Test event", "2026-04-10", "nicolas"),
 	}
@@ -182,6 +191,7 @@ func TestRenderCSV(t *testing.T) {
 }
 
 func TestRenderCSV_Sanitization(t *testing.T) {
+	t.Parallel()
 	events := []Event{
 		makeEvent(1, nil, "=SUM(A1)", "2026-04-10", "nicolas"),
 		makeEvent(2, nil, "+cmd", "2026-04-10", "nicolas"),
@@ -207,6 +217,7 @@ func TestRenderCSV_Sanitization(t *testing.T) {
 }
 
 func TestCsvSanitize(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		input string
 		want  string

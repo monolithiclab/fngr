@@ -6,6 +6,7 @@ import (
 )
 
 func TestAddEvent(t *testing.T) {
+	t.Parallel()
 	db := testDBWithSchema(t)
 
 	meta := []Meta{
@@ -54,6 +55,7 @@ func TestAddEvent(t *testing.T) {
 }
 
 func TestAddEvent_WithParent(t *testing.T) {
+	t.Parallel()
 	db := testDBWithSchema(t)
 
 	parentID, err := AddEvent(db, "parent event", nil, nil)
@@ -78,6 +80,7 @@ func TestAddEvent_WithParent(t *testing.T) {
 }
 
 func TestAddEvent_InvalidParent(t *testing.T) {
+	t.Parallel()
 	db := testDBWithSchema(t)
 
 	invalidParent := int64(9999)
@@ -91,6 +94,7 @@ func TestAddEvent_InvalidParent(t *testing.T) {
 }
 
 func TestGetEvent(t *testing.T) {
+	t.Parallel()
 	db := testDBWithSchema(t)
 
 	meta := []Meta{
@@ -117,6 +121,7 @@ func TestGetEvent(t *testing.T) {
 }
 
 func TestGetEvent_NotFound(t *testing.T) {
+	t.Parallel()
 	db := testDBWithSchema(t)
 
 	_, err := GetEvent(db, 9999)
@@ -129,6 +134,7 @@ func TestGetEvent_NotFound(t *testing.T) {
 }
 
 func TestDeleteEvent(t *testing.T) {
+	t.Parallel()
 	db := testDBWithSchema(t)
 
 	id, err := AddEvent(db, "to be deleted", nil, nil)
@@ -152,6 +158,7 @@ func TestDeleteEvent(t *testing.T) {
 }
 
 func TestDeleteEvent_NotFound(t *testing.T) {
+	t.Parallel()
 	db := testDBWithSchema(t)
 
 	err := DeleteEvent(db, 9999)
@@ -164,6 +171,7 @@ func TestDeleteEvent_NotFound(t *testing.T) {
 }
 
 func TestDeleteEvent_CascadesChildren(t *testing.T) {
+	t.Parallel()
 	db := testDBWithSchema(t)
 
 	parentID, err := AddEvent(db, "parent", nil, []Meta{{Key: "author", Value: "alice"}})
@@ -192,6 +200,7 @@ func TestDeleteEvent_CascadesChildren(t *testing.T) {
 }
 
 func TestListEvents_NoFilter(t *testing.T) {
+	t.Parallel()
 	db := testDBWithSchema(t)
 
 	_, err := AddEvent(db, "first event #work", nil, []Meta{{Key: "tag", Value: "work"}})
@@ -219,6 +228,7 @@ func TestListEvents_NoFilter(t *testing.T) {
 }
 
 func TestListEvents_WithFilter(t *testing.T) {
+	t.Parallel()
 	db := testDBWithSchema(t)
 
 	_, err := AddEvent(db, "deploy to prod #ops", nil, []Meta{{Key: "tag", Value: "ops"}})
@@ -243,6 +253,7 @@ func TestListEvents_WithFilter(t *testing.T) {
 }
 
 func TestListEvents_WithDateRange(t *testing.T) {
+	t.Parallel()
 	db := testDBWithSchema(t)
 
 	// Insert events with explicit timestamps to control ordering and filtering.
@@ -302,6 +313,7 @@ func TestListEvents_WithDateRange(t *testing.T) {
 }
 
 func TestListMeta(t *testing.T) {
+	t.Parallel()
 	db := testDBWithSchema(t)
 
 	// Add 2 events with overlapping meta.
@@ -353,6 +365,7 @@ func TestListMeta(t *testing.T) {
 }
 
 func TestGetSubtree(t *testing.T) {
+	t.Parallel()
 	db := testDBWithSchema(t)
 
 	root, err := AddEvent(db, "root", nil, []Meta{{Key: MetaKeyAuthor, Value: "alice"}})
@@ -400,6 +413,7 @@ func TestGetSubtree(t *testing.T) {
 }
 
 func TestGetSubtree_LeafNode(t *testing.T) {
+	t.Parallel()
 	db := testDBWithSchema(t)
 
 	id, err := AddEvent(db, "leaf", nil, nil)
@@ -420,6 +434,7 @@ func TestGetSubtree_LeafNode(t *testing.T) {
 }
 
 func TestGetSubtree_NotFound(t *testing.T) {
+	t.Parallel()
 	db := testDBWithSchema(t)
 
 	_, err := GetSubtree(db, 9999)
@@ -432,6 +447,7 @@ func TestGetSubtree_NotFound(t *testing.T) {
 }
 
 func TestFTSIsolation_MetaTokensNotMatchedByBareWords(t *testing.T) {
+	t.Parallel()
 	db := testDBWithSchema(t)
 
 	// Event with tag=deploy in metadata but "deploy" does NOT appear in body text.
@@ -464,6 +480,7 @@ func TestFTSIsolation_MetaTokensNotMatchedByBareWords(t *testing.T) {
 }
 
 func TestFTSIsolation_BodyWordsNotMatchedByMetaFilter(t *testing.T) {
+	t.Parallel()
 	db := testDBWithSchema(t)
 
 	// Event with "work" in body text but no tag=work metadata.
@@ -495,6 +512,7 @@ func TestFTSIsolation_BodyWordsNotMatchedByMetaFilter(t *testing.T) {
 }
 
 func TestListEvents_ComplexFilters(t *testing.T) {
+	t.Parallel()
 	db := testDBWithSchema(t)
 
 	// Event 1: tagged ops, person alice, body "deploy to prod"

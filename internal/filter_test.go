@@ -5,6 +5,7 @@ import (
 )
 
 func TestTokenizeFilter(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		input string
@@ -25,6 +26,7 @@ func TestTokenizeFilter(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got := tokenizeFilter(tt.input)
 			if len(got) != len(tt.want) {
 				t.Fatalf("tokenizeFilter(%q) = %v (len %d), want %v (len %d)",
@@ -41,6 +43,7 @@ func TestTokenizeFilter(t *testing.T) {
 }
 
 func TestPreprocessFilter(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name  string
 		input string
@@ -62,6 +65,7 @@ func TestPreprocessFilter(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got := PreprocessFilter(tt.input)
 			if got != tt.want {
 				t.Errorf("PreprocessFilter(%q) = %q, want %q", tt.input, got, tt.want)
