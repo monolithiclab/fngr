@@ -14,9 +14,12 @@ aliased.
   detail (text format default; `--format text|json|csv`) and supports
   `--tree` for subtree view.
 - Seven mutating sub-verbs:
-  - `text "..."` — replace event text. Re-parse body tags (`@person`,
-    `#tag`) from the new text and add them with dedup against existing
-    meta. FTS is rebuilt.
+  - `text "..."` — replace event text. The body-derived tags
+    (`@person`, `#tag`) are *synced* to the new text: tags parsed from
+    the previous text are removed first, then tags parsed from the new
+    text are inserted with `ON CONFLICT DO NOTHING`. Non-body-derived
+    meta (`author`, anything added via `tag` with a `key=value` shape,
+    anything from `add --meta`) is untouched. FTS is rebuilt.
   - `time "..."` — accept either time-only (`09:30`, `2:15PM`) or full
     timestamps. Time-only preserves the event's existing date; full input
     replaces both.
@@ -37,9 +40,10 @@ aliased.
 - No `--force` flag (there's nothing to force past).
 - No bulk `event` operations (e.g. `event 1,2,3 tag #ops`). Single ID per
   invocation.
-- No body-tag *removal* on `text` edits. The roadmap intentionally chose
-  add-with-dedup so users don't lose meta they previously set; explicit
-  `untag` removes.
+- No way to keep a body-derived tag after removing it from the text. If
+  the previous text mentioned `@Sarah` and the new text doesn't, Sarah
+  is untagged. To re-add her, use `event N tag @Sarah` after the text
+  edit. This is the cost of keeping body tags consistent with the text.
 - No alias for `show` or `edit`. Pre-public ⇒ straight removal.
 
 ## Architecture
@@ -69,9 +73,11 @@ CREATE UNIQUE INDEX idx_event_meta_key_value_event_id
 The pre-existing `idx_event_meta_event_id` on `(event_id, key, value)`
 stays as-is (still the right shape for `loadMetaBatch`).
 
-`event.AddTags` and the body-tag re-parse path in `event.Update` now use
+`event.AddTags` and the body-tag re-tag step in `event.Update` use
 `INSERT INTO event_meta (event_id, key, value) VALUES (?, ?, ?)
-ON CONFLICT DO NOTHING` — no app-side `SELECT existing → diff` step.
+ON CONFLICT DO NOTHING`. The pre-untag step in `event.Update` uses
+`DELETE FROM event_meta WHERE event_id = ? AND key = ? AND value = ?`,
+one statement per tag parsed from the old text.
 
 ### `internal/timefmt` — partial parse
 
@@ -117,10 +123,12 @@ follow the same rules.
 
 ```go
 // Update modifies an event's text and/or timestamp atomically. When text
-// is non-nil, body tags (@person, #tag) are re-parsed from the new text
-// and added to the event's meta with dedup against existing entries.
-// Existing meta is never removed by Update (use RemoveTags for that).
-// FTS is rebuilt from the final text + final meta inside the same tx.
+// is non-nil, the body-derived tags (@person, #tag) are synced to the
+// new text: tags parsed from the previous text are deleted first, then
+// tags parsed from the new text are inserted via ON CONFLICT DO
+// NOTHING. Non-body-derived meta (author, key=value entries) is never
+// touched. FTS is rebuilt from the final text + final meta inside the
+// same tx.
 func Update(ctx context.Context, db *sql.DB, id int64, text *string, createdAt *time.Time) error
 ```
 
@@ -227,7 +235,7 @@ context.
 | Verb | Args | Behavior |
 | --- | --- | --- |
 | (none) | — | Print event detail. Honours `--tree` (subtree) and `--format text\|json\|csv`. |
-| `text "..."` | required string | Replace text. Re-parse body tags, add with dedup. FTS rebuilt. Empty text rejected. |
+| `text "..."` | required string | Replace text. Body tags synced: untag what the old text had, retag from the new text. Non-body meta is untouched. FTS rebuilt. Empty text rejected. |
 | `time "..."` | required string | `ParsePartial`. `hasTime=false` (input was date-only) ⇒ reject (`event time` expects a time or full timestamp). `hasDate=true` ⇒ replace both. `hasDate=false` ⇒ replace clock components, keep event's date. |
 | `date "..."` | required string | `ParsePartial`. `hasDate=false` (input was time-only) ⇒ reject (`event date` expects a date or full timestamp). `hasTime=true` ⇒ replace both. `hasTime=false` ⇒ replace date components, keep event's clock. |
 | `attach <id>` | required int | Set parent. Reject self-parent and cycles. |
@@ -242,12 +250,20 @@ context.
    `s.Update(ctx, 5, &body, nil)`.
 3. `event.Update` (extended):
    - Begin tx.
-   - Verify event 5 exists (`SELECT 1 FROM events WHERE id = ?`).
+   - Read event 5's current text (also confirms it exists; absence
+     returns `ErrNotFound`).
+   - `oldBodyTags := parse.BodyTags(oldText)`.
+   - `newBodyTags := parse.BodyTags(newText)`.
+   - For each tag in `oldBodyTags`: `DELETE FROM event_meta
+     WHERE event_id = ? AND key = ? AND value = ?` (idempotent — if the
+     user manually re-added it via `tag` it still belonged to the
+     "derived from the old text" set).
    - `UPDATE events SET text = ? WHERE id = ?`.
-   - Re-parse body tags from the new text → `[{people, Sarah}, {tag, urgent}]`.
-   - For each parsed tag, `INSERT INTO event_meta (event_id, key, value)
-     VALUES (?, ?, ?) ON CONFLICT DO NOTHING`. The UNIQUE index added by
-     migration 2 silently drops any tag that already exists on the event.
+   - For each tag in `newBodyTags`: `INSERT INTO event_meta (event_id,
+     key, value) VALUES (?, ?, ?) ON CONFLICT DO NOTHING`. The UNIQUE
+     index from migration 2 silently drops a tag that already exists on
+     the event (e.g. when both old and new text contain `@Sarah`,
+     `oldBodyTags` deletes Sarah, then `newBodyTags` re-inserts her).
    - `rebuildEventFTS(ctx, tx, 5)` reads `text` + final meta and writes
      `parse.FTSContent(text, meta)` to `events_fts`.
    - Commit.
@@ -295,9 +311,11 @@ helper.
   dropped by `ON CONFLICT DO NOTHING`).
 
 ### `internal/event`
-- `TestUpdate_TextRefreshesMetaAndFTS` — pre-existing meta preserved,
-  new body tags added, removed body tags NOT removed, FTS reflects new
-  text.
+- `TestUpdate_TextSyncsBodyTags` — pre-existing non-body meta
+  (`author`, `env=prod`) preserved; body tags from the old text
+  (`@Sarah`, `#ops`) removed when missing from the new text; new body
+  tags from the new text added; tags present in both old and new text
+  end up exactly once. FTS reflects new text.
 - `TestUpdate_TextDedupsRepeatedBodyTags` — text containing a tag the
   event already has produces no error and no duplicate row.
 - `TestReparent_RejectsSelf`, `TestReparent_RejectsAncestryCycle` (3-deep
