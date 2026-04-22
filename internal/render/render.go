@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/monolithiclab/fngr/internal/event"
@@ -13,8 +14,16 @@ import (
 	"github.com/monolithiclab/fngr/internal/timefmt"
 )
 
-func formatLocalDate(t time.Time) string {
-	return t.Local().Format(timefmt.DateFormat)
+// nowFunc lets tests pin the relative-stamp anchor.
+var (
+	nowMu   sync.RWMutex
+	nowFunc = time.Now
+)
+
+func formatLocalStamp(t time.Time) string {
+	nowMu.RLock()
+	defer nowMu.RUnlock()
+	return timefmt.FormatRelative(t, nowFunc())
 }
 
 func formatLocalDateTime(t time.Time) string {
@@ -101,7 +110,7 @@ func Tree(w io.Writer, events []event.Event) error {
 func renderNode(w io.Writer, events []event.Event, byID map[int64]int, children map[int64][]int64, id int64, linePrefix, childPrefix string) error {
 	idx := byID[id]
 	ev := events[idx]
-	line := formatEventLine(ev.ID, formatLocalDate(ev.CreatedAt), eventAuthor(ev), ev.Text)
+	line := formatEventLine(ev.ID, formatLocalStamp(ev.CreatedAt), eventAuthor(ev), ev.Text)
 
 	if _, err := fmt.Fprintf(w, "%s%s\n", linePrefix, line); err != nil {
 		return err
@@ -128,7 +137,7 @@ func renderNode(w io.Writer, events []event.Event, byID map[int64]int, children 
 
 func Flat(w io.Writer, events []event.Event) error {
 	for _, ev := range events {
-		line := formatEventLine(ev.ID, formatLocalDate(ev.CreatedAt), eventAuthor(ev), ev.Text)
+		line := formatEventLine(ev.ID, formatLocalStamp(ev.CreatedAt), eventAuthor(ev), ev.Text)
 		if _, err := fmt.Fprintln(w, line); err != nil {
 			return err
 		}

@@ -31,6 +31,21 @@ func renderTreeString(t *testing.T, events []event.Event) string {
 	return b.String()
 }
 
+// pinNow forces formatLocalStamp to use a fixed anchor so tree/flat output
+// is deterministic across runs and across calendar years.
+func pinNow(t *testing.T, now time.Time) {
+	t.Helper()
+	nowMu.Lock()
+	prev := nowFunc
+	nowFunc = func() time.Time { return now }
+	nowMu.Unlock()
+	t.Cleanup(func() {
+		nowMu.Lock()
+		defer nowMu.Unlock()
+		nowFunc = prev
+	})
+}
+
 func TestTree_Empty(t *testing.T) {
 	t.Parallel()
 	if got := renderTreeString(t, nil); got != "" {
@@ -42,15 +57,15 @@ func TestTree_Empty(t *testing.T) {
 }
 
 func TestTree_FlatList(t *testing.T) {
-	t.Parallel()
+	pinNow(t, time.Date(2030, 1, 1, 0, 0, 0, 0, time.Local))
 	events := []event.Event{
 		makeEvent(1, nil, "First event", "2026-04-10", "nicolas"),
 		makeEvent(2, nil, "Second event", "2026-04-11", "nicolas"),
 	}
 
 	want := "" +
-		"1   2026-04-10  nicolas  First event\n" +
-		"2   2026-04-11  nicolas  Second event\n"
+		"1   Apr 10 2026 2.00am  nicolas  First event\n" +
+		"2   Apr 11 2026 2.00am  nicolas  Second event\n"
 
 	got := renderTreeString(t, events)
 	if got != want {
@@ -59,7 +74,7 @@ func TestTree_FlatList(t *testing.T) {
 }
 
 func TestTree_NestedChildren(t *testing.T) {
-	t.Parallel()
+	pinNow(t, time.Date(2030, 1, 1, 0, 0, 0, 0, time.Local))
 	p1 := int64(1)
 	events := []event.Event{
 		makeEvent(1, nil, "Parent event", "2026-04-10", "nicolas"),
@@ -68,9 +83,9 @@ func TestTree_NestedChildren(t *testing.T) {
 	}
 
 	want := "" +
-		"1   2026-04-10  nicolas  Parent event\n" +
-		"\u251c\u2500 2   2026-04-10  nicolas  First child\n" +
-		"\u2514\u2500 3   2026-04-11  nicolas  Second child\n"
+		"1   Apr 10 2026 2.00am  nicolas  Parent event\n" +
+		"\u251c\u2500 2   Apr 10 2026 2.00am  nicolas  First child\n" +
+		"\u2514\u2500 3   Apr 11 2026 2.00am  nicolas  Second child\n"
 
 	got := renderTreeString(t, events)
 	if got != want {
@@ -79,7 +94,7 @@ func TestTree_NestedChildren(t *testing.T) {
 }
 
 func TestTree_DeepNesting(t *testing.T) {
-	t.Parallel()
+	pinNow(t, time.Date(2030, 1, 1, 0, 0, 0, 0, time.Local))
 	p1 := int64(1)
 	p2 := int64(2)
 	events := []event.Event{
@@ -89,9 +104,9 @@ func TestTree_DeepNesting(t *testing.T) {
 	}
 
 	want := "" +
-		"1   2026-04-10  nicolas  Root\n" +
-		"\u2514\u2500 2   2026-04-10  nicolas  Child\n" +
-		"   \u2514\u2500 3   2026-04-11  nicolas  Grandchild\n"
+		"1   Apr 10 2026 2.00am  nicolas  Root\n" +
+		"\u2514\u2500 2   Apr 10 2026 2.00am  nicolas  Child\n" +
+		"   \u2514\u2500 3   Apr 11 2026 2.00am  nicolas  Grandchild\n"
 
 	got := renderTreeString(t, events)
 	if got != want {
@@ -100,7 +115,7 @@ func TestTree_DeepNesting(t *testing.T) {
 }
 
 func TestTree_MixedRootsAndChildren(t *testing.T) {
-	t.Parallel()
+	pinNow(t, time.Date(2030, 1, 1, 0, 0, 0, 0, time.Local))
 	p1 := int64(1)
 	p2 := int64(2)
 	events := []event.Event{
@@ -112,11 +127,11 @@ func TestTree_MixedRootsAndChildren(t *testing.T) {
 	}
 
 	want := "" +
-		"1   2026-04-10  nicolas  Sprint 12 #work\n" +
-		"\u251c\u2500 2   2026-04-10  nicolas  Planning meeting\n" +
-		"\u2502  \u2514\u2500 4   2026-04-10  nicolas  Decided on architecture\n" +
-		"\u2514\u2500 3   2026-04-11  nicolas  Deploy v2.0 #ops\n" +
-		"5   2026-04-12  nicolas  Lunch with Sarah\n"
+		"1   Apr 10 2026 2.00am  nicolas  Sprint 12 #work\n" +
+		"\u251c\u2500 2   Apr 10 2026 2.00am  nicolas  Planning meeting\n" +
+		"\u2502  \u2514\u2500 4   Apr 10 2026 2.00am  nicolas  Decided on architecture\n" +
+		"\u2514\u2500 3   Apr 11 2026 2.00am  nicolas  Deploy v2.0 #ops\n" +
+		"5   Apr 12 2026 2.00am  nicolas  Lunch with Sarah\n"
 
 	got := renderTreeString(t, events)
 	if got != want {
@@ -125,7 +140,7 @@ func TestTree_MixedRootsAndChildren(t *testing.T) {
 }
 
 func TestTree_OrphanedChildren(t *testing.T) {
-	t.Parallel()
+	pinNow(t, time.Date(2030, 1, 1, 0, 0, 0, 0, time.Local))
 	missingParent := int64(99)
 	another := int64(100)
 	events := []event.Event{
@@ -134,8 +149,8 @@ func TestTree_OrphanedChildren(t *testing.T) {
 	}
 
 	want := "" +
-		"1   2026-04-10  nicolas  Filtered child\n" +
-		"2   2026-04-11  nicolas  Another orphan\n"
+		"1   Apr 10 2026 2.00am  nicolas  Filtered child\n" +
+		"2   Apr 11 2026 2.00am  nicolas  Another orphan\n"
 
 	got := renderTreeString(t, events)
 	if got != want {
@@ -144,7 +159,7 @@ func TestTree_OrphanedChildren(t *testing.T) {
 }
 
 func TestFlat(t *testing.T) {
-	t.Parallel()
+	pinNow(t, time.Date(2030, 1, 1, 0, 0, 0, 0, time.Local))
 	p1 := int64(1)
 	events := []event.Event{
 		makeEvent(1, nil, "Parent event", "2026-04-10", "nicolas"),
@@ -152,8 +167,8 @@ func TestFlat(t *testing.T) {
 	}
 
 	want := "" +
-		"1   2026-04-10  nicolas  Parent event\n" +
-		"2   2026-04-11  nicolas  Child event\n"
+		"1   Apr 10 2026 2.00am  nicolas  Parent event\n" +
+		"2   Apr 11 2026 2.00am  nicolas  Child event\n"
 
 	var b bytes.Buffer
 	if err := Flat(&b, events); err != nil {
@@ -200,18 +215,18 @@ func TestEvent_DetailWithoutParentOrMeta(t *testing.T) {
 }
 
 func TestEvents_Dispatch(t *testing.T) {
-	t.Parallel()
+	pinNow(t, time.Date(2030, 1, 1, 0, 0, 0, 0, time.Local))
 	events := []event.Event{makeEvent(1, nil, "hi", "2026-04-10", "nicolas")}
 
 	tests := []struct {
 		format string
 		check  func(string) bool
 	}{
-		{"tree", func(s string) bool { return strings.Contains(s, "1   2026-04-10  nicolas  hi") }},
-		{"flat", func(s string) bool { return strings.Contains(s, "1   2026-04-10  nicolas  hi") }},
+		{"tree", func(s string) bool { return strings.Contains(s, "1   Apr 10 2026 2.00am  nicolas  hi") }},
+		{"flat", func(s string) bool { return strings.Contains(s, "1   Apr 10 2026 2.00am  nicolas  hi") }},
 		{"json", func(s string) bool { return strings.HasPrefix(s, "[\n") }},
 		{"csv", func(s string) bool { return strings.HasPrefix(s, "id,parent_id,") }},
-		{"unknown", func(s string) bool { return strings.Contains(s, "1   2026-04-10  nicolas  hi") }},
+		{"unknown", func(s string) bool { return strings.Contains(s, "1   Apr 10 2026 2.00am  nicolas  hi") }},
 	}
 
 	for _, tt := range tests {
