@@ -56,41 +56,51 @@ func TestKongDispatch_AllCommands(t *testing.T) {
 		name  string
 		argv  []string
 		stdin string
+		isTTY bool
 		want  string
 	}{
-		{name: "bare-fngr", argv: []string{}, want: ""},
-		{name: "bare-fngr-reverse", argv: []string{"-r"}, want: ""},
-		{name: "bare-fngr-no-pager", argv: []string{"--no-pager"}, want: ""},
-		{name: "add", argv: []string{"add", "hello"}, want: "Added event 1"},
-		{name: "list", argv: []string{"list"}, want: ""},
-		{name: "event-bare", argv: []string{"event", "1"}, want: ""},
-		{name: "event-show", argv: []string{"event", "show", "1"}, want: ""},
-		{name: "event-show-tree", argv: []string{"event", "show", "1", "--tree"}, want: ""},
-		{name: "event-show-json", argv: []string{"event", "show", "1", "--format", "json"}, want: ""},
-		{name: "event-text", argv: []string{"event", "text", "1", "x"}, want: ""},
-		{name: "event-time", argv: []string{"event", "time", "1", "09:30"}, want: ""},
-		{name: "event-date", argv: []string{"event", "date", "1", "2026-05-01"}, want: ""},
-		{name: "event-attach", argv: []string{"event", "attach", "1", "2"}, want: ""},
-		{name: "event-detach", argv: []string{"event", "detach", "1"}, want: ""},
-		{name: "event-tag", argv: []string{"event", "tag", "1", "#ops"}, want: ""},
-		{name: "event-untag", argv: []string{"event", "untag", "1", "#ops"}, want: ""},
-		{name: "delete", argv: []string{"delete", "1", "-f"}, want: ""},
-		{name: "meta", argv: []string{"meta"}, want: ""},
-		{name: "meta-search-key", argv: []string{"meta", "-S", "tag"}, want: ""},
-		{name: "meta-search-keyvalue", argv: []string{"meta", "-S", "tag=a"}, want: ""},
-		{name: "meta-search-shorthand", argv: []string{"meta", "-S", "#a"}, want: ""},
-		{name: "meta-rename", argv: []string{"meta", "rename", "tag=a", "tag=b", "-f"}, want: ""},
-		{name: "meta-delete", argv: []string{"meta", "delete", "tag=a", "-f"}, want: ""},
+		{name: "bare-fngr", argv: []string{}, isTTY: true, want: ""},
+		{name: "bare-fngr-reverse", argv: []string{"-r"}, isTTY: true, want: ""},
+		{name: "bare-fngr-no-pager", argv: []string{"--no-pager"}, isTTY: true, want: ""},
+		{name: "add", argv: []string{"add", "hello"}, isTTY: true, want: "Added event 1"},
+		{name: "add-multiarg", argv: []string{"add", "deployed", "v1.2"}, isTTY: true, want: "Added event 1"},
+		{name: "add-stdin", argv: []string{"add"}, stdin: "piped body", isTTY: false, want: ""},
+		{name: "add-editor", argv: []string{"add", "-e"}, isTTY: true, want: "Added event 1"},
+		{name: "list", argv: []string{"list"}, isTTY: true, want: ""},
+		{name: "event-bare", argv: []string{"event", "1"}, isTTY: true, want: ""},
+		{name: "event-show", argv: []string{"event", "show", "1"}, isTTY: true, want: ""},
+		{name: "event-show-tree", argv: []string{"event", "show", "1", "--tree"}, isTTY: true, want: ""},
+		{name: "event-show-json", argv: []string{"event", "show", "1", "--format", "json"}, isTTY: true, want: ""},
+		{name: "event-text", argv: []string{"event", "text", "1", "x"}, isTTY: true, want: ""},
+		{name: "event-time", argv: []string{"event", "time", "1", "09:30"}, isTTY: true, want: ""},
+		{name: "event-date", argv: []string{"event", "date", "1", "2026-05-01"}, isTTY: true, want: ""},
+		{name: "event-attach", argv: []string{"event", "attach", "1", "2"}, isTTY: true, want: ""},
+		{name: "event-detach", argv: []string{"event", "detach", "1"}, isTTY: true, want: ""},
+		{name: "event-tag", argv: []string{"event", "tag", "1", "#ops"}, isTTY: true, want: ""},
+		{name: "event-untag", argv: []string{"event", "untag", "1", "#ops"}, isTTY: true, want: ""},
+		{name: "delete", argv: []string{"delete", "1", "-f"}, isTTY: true, want: ""},
+		{name: "meta", argv: []string{"meta"}, isTTY: true, want: ""},
+		{name: "meta-search-key", argv: []string{"meta", "-S", "tag"}, isTTY: true, want: ""},
+		{name: "meta-search-keyvalue", argv: []string{"meta", "-S", "tag=a"}, isTTY: true, want: ""},
+		{name: "meta-search-shorthand", argv: []string{"meta", "-S", "#a"}, isTTY: true, want: ""},
+		{name: "meta-rename", argv: []string{"meta", "rename", "tag=a", "tag=b", "-f"}, isTTY: true, want: ""},
+		{name: "meta-delete", argv: []string{"meta", "delete", "tag=a", "-f"}, isTTY: true, want: ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := dispatch(t, tc.argv, tc.stdin, true)
+
+			if tc.name == "add-editor" {
+				origEditor := launchEditor
+				launchEditor = func(string) (string, error) { return "from editor", nil }
+				t.Cleanup(func() { launchEditor = origEditor })
+			}
+
+			_, err := dispatch(t, tc.argv, tc.stdin, tc.isTTY)
 			if err != nil && strings.Contains(err.Error(), "couldn't find binding") {
 				t.Fatalf("kong binding error for %q: %v", tc.argv, err)
 			}
-			// Other errors (e.g. "no metadata matching") are fine; this test
-			// only guards the wiring contract.
+			// Other errors are fine; this test only guards the wiring contract.
 		})
 	}
 }
