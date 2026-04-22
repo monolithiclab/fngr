@@ -65,3 +65,7 @@ func (s *Store) UpdateMeta(ctx context.Context, oldKey, oldValue, newKey, newVal
 func (s *Store) DeleteMeta(ctx context.Context, key, value string) (int64, error) {
 	return DeleteMeta(ctx, s.DB, key, value)
 }
+
+func (s *Store) Reparent(ctx context.Context, id int64, newParent *int64) error {
+	return Reparent(ctx, s.DB, id, newParent)
+}

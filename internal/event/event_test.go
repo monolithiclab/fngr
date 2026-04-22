@@ -887,3 +887,96 @@ func TestListSeq_AcrossBatchBoundary(t *testing.T) {
 		t.Errorf("yielded %d events, want %d", count, n)
 	}
 }
+
+func TestReparent_DetachClearsParent(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	parent, err := Add(ctx, database, "parent", nil, nil, nil)
+	if err != nil {
+		t.Fatalf("Add parent: %v", err)
+	}
+	child, err := Add(ctx, database, "child", &parent, nil, nil)
+	if err != nil {
+		t.Fatalf("Add child: %v", err)
+	}
+
+	if err := Reparent(ctx, database, child, nil); err != nil {
+		t.Fatalf("Reparent detach: %v", err)
+	}
+
+	ev, err := Get(ctx, database, child)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if ev.ParentID != nil {
+		t.Errorf("ParentID = %d, want nil", *ev.ParentID)
+	}
+}
+
+func TestReparent_AllowsValidMove(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	a, _ := Add(ctx, database, "a", nil, nil, nil)
+	b, _ := Add(ctx, database, "b", nil, nil, nil)
+	c, _ := Add(ctx, database, "c", &a, nil, nil)
+
+	if err := Reparent(ctx, database, c, &b); err != nil {
+		t.Fatalf("Reparent: %v", err)
+	}
+	ev, _ := Get(ctx, database, c)
+	if ev.ParentID == nil || *ev.ParentID != b {
+		t.Errorf("ParentID = %v, want %d", ev.ParentID, b)
+	}
+}
+
+func TestReparent_RejectsSelf(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	id, _ := Add(ctx, database, "x", nil, nil, nil)
+
+	err := Reparent(ctx, database, id, &id)
+	if !errors.Is(err, ErrCycle) {
+		t.Errorf("err = %v, want ErrCycle", err)
+	}
+}
+
+func TestReparent_RejectsAncestryCycle(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	// 1 -> 2 -> 3   (3 has parent 2 has parent 1)
+	a, _ := Add(ctx, database, "a", nil, nil, nil)
+	b, _ := Add(ctx, database, "b", &a, nil, nil)
+	c, _ := Add(ctx, database, "c", &b, nil, nil)
+
+	// Attaching a (top) to c (descendant) would form a cycle.
+	err := Reparent(ctx, database, a, &c)
+	if !errors.Is(err, ErrCycle) {
+		t.Errorf("err = %v, want ErrCycle", err)
+	}
+}
+
+func TestReparent_NotFound(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	err := Reparent(ctx, database, 9999, nil)
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestReparent_NewParentNotFound(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+	id, _ := Add(ctx, database, "x", nil, nil, nil)
+
+	missing := int64(9999)
+	err := Reparent(ctx, database, id, &missing)
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("err = %v, want ErrNotFound", err)
+	}
+}

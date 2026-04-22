@@ -15,6 +15,10 @@ import (
 
 var ErrNotFound = errors.New("not found")
 
+// ErrCycle is returned when Reparent would introduce a cycle (including
+// the self-parent case).
+var ErrCycle = errors.New("would create a parent cycle")
+
 type Event struct {
 	ID        int64
 	ParentID  *int64
@@ -177,6 +181,68 @@ func Update(ctx context.Context, db *sql.DB, id int64, text *string, createdAt *
 		return fmt.Errorf("commit transaction: %w", err)
 	}
 	return nil
+}
+
+// Reparent sets event id's parent to newParent, or clears it when
+// newParent is nil. Walks the candidate parent's ancestry chain and
+// returns ErrCycle if id appears in it (including newParent == &id).
+// Returns ErrNotFound if id or *newParent does not exist.
+func Reparent(ctx context.Context, db *sql.DB, id int64, newParent *int64) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Confirm the event exists.
+	var dummy int
+	err = tx.QueryRowContext(ctx, "SELECT 1 FROM events WHERE id = ?", id).Scan(&dummy)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("event %d: %w", id, ErrNotFound)
+		}
+		return fmt.Errorf("query event: %w", err)
+	}
+
+	if newParent != nil {
+		if *newParent == id {
+			return fmt.Errorf("self-parent on event %d: %w", id, ErrCycle)
+		}
+
+		// Walk ancestry from *newParent upward; reject if we hit id.
+		cursor := *newParent
+		for {
+			var parent sql.NullInt64
+			err := tx.QueryRowContext(ctx, "SELECT parent_id FROM events WHERE id = ?", cursor).Scan(&parent)
+			if err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return fmt.Errorf("parent event %d: %w", cursor, ErrNotFound)
+				}
+				return fmt.Errorf("walk ancestry: %w", err)
+			}
+			if !parent.Valid {
+				break
+			}
+			if parent.Int64 == id {
+				return fmt.Errorf("attaching event %d to event %d would form a cycle: %w", id, *newParent, ErrCycle)
+			}
+			cursor = parent.Int64
+		}
+
+		if _, err := tx.ExecContext(ctx,
+			"UPDATE events SET parent_id = ? WHERE id = ?", *newParent, id,
+		); err != nil {
+			return fmt.Errorf("set parent: %w", err)
+		}
+	} else {
+		if _, err := tx.ExecContext(ctx,
+			"UPDATE events SET parent_id = NULL WHERE id = ?", id,
+		); err != nil {
+			return fmt.Errorf("clear parent: %w", err)
+		}
+	}
+
+	return tx.Commit()
 }
 
 func readMetaTx(ctx context.Context, tx *sql.Tx, id int64) ([]parse.Meta, error) {

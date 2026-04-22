@@ -282,3 +282,23 @@ func TestStore_ListSeq(t *testing.T) {
 		t.Errorf("got %v, want %v", got, want)
 	}
 }
+
+func TestStore_Reparent(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+
+	a, _ := s.Add(ctx, "a", nil, nil, nil)
+	b, _ := s.Add(ctx, "b", nil, nil, nil)
+	c, _ := s.Add(ctx, "c", &a, nil, nil)
+
+	if err := s.Reparent(ctx, c, &b); err != nil {
+		t.Fatalf("Reparent: %v", err)
+	}
+	ev, err := s.Get(ctx, c)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if ev.ParentID == nil || *ev.ParentID != b {
+		t.Errorf("ParentID = %v, want %d", ev.ParentID, b)
+	}
+}
