@@ -1143,3 +1143,67 @@ func TestRemoveTags_EmptyIsNoOp(t *testing.T) {
 		t.Errorf("empty RemoveTags returned %d, want 0", n)
 	}
 }
+
+func TestUpdate_TextSyncsBodyTags(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	// Pre-existing meta: body-derived (alice, ops) plus non-body (env=prod, author).
+	id, err := Add(ctx, database, "deploy with @alice #ops", nil, []parse.Meta{
+		{Key: "author", Value: "nicolas"},
+		{Key: "people", Value: "alice"},
+		{Key: "tag", Value: "ops"},
+		{Key: "env", Value: "prod"},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	// Replace text: drop @alice, add @bob, keep #ops.
+	newText := "rolled back with @bob #ops"
+	if err := Update(ctx, database, id, &newText, nil); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	ev, err := Get(ctx, database, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+
+	want := map[parse.Meta]bool{
+		{Key: "author", Value: "nicolas"}: true, // non-body — preserved
+		{Key: "env", Value: "prod"}:       true, // non-body — preserved
+		{Key: "tag", Value: "ops"}:        true, // body in both → kept (exactly once)
+		{Key: "people", Value: "bob"}:     true, // new body tag
+	}
+	if len(ev.Meta) != len(want) {
+		t.Errorf("got %d meta entries, want %d: %v", len(ev.Meta), len(want), ev.Meta)
+	}
+	for _, m := range ev.Meta {
+		if !want[m] {
+			t.Errorf("unexpected meta %v (alice should have been removed)", m)
+		}
+	}
+}
+
+func TestUpdate_TextDedupsRepeatedBodyTags(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	id, _ := Add(ctx, database, "x #ops", nil, []parse.Meta{
+		{Key: "tag", Value: "ops"},
+	}, nil)
+
+	newText := "y #ops #ops"
+	if err := Update(ctx, database, id, &newText, nil); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	n, err := CountMeta(ctx, database, "tag", "ops")
+	if err != nil {
+		t.Fatalf("CountMeta: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("tag=ops count = %d, want 1", n)
+	}
+}

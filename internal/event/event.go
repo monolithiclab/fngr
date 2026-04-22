@@ -156,6 +156,14 @@ func Update(ctx context.Context, db *sql.DB, id int64, text *string, createdAt *
 		return fmt.Errorf("query event: %w", err)
 	}
 
+	if text != nil {
+		// Body-tag sync, step 1: remove tags parsed from the *previous* text.
+		oldBodyTags := parse.BodyTags(existing)
+		if err := deleteMetaTuples(ctx, tx, id, oldBodyTags); err != nil {
+			return err
+		}
+	}
+
 	sets := make([]string, 0, 2)
 	args := make([]any, 0, 3)
 	if text != nil {
@@ -172,6 +180,11 @@ func Update(ctx context.Context, db *sql.DB, id int64, text *string, createdAt *
 	}
 
 	if text != nil {
+		// Body-tag sync, step 2: insert tags parsed from the *new* text.
+		newBodyTags := parse.BodyTags(*text)
+		if err := insertMetaTuples(ctx, tx, id, newBodyTags); err != nil {
+			return err
+		}
 		if err := rebuildEventFTS(ctx, tx, id); err != nil {
 			return err
 		}
@@ -362,6 +375,48 @@ func readMetaTx(ctx context.Context, tx *sql.Tx, id int64) ([]parse.Meta, error)
 		meta = append(meta, m)
 	}
 	return meta, rows.Err()
+}
+
+// deleteMetaTuples removes (id, key, value) rows for the given tags. Empty
+// tags is a no-op.
+func deleteMetaTuples(ctx context.Context, tx *sql.Tx, id int64, tags []parse.Meta) error {
+	if len(tags) == 0 {
+		return nil
+	}
+	stmt, err := tx.PrepareContext(ctx,
+		"DELETE FROM event_meta WHERE event_id = ? AND key = ? AND value = ?",
+	)
+	if err != nil {
+		return fmt.Errorf("prepare delete: %w", err)
+	}
+	defer stmt.Close()
+	for _, m := range tags {
+		if _, err := stmt.ExecContext(ctx, id, m.Key, m.Value); err != nil {
+			return fmt.Errorf("delete meta: %w", err)
+		}
+	}
+	return nil
+}
+
+// insertMetaTuples inserts (id, key, value) rows for the given tags using
+// ON CONFLICT DO NOTHING. Empty tags is a no-op.
+func insertMetaTuples(ctx context.Context, tx *sql.Tx, id int64, tags []parse.Meta) error {
+	if len(tags) == 0 {
+		return nil
+	}
+	stmt, err := tx.PrepareContext(ctx,
+		"INSERT INTO event_meta (event_id, key, value) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
+	)
+	if err != nil {
+		return fmt.Errorf("prepare insert: %w", err)
+	}
+	defer stmt.Close()
+	for _, m := range tags {
+		if _, err := stmt.ExecContext(ctx, id, m.Key, m.Value); err != nil {
+			return fmt.Errorf("insert meta: %w", err)
+		}
+	}
+	return nil
 }
 
 // rebuildEventFTS reads the event's current text + meta inside tx and
