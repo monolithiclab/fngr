@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"iter"
 	"strconv"
 	"time"
 
@@ -148,20 +149,24 @@ type jsonEvent struct {
 	Meta      map[string][]string `json:"meta,omitempty"`
 }
 
+func toJSONEvent(ev event.Event) jsonEvent {
+	meta := make(map[string][]string)
+	for _, m := range ev.Meta {
+		meta[m.Key] = append(meta[m.Key], m.Value)
+	}
+	return jsonEvent{
+		ID:        ev.ID,
+		ParentID:  ev.ParentID,
+		Text:      ev.Text,
+		CreatedAt: ev.CreatedAt.UTC().Format(time.RFC3339),
+		Meta:      meta,
+	}
+}
+
 func JSON(w io.Writer, events []event.Event) error {
 	out := make([]jsonEvent, len(events))
 	for i, ev := range events {
-		meta := make(map[string][]string)
-		for _, m := range ev.Meta {
-			meta[m.Key] = append(meta[m.Key], m.Value)
-		}
-		out[i] = jsonEvent{
-			ID:        ev.ID,
-			ParentID:  ev.ParentID,
-			Text:      ev.Text,
-			CreatedAt: ev.CreatedAt.UTC().Format(time.RFC3339),
-			Meta:      meta,
-		}
+		out[i] = toJSONEvent(ev)
 	}
 	data, err := json.MarshalIndent(out, "", "  ")
 	if err != nil {
@@ -219,4 +224,110 @@ func Event(w io.Writer, ev *event.Event) error {
 	}
 
 	return nil
+}
+
+// FlatStream is the streaming counterpart to Flat. It writes one line per
+// event as the iterator yields. The first error from seq aborts and is
+// returned.
+func FlatStream(w io.Writer, seq iter.Seq2[event.Event, error]) error {
+	for ev, err := range seq {
+		if err != nil {
+			return err
+		}
+		line := formatEventLine(ev.ID, formatLocalStamp(ev.CreatedAt), eventAuthor(ev), ev.Text)
+		if _, err := fmt.Fprintln(w, line); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// CSVStream is the streaming counterpart to CSV. It writes the header
+// followed by one row per event from seq.
+func CSVStream(w io.Writer, seq iter.Seq2[event.Event, error]) error {
+	cw := csv.NewWriter(w)
+	if err := cw.Write([]string{"id", "parent_id", "created_at", "author", "text"}); err != nil {
+		return err
+	}
+	for ev, err := range seq {
+		if err != nil {
+			cw.Flush()
+			return err
+		}
+		parentID := ""
+		if ev.ParentID != nil {
+			parentID = strconv.FormatInt(*ev.ParentID, 10)
+		}
+		if err := cw.Write([]string{
+			strconv.FormatInt(ev.ID, 10),
+			parentID,
+			ev.CreatedAt.UTC().Format(time.RFC3339),
+			eventAuthor(ev),
+			ev.Text,
+		}); err != nil {
+			return err
+		}
+	}
+	cw.Flush()
+	return cw.Error()
+}
+
+// JSONStream is the streaming counterpart to JSON. It writes a JSON array
+// where each element is encoded individually, so the full serialized blob
+// is never held in memory. On error mid-stream the array is still closed
+// with "]\n" so any captured output is syntactically valid JSON.
+func JSONStream(w io.Writer, seq iter.Seq2[event.Event, error]) error {
+	if _, err := fmt.Fprint(w, "["); err != nil {
+		return err
+	}
+	enc := json.NewEncoder(w)
+	enc.SetIndent("  ", "  ")
+
+	first := true
+	var streamErr error
+	for ev, err := range seq {
+		if err != nil {
+			streamErr = err
+			break
+		}
+		if !first {
+			if _, werr := fmt.Fprint(w, ","); werr != nil {
+				return werr
+			}
+		}
+		if _, werr := fmt.Fprint(w, "\n  "); werr != nil {
+			return werr
+		}
+		if err := enc.Encode(toJSONEvent(ev)); err != nil {
+			return err
+		}
+		first = false
+	}
+	if !first {
+		if _, err := fmt.Fprint(w, "\n"); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprint(w, "]\n"); err != nil {
+		return err
+	}
+	return streamErr
+}
+
+// EventsStream dispatches a streaming render. Tree is rejected because it
+// requires the full slice for parent-child topology; callers that want
+// tree must use Events with a materialized []Event.
+func EventsStream(w io.Writer, format string, seq iter.Seq2[event.Event, error]) error {
+	switch format {
+	case "csv":
+		return CSVStream(w, seq)
+	case "json":
+		return JSONStream(w, seq)
+	case "flat":
+		return FlatStream(w, seq)
+	case "tree":
+		return fmt.Errorf("EventsStream: tree format requires the full slice; use Events instead")
+	default:
+		return FlatStream(w, seq)
+	}
 }

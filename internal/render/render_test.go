@@ -3,6 +3,9 @@ package render
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
+	"iter"
 	"strings"
 	"testing"
 	"time"
@@ -359,5 +362,154 @@ func TestCSV_SpecialChars(t *testing.T) {
 	}
 	if !strings.Contains(lines[2], "=formula") {
 		t.Errorf("expected raw =formula (no sanitization prefix), got line: %s", lines[2])
+	}
+}
+
+func staticSeq(events []event.Event) iter.Seq2[event.Event, error] {
+	return func(yield func(event.Event, error) bool) {
+		for _, ev := range events {
+			if !yield(ev, nil) {
+				return
+			}
+		}
+	}
+}
+
+func errorAtSeq(events []event.Event, errAt int, err error) iter.Seq2[event.Event, error] {
+	return func(yield func(event.Event, error) bool) {
+		for i, ev := range events {
+			if i == errAt {
+				yield(event.Event{}, err)
+				return
+			}
+			if !yield(ev, nil) {
+				return
+			}
+		}
+		if errAt >= len(events) {
+			yield(event.Event{}, err)
+		}
+	}
+}
+
+func TestFlatStream_MatchesFlat(t *testing.T) {
+	pinNow(t, time.Date(2030, 1, 1, 0, 0, 0, 0, time.Local))
+	events := []event.Event{
+		makeEvent(1, nil, "first", "2026-04-10", "alice"),
+		makeEvent(2, nil, "second", "2026-04-11", "alice"),
+	}
+
+	var slow, fast bytes.Buffer
+	if err := Flat(&slow, events); err != nil {
+		t.Fatalf("Flat: %v", err)
+	}
+	if err := FlatStream(&fast, staticSeq(events)); err != nil {
+		t.Fatalf("FlatStream: %v", err)
+	}
+	if slow.String() != fast.String() {
+		t.Errorf("FlatStream != Flat\n--- Flat ---\n%s\n--- Stream ---\n%s", slow.String(), fast.String())
+	}
+}
+
+func TestCSVStream_MatchesCSV(t *testing.T) {
+	t.Parallel()
+	events := []event.Event{
+		makeEvent(1, nil, "x", "2026-04-10", "alice"),
+		makeEvent(2, nil, "y", "2026-04-11", "alice"),
+	}
+
+	var slow, fast bytes.Buffer
+	if err := CSV(&slow, events); err != nil {
+		t.Fatalf("CSV: %v", err)
+	}
+	if err := CSVStream(&fast, staticSeq(events)); err != nil {
+		t.Fatalf("CSVStream: %v", err)
+	}
+	if slow.String() != fast.String() {
+		t.Errorf("CSVStream != CSV\n--- CSV ---\n%s\n--- Stream ---\n%s", slow.String(), fast.String())
+	}
+}
+
+func TestJSONStream_ProducesValidJSON(t *testing.T) {
+	t.Parallel()
+	events := []event.Event{
+		makeEvent(1, nil, "a", "2026-04-10", "alice"),
+		makeEvent(2, nil, "b", "2026-04-11", "alice"),
+	}
+
+	var b bytes.Buffer
+	if err := JSONStream(&b, staticSeq(events)); err != nil {
+		t.Fatalf("JSONStream: %v", err)
+	}
+
+	var parsed []map[string]any
+	if err := json.Unmarshal(b.Bytes(), &parsed); err != nil {
+		t.Fatalf("invalid JSON: %v\noutput:\n%s", err, b.String())
+	}
+	if len(parsed) != 2 {
+		t.Errorf("got %d entries, want 2; output:\n%s", len(parsed), b.String())
+	}
+	if !strings.HasSuffix(b.String(), "\n") {
+		t.Error("JSONStream missing trailing newline")
+	}
+}
+
+func TestJSONStream_EmptyProducesEmptyArray(t *testing.T) {
+	t.Parallel()
+	var b bytes.Buffer
+	if err := JSONStream(&b, staticSeq(nil)); err != nil {
+		t.Fatalf("JSONStream: %v", err)
+	}
+	got := strings.TrimSpace(b.String())
+	if got != "[]" {
+		t.Errorf("empty stream produced %q, want %q", got, "[]")
+	}
+}
+
+func TestJSONStream_ClosesOnError(t *testing.T) {
+	t.Parallel()
+	events := []event.Event{makeEvent(1, nil, "ok", "2026-04-10", "alice")}
+	wantErr := errors.New("boom")
+
+	var b bytes.Buffer
+	err := JSONStream(&b, errorAtSeq(events, 1, wantErr))
+	if !errors.Is(err, wantErr) {
+		t.Errorf("err = %v, want boom", err)
+	}
+	if !strings.HasSuffix(strings.TrimSpace(b.String()), "]") {
+		t.Errorf("JSONStream did not close array; got:\n%s", b.String())
+	}
+}
+
+func TestEventsStream_Dispatch(t *testing.T) {
+	t.Parallel()
+	events := []event.Event{makeEvent(1, nil, "x", "2026-04-10", "alice")}
+
+	tests := []struct {
+		format string
+		check  func(string) bool
+	}{
+		{"flat", func(s string) bool { return strings.Contains(s, "x") }},
+		{"json", func(s string) bool { return strings.HasPrefix(s, "[") }},
+		{"csv", func(s string) bool { return strings.HasPrefix(s, "id,parent_id,") }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.format, func(t *testing.T) {
+			t.Parallel()
+			var b bytes.Buffer
+			if err := EventsStream(&b, tt.format, staticSeq(events)); err != nil {
+				t.Fatalf("EventsStream(%q): %v", tt.format, err)
+			}
+			if !tt.check(b.String()) {
+				t.Errorf("EventsStream(%q) unexpected output:\n%s", tt.format, b.String())
+			}
+		})
+	}
+}
+
+func TestEventsStream_RejectsTree(t *testing.T) {
+	t.Parallel()
+	if err := EventsStream(io.Discard, "tree", staticSeq(nil)); err == nil {
+		t.Error("EventsStream(tree, ...) expected an error")
 	}
 }
