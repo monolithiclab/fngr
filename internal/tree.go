@@ -1,0 +1,88 @@
+package internal
+
+import (
+	"bytes"
+	"fmt"
+)
+
+// metaValue returns the value of the first Meta entry matching key, or "" if not found.
+func metaValue(meta []Meta, key string) string {
+	for _, m := range meta {
+		if m.Key == key {
+			return m.Value
+		}
+	}
+	return ""
+}
+
+// RenderTree renders events as an ASCII tree with parent-child indentation.
+// Root events (ParentID == nil) appear at the top level; children are indented
+// with box-drawing characters similar to git log --graph.
+func RenderTree(events []Event) string {
+	if len(events) == 0 {
+		return ""
+	}
+
+	// Index events by ID for lookup and build parent-to-children mapping.
+	byID := make(map[int64]int, len(events))
+	children := make(map[int64][]int64)
+	var roots []int64
+
+	for i, ev := range events {
+		byID[ev.ID] = i
+		if ev.ParentID == nil {
+			roots = append(roots, ev.ID)
+		} else {
+			children[*ev.ParentID] = append(children[*ev.ParentID], ev.ID)
+		}
+	}
+
+	var b bytes.Buffer
+	for _, id := range roots {
+		renderNode(&b, events, byID, children, id, "", "")
+	}
+	return b.String()
+}
+
+// renderNode writes one event line and recursively renders its children.
+// linePrefix is the prefix for this node's own line (e.g. "├─ ").
+// childPrefix is the prefix inherited by this node's children for continuation
+// lines (e.g. "│  ").
+func renderNode(b *bytes.Buffer, events []Event, byID map[int64]int, children map[int64][]int64, id int64, linePrefix, childPrefix string) {
+	idx := byID[id]
+	ev := events[idx]
+	date := ev.CreatedAt.Format("2006-01-02")
+	author := metaValue(ev.Meta, MetaKeyAuthor)
+
+	fmt.Fprintf(b, "%s%-4d%s  %s  %s\n", linePrefix, ev.ID, date, author, ev.Text)
+
+	kids := children[id]
+	for i, kidID := range kids {
+		isLast := i == len(kids)-1
+		var connector string
+		var continuation string
+		if isLast {
+			connector = "\u2514\u2500 "
+			continuation = "   "
+		} else {
+			connector = "\u251c\u2500 "
+			continuation = "\u2502  "
+		}
+		renderNode(b, events, byID, children, kidID, childPrefix+connector, childPrefix+continuation)
+	}
+}
+
+// RenderFlat renders events as a flat chronological list with no tree structure.
+func RenderFlat(events []Event) string {
+	if len(events) == 0 {
+		return ""
+	}
+
+	var b bytes.Buffer
+	for _, ev := range events {
+		date := ev.CreatedAt.Format("2006-01-02")
+		author := metaValue(ev.Meta, MetaKeyAuthor)
+		fmt.Fprintf(&b, "%-4d%s  %s  %s\n", ev.ID, date, author, ev.Text)
+	}
+	return b.String()
+}
