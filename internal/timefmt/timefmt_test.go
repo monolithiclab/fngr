@@ -171,6 +171,72 @@ func TestParsePartial(t *testing.T) {
 			},
 		},
 		{
+			name:        "12h pm hour only lower",
+			input:       "4pm",
+			wantHasDate: false,
+			wantHasTime: true,
+			check: func(t *testing.T, got time.Time) {
+				if got.Hour() != 16 || got.Minute() != 0 {
+					t.Errorf("got h=%d m=%d, want 16:00", got.Hour(), got.Minute())
+				}
+			},
+		},
+		{
+			name:        "12h am hour only upper",
+			input:       "10AM",
+			wantHasDate: false,
+			wantHasTime: true,
+			check: func(t *testing.T, got time.Time) {
+				if got.Hour() != 10 || got.Minute() != 0 {
+					t.Errorf("got h=%d m=%d, want 10:00", got.Hour(), got.Minute())
+				}
+			},
+		},
+		{
+			name:        "12h pm hour only with space",
+			input:       "4 pm",
+			wantHasDate: false,
+			wantHasTime: true,
+			check: func(t *testing.T, got time.Time) {
+				if got.Hour() != 16 || got.Minute() != 0 {
+					t.Errorf("got h=%d m=%d, want 16:00", got.Hour(), got.Minute())
+				}
+			},
+		},
+		{
+			name:        "12h am hour only with space",
+			input:       "10 AM",
+			wantHasDate: false,
+			wantHasTime: true,
+			check: func(t *testing.T, got time.Time) {
+				if got.Hour() != 10 || got.Minute() != 0 {
+					t.Errorf("got h=%d m=%d, want 10:00", got.Hour(), got.Minute())
+				}
+			},
+		},
+		{
+			name:        "12pm noon",
+			input:       "12pm",
+			wantHasDate: false,
+			wantHasTime: true,
+			check: func(t *testing.T, got time.Time) {
+				if got.Hour() != 12 || got.Minute() != 0 {
+					t.Errorf("got h=%d m=%d, want 12:00 (noon)", got.Hour(), got.Minute())
+				}
+			},
+		},
+		{
+			name:        "12am midnight",
+			input:       "12am",
+			wantHasDate: false,
+			wantHasTime: true,
+			check: func(t *testing.T, got time.Time) {
+				if got.Hour() != 0 || got.Minute() != 0 {
+					t.Errorf("got h=%d m=%d, want 0:00 (midnight)", got.Hour(), got.Minute())
+				}
+			},
+		},
+		{
 			name:        "garbage",
 			input:       "not a time",
 			wantHasDate: false,

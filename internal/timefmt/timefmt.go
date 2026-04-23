@@ -35,6 +35,10 @@ var timeOnlyFormats = []string{
 	"3.04PM",
 	"3:04PM",
 	"3:04 PM",
+	"3pm",
+	"3 pm",
+	"3PM",
+	"3 PM",
 }
 
 const (
