@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/monolithiclab/fngr/internal/event"
 	"github.com/monolithiclab/fngr/internal/render"
@@ -38,7 +39,7 @@ func (c *ListCmd) Run(s eventStore, io ioStreams) error {
 	if c.Format == render.FormatTree {
 		events, err := s.List(ctx, opts)
 		if err != nil {
-			return err
+			return wrapFilterErr(c.Search, err)
 		}
 		if len(events) == 0 {
 			fmt.Fprintln(io.Err, "No events found.")
@@ -46,7 +47,29 @@ func (c *ListCmd) Run(s eventStore, io ioStreams) error {
 		}
 		return render.Tree(io.Out, events)
 	}
-	return render.EventsStream(io.Out, c.Format, s.ListSeq(ctx, opts))
+	return wrapFilterErr(c.Search, render.EventsStream(io.Out, c.Format, s.ListSeq(ctx, opts)))
+}
+
+// wrapFilterErr surfaces filter-grammar errors with a pointer to --help.
+// Only wraps when a filter was actually passed (no point steering empty-filter
+// failures into the filter-syntax bucket) AND when the error looks like a
+// parse failure — FTS5 sub-parser failures surface as "fts5:" prefixed
+// messages, but unmatched quotes break SQLite's tokenizer first and surface
+// as generic "SQL logic error: ... syntax error / unterminated string".
+func wrapFilterErr(filter string, err error) error {
+	if err == nil || filter == "" {
+		return err
+	}
+	msg := err.Error()
+	parseFailure := strings.Contains(msg, "fts5") ||
+		strings.Contains(msg, "FTS5") ||
+		strings.Contains(msg, "SQL logic error") ||
+		strings.Contains(msg, "syntax error") ||
+		strings.Contains(msg, "unterminated")
+	if !parseFailure {
+		return err
+	}
+	return fmt.Errorf("invalid filter syntax (%w); see --help for the -S grammar", err)
 }
 
 func (c *ListCmd) toListOpts() (event.ListOpts, error) {

@@ -53,19 +53,19 @@ cycle. Specs land under `docs/superpowers/specs/`, plans under
 ## Data model
 
 - **Title + body split** — replace the single `text` column with `title`
-  + `body`. The split rule on input is "everything before the first `.`
-  is the title; the rest is the body" (whole input is the title when no
-  `.` is present). Migration is pure SQL via a new
-  `internal/db/migrations/3.sql`: `ALTER TABLE events RENAME COLUMN text
-  TO title`, `ALTER TABLE events ADD COLUMN body TEXT NOT NULL DEFAULT
-  ''`, then a single `UPDATE events SET title = ..., body = ...` using
-  SQLite's `instr()` / `substr()` to perform the split — no Go pass over
-  rows. Rebuild `events_fts` content from the new columns. Open
-  brainstorm questions: how do renderers display the split (markdown
-  bullet shows title only, with body indented; tree shows title; event
-  detail shows both); what does `fngr add "no dot"` produce (title-only
-  event, empty body); does `event text` become `event title` + `event
-  body` (or stay as `event text` and re-split each time)?
+  - `body`. The split rule on input is "everything before the first `.`
+    is the title; the rest is the body" (whole input is the title when no
+    `.` is present). Migration is pure SQL via a new
+    `internal/db/migrations/3.sql`: `ALTER TABLE events RENAME COLUMN text
+TO title`, `ALTER TABLE events ADD COLUMN body TEXT NOT NULL DEFAULT
+''`, then a single `UPDATE events SET title = ..., body = ...` using
+    SQLite's `instr()` / `substr()` to perform the split — no Go pass over
+    rows. Rebuild `events_fts` content from the new columns. Open
+    brainstorm questions: how do renderers display the split (markdown
+    bullet shows title only, with body indented; tree shows title; event
+    detail shows both); what does `fngr add "no dot"` produce (title-only
+    event, empty body); does `event text` become `event title` + `event
+body` (or stay as `event text` and re-split each time)?
 
 ## Publishing pipeline polish
 
@@ -91,9 +91,57 @@ deprecated keys are actually removed by upstream.
   single `.sigstore.json` bundle. Migration touches the
   `.goreleaser.yaml` `signs:` block, the README's verification
   example (current `cosign verify-blob --signature SHA256SUMS.sig
-  --certificate SHA256SUMS.pem` would become a single `--bundle`
+--certificate SHA256SUMS.pem` would become a single `--bundle`
   flag), and `docs/PUBLISHING.md`'s downstream-verification section.
 - **Brew formula path** — GoReleaser writes `<name>.rb` at the tap
   root by default. Both layouts work for `brew install`, but
   `Formula/<name>.rb` is the conventional Homebrew tap structure.
   Add `directory: Formula` to the `brews:` block and re-tag.
+
+## Considered (not pursued)
+
+Feature ideas that have come up across reviews and brainstorms.
+Each was deliberately deferred or rejected with the reasoning below;
+re-listed here so future passes don't re-propose them without new
+information. Not commitments — items move to a real section above
+only on real demand.
+
+- **Config file (`~/.fngr.config`)** — env vars + CLI flags already
+  cover persistent defaults. A config layer means precedence rules,
+  parsing, and a third place to look for behavior.
+- **Multiple databases / workspaces** — `cd` plus `FNGR_DB` already
+  implements this. No need for a separate workspace concept.
+- **Relative dates** (`today`, `yesterday`) — `timefmt` is the
+  natural place to add them later if requested. Shell handles it
+  fine: `--time "$(date -d yesterday +%F)"`.
+- **Auto-tag character expansion** — explore whether other shorthand
+  symbols (e.g. `^location`, `+company`, `~mood`) are worth adding
+  alongside the existing `@person` / `#tag` system, and which symbols
+  are unambiguous enough. Open question; brainstorm separately
+  before commitment.
+- **Soft delete / undo** — adds schema complexity and a parallel
+  "alive" view path for marginal benefit. Backups (`cp ~/.fngr.db`)
+  cover recovery.
+- **Stats / summary command** — anything useful is a one-liner
+  against the SQLite file. Bloats the CLI surface for a workflow
+  most users will run rarely.
+- **Author normalization / user registry** — belongs to user data
+  hygiene, not the tool. `meta rename` already exists for cleanup.
+- **Shell completion** — Kong supports it natively if needed. Not
+  load-bearing; revisit on user request.
+- **Snapshot / backup command** — a copy of the SQLite file is the
+  backup. Don't reinvent.
+- **Database maintenance commands** (`vacuum`, etc.) — single SQL
+  statement; not worth a CLI surface. Document in README only if a
+  user actually asks.
+- **Bulk operations / filtered delete** — composes from
+  `fngr -S '...' --format json | jq | xargs fngr delete` for the
+  rare case. Adding `--filter` to `delete` adds destructive surface
+  area for marginal value.
+- **`fngr add -` as explicit stdin form** — auto-detect via non-TTY
+  pipe handles every real workflow; explicit form would only force
+  stdin in a TTY, no use case today.
+- **Tokenize `$EDITOR` / `$VISUAL` for `vim -u NONE`-style values** —
+  plausible follow-up (matches `pagerCommand`'s tokenization), but
+  not in the body-input modes spec. Most users set `EDITOR=vim`
+  (single token); revisit on real demand.

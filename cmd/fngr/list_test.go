@@ -31,6 +31,64 @@ func TestListCmd_DefaultTree(t *testing.T) {
 	}
 }
 
+func TestListCmd_FTSSyntaxErrorIsWrapped(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, _ := newTestIO("")
+
+	// Force a write so the FTS index has at least one row to query against
+	// (otherwise FTS5 short-circuits before parsing the MATCH expression).
+	if _, err := s.Add(context.Background(), "any", nil, []parse.Meta{
+		{Key: "author", Value: "alice"},
+	}, nil); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// Unmatched double-quote — FTS5 parser explodes.
+	cmd := &ListCmd{Format: "flat", Search: `"unmatched`}
+	err := cmd.Run(s, io)
+	if err == nil {
+		t.Fatal("expected an error for unmatched quote, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid filter syntax") || !strings.Contains(err.Error(), "--help") {
+		t.Errorf("err = %q, want wrapped 'invalid filter syntax (...); see --help' message", err)
+	}
+}
+
+func TestWrapFilterErr(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name        string
+		filter      string
+		in          error
+		wantWrapped bool
+	}{
+		{"nil passes through", "#ops", nil, false},
+		{"empty filter passes through even on FTS error", "", fmt.Errorf("fts5: syntax error"), false},
+		{"non-parse error passes through", "#ops", fmt.Errorf("disk full"), false},
+		{"fts5 lower wraps", "#ops", fmt.Errorf("fts5: syntax error near \""), true},
+		{"FTS5 upper wraps", "#ops", fmt.Errorf("FTS5: syntax error near \""), true},
+		{"SQL logic error wraps", "#ops", fmt.Errorf("query events: SQL logic error: unterminated string"), true},
+		{"unterminated wraps", "#ops", fmt.Errorf("unterminated string (1)"), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			out := wrapFilterErr(tc.filter, tc.in)
+			if tc.in == nil {
+				if out != nil {
+					t.Errorf("nil in, got %v", out)
+				}
+				return
+			}
+			wrapped := strings.Contains(out.Error(), "invalid filter syntax")
+			if wrapped != tc.wantWrapped {
+				t.Errorf("wrapped=%v, want %v (out=%q)", wrapped, tc.wantWrapped, out)
+			}
+		})
+	}
+}
+
 func TestListCmd_TreeEmptyReportsNoEvents(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
