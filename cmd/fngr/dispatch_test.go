@@ -88,6 +88,9 @@ func TestKongDispatch_AllCommands(t *testing.T) {
 		{name: "meta-search-shorthand", argv: []string{"meta", "-S", "#a"}, isTTY: true, want: ""},
 		{name: "meta-rename", argv: []string{"meta", "rename", "tag=a", "tag=b", "-f"}, isTTY: true, want: ""},
 		{name: "meta-delete", argv: []string{"meta", "delete", "tag=a", "-f"}, isTTY: true, want: ""},
+		{name: "help-bare", argv: []string{"help"}, isTTY: true, want: ""},
+		{name: "help-cmd", argv: []string{"help", "add"}, isTTY: true, want: ""},
+		{name: "help-verb-tree", argv: []string{"help", "event", "show"}, isTTY: true, want: ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

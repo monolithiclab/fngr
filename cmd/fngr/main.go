@@ -24,6 +24,7 @@ type CLI struct {
 	Event  EventCmd  `cmd:"" help:"Show or modify a single event."`
 	Delete DeleteCmd `cmd:"" help:"Delete an event."`
 	Meta   MetaCmd   `cmd:"" help:"List all metadata keys and values."`
+	Help   HelpCmd   `cmd:"" help:"Show help for a command."`
 }
 
 func currentUser() string {
@@ -60,12 +61,20 @@ func main() {
 		kong.Description("A CLI to log and track events."),
 		kongVars(version, username),
 		kong.UsageOnError(),
+		kong.ConfigureHelp(kong.HelpOptions{Compact: true}),
 	)
 
 	dbPath, err := db.ResolvePath(cli.DB)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
+	}
+
+	// Help shouldn't require a DB. Kong's --help flag exits during Parse;
+	// the explicit `help` verb returns from Parse normally and reaches here.
+	if strings.HasPrefix(ctx.Command(), "help") {
+		ctx.FatalIfErrorf(ctx.Run())
+		return
 	}
 
 	database, err := db.Open(dbPath, strings.HasPrefix(ctx.Command(), "add"))
