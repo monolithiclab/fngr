@@ -34,6 +34,17 @@ jobs:
       # flags our .goreleaser.yaml signs args use. Stay on v3 until we migrate goreleaser's
       # signs config to the new bundle shape.
       - uses: sigstore/cosign-installer@v3
+      - name: Debug — confirm HOMEBREW_TAP_TOKEN reaches the runner (length only, value masked)
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          echo "::add-mask::$HOMEBREW_TAP_TOKEN"
+          if [ -z "$HOMEBREW_TAP_TOKEN" ]; then
+            echo "HOMEBREW_TAP_TOKEN is EMPTY"; exit 1
+          else
+            echo "HOMEBREW_TAP_TOKEN length: ${#HOMEBREW_TAP_TOKEN}"
+            echo "starts with github_pat_? $(case "$HOMEBREW_TAP_TOKEN" in github_pat_*) echo yes;; *) echo no;; esac)"
+          fi
       - uses: goreleaser/goreleaser-action@v7
         with:
           version: latest
