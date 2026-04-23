@@ -8,42 +8,118 @@ Data is stored in a single SQLite file (pure-Go, no CGo).
 
 ## Install
 
-```
-go install github.com/monolithiclab/fngr/cmd/fngr@latest
-```
-
-Or via Homebrew (macOS / Linux):
+### Homebrew (macOS / Linux)
 
 ```
 brew install monolithiclab/tap/fngr
 ```
 
-Or build from source:
+### Go install
+
+```
+go install github.com/monolithiclab/fngr/cmd/fngr@latest
+```
+
+### Pre-built binaries
+
+Download the right tarball for your OS/arch from the
+[releases page](https://github.com/monolithiclab/fngr/releases).
+SHA256 checksums and cosign signatures are attached to every release;
+verify with:
+
+```
+cosign verify-blob \
+  --signature SHA256SUMS.sig \
+  --certificate SHA256SUMS.pem \
+  --certificate-identity-regexp 'https://github.com/monolithiclab/fngr' \
+  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+  SHA256SUMS
+sha256sum -c SHA256SUMS
+```
+
+### Build from source
 
 ```
 make build        # binary at build/fngr
 make install      # installs to $GOBIN
 ```
 
-### Container usage
+## Container usage
 
-A multi-arch container image is published on each release at
-`ghcr.io/monolithiclab/fngr:<version>` (and `:latest` for stable
-releases). The image is ~6 MB, distroless-based.
+A multi-arch (`linux/amd64` + `linux/arm64`) container image is
+published on every release at `ghcr.io/monolithiclab/fngr:<version>`
+and (for stable releases only) `ghcr.io/monolithiclab/fngr:latest`.
+The image is ~6 MB, distroless-static-debian13 base.
+
+### The database is on the host — you must mount it
+
+`fngr` stores everything in a single SQLite file. The container has
+no persistent storage of its own, so without a volume mount **every
+run starts with an empty DB**. Mount your existing DB into the
+container and point `FNGR_DB` at it:
+
+```
+docker run --rm \
+  -v "$HOME/.fngr.db:/data/fngr.db" \
+  -e FNGR_DB=/data/fngr.db \
+  ghcr.io/monolithiclab/fngr:latest
+```
+
+The mount target (`/data/fngr.db` above) is arbitrary — pick anything
+inside the container, just keep `$FNGR_DB` pointed at it. The
+container runs as root by default so the file's host permissions
+must allow root access (UID 0). For non-root host UIDs, pass
+`--user "$(id -u):$(id -g)"`.
+
+### Timezone
+
+The container has `/usr/share/zoneinfo` baked in, so any IANA name
+works via `TZ`. If unset, `fngr`'s local-time rendering (markdown
+date headers, event detail) defaults to UTC.
 
 ```
 docker run --rm \
   -v "$HOME/.fngr.db:/data/fngr.db" \
   -e FNGR_DB=/data/fngr.db \
   -e TZ=America/New_York \
-  ghcr.io/monolithiclab/fngr:latest -S '#ops'
+  ghcr.io/monolithiclab/fngr:latest --format=md
 ```
 
-Caveats: the container is for scripted use (`add "note"`, `--format=json`,
-etc.). Interactive features are disabled — `fngr add -e` needs `$EDITOR`
-and a binary in the image (not provided), and the pager needs `less` +
-a TTY (also absent). Time-of-day rendering defaults to UTC unless `TZ`
-is passed.
+### Common workflows
+
+```
+# Add an event
+docker run --rm -v "$HOME/.fngr.db:/data/fngr.db" -e FNGR_DB=/data/fngr.db \
+  ghcr.io/monolithiclab/fngr:latest add "deployed v1.2 to staging #ops"
+
+# Bulk import from JSON (read from a host file)
+cat events.json | docker run --rm -i \
+  -v "$HOME/.fngr.db:/data/fngr.db" -e FNGR_DB=/data/fngr.db \
+  ghcr.io/monolithiclab/fngr:latest add --format=json
+
+# Round-trip between two databases via stdout pipe
+docker run --rm -v "$HOME/src.db:/data/src.db" -e FNGR_DB=/data/src.db \
+  ghcr.io/monolithiclab/fngr:latest --format=json \
+  | docker run --rm -i -v "$HOME/dst.db:/data/dst.db" -e FNGR_DB=/data/dst.db \
+    ghcr.io/monolithiclab/fngr:latest add --format=json
+
+# Verify the image's signature with cosign
+cosign verify ghcr.io/monolithiclab/fngr:0.0.1 \
+  --certificate-identity-regexp 'https://github.com/monolithiclab/fngr' \
+  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
+```
+
+### Limitations
+
+The container is for scripted, non-interactive use. The following
+don't work inside the image:
+
+- `fngr add -e` (editor mode) — needs `$EDITOR` plus a binary in the
+  image; neither exists in distroless-static.
+- The pager on `fngr list` — needs `less` + a TTY; pass `--no-pager`
+  or pipe to a host-side pager.
+- Confirmation prompts on `delete` / `meta delete` — no TTY; pass
+  `-f` to skip the prompt.
 
 ## Quick start
 
