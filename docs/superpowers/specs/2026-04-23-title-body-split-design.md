@@ -90,13 +90,18 @@ UPDATE events
    SET title = SUBSTR(title, 1, INSTR(title, '. ') - 1)
  WHERE INSTR(title, '. ') > 0;
 
--- Rebuild events_fts content from the new columns + meta values.
--- Formula must match internal/parse/parse.go::FTSContent (cross-linked
--- by a comment on that function).
+-- Rebuild events_fts content from the new columns + meta `key=value`
+-- tokens. Formula must match internal/parse/parse.go::FTSContent
+-- (cross-linked by a comment on that function). Empty title or body
+-- contributes nothing (no leading/trailing or doubled spaces).
 DELETE FROM events_fts;
 INSERT INTO events_fts(rowid, content)
 SELECT e.id,
-       TRIM(e.title || ' ' || e.body || COALESCE(' ' || GROUP_CONCAT(em.value, ' '), ''))
+       TRIM(
+         CASE WHEN e.title <> '' THEN e.title || ' ' ELSE '' END ||
+         CASE WHEN e.body  <> '' THEN e.body  || ' ' ELSE '' END ||
+         COALESCE(GROUP_CONCAT(em.key || '=' || em.value, ' '), '')
+       )
   FROM events e
   LEFT JOIN event_meta em ON em.event_id = e.id
  GROUP BY e.id;
@@ -123,11 +128,22 @@ Notes:
 **New** function `SplitTitleBody` (signature above).
 
 **Changed** function `FTSContent` — signature becomes
-`FTSContent(title, body string, meta Meta) string`. Output:
+`FTSContent(title, body string, meta []Meta) string`. Output: a
+single space-separated string built from the non-empty subset of
+`title`, `body`, and each `meta` entry rendered as
+`key + "=" + value`. Equivalent to:
 
 ```go
-strings.TrimSpace(title + " " + body + " " + strings.Join(metaValues, " "))
+parts := []string{}
+if title != "" { parts = append(parts, title) }
+if body  != "" { parts = append(parts, body) }
+for _, m := range meta { parts = append(parts, m.Key+"="+m.Value) }
+return strings.Join(parts, " ")
 ```
+
+The `key=value` shape is load-bearing: `internal/event/filter.go`
+emits `MATCH "tag=ops"` for a `-S '#ops'` filter, so FTS content must
+carry the literal `key=value` token to match.
 
 A doc comment on `FTSContent` declares the contract:
 
@@ -397,7 +413,8 @@ unchanged.
   insert rows like `"hello"`, `"v1.2 done. Hotfix #ops"`, `"no separator
   here"`, `". body only"`; run migrations; assert:
   - `title` / `body` columns populated correctly per row
-  - `events_fts` content includes title + body + meta values, trimmed
+  - `events_fts` content includes title + body + each meta entry as
+    `key=value`, trimmed (no leading/trailing/doubled spaces)
   - `user_version = 3`
 
 ### `cmd/fngr` (through Kong Parse+Run)
