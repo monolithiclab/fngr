@@ -66,3 +66,34 @@ cycle. Specs land under `docs/superpowers/specs/`, plans under
   detail shows both); what does `fngr add "no dot"` produce (title-only
   event, empty body); does `event text` become `event title` + `event
   body` (or stay as `event text` and re-split each time)?
+
+## Publishing pipeline polish
+
+Follow-ups from the v0.0.1 release rollout (full context in
+`docs/PUBLISHING.md` "Gotchas"). Each is functional today; the
+migrations are quality-of-life cleanups that can wait until the
+deprecated keys are actually removed by upstream.
+
+- **`dockers:` + `docker_manifests:` → `dockers_v2:`** — current
+  config uses the deprecated GoReleaser keys (warnings every release).
+  The new shape needs a multi-stage Dockerfile that uses buildx's
+  `TARGETOS` / `TARGETARCH` build args to pick the right per-platform
+  binary. Non-trivial Dockerfile rewrite; defer until removal of
+  `dockers:` becomes urgent.
+- **`brews:` → `homebrew_formulas:`** — `brews:` is deprecated in
+  favor of `homebrew_casks:`, but Casks are macOS-only and require
+  `brew install --cask`, which would break the cross-platform install
+  path we promise (`brew install monolithiclab/tap/fngr` from Linux
+  too). Wait for GoReleaser to ship a `homebrew_formulas:` key.
+- **Cosign `signs:` → v4 bundle format** — pinned to
+  `sigstore/cosign-installer@v3` because cosign v4 deprecated the
+  `--output-signature` / `--output-certificate` flags in favor of a
+  single `.sigstore.json` bundle. Migration touches the
+  `.goreleaser.yaml` `signs:` block, the README's verification
+  example (current `cosign verify-blob --signature SHA256SUMS.sig
+  --certificate SHA256SUMS.pem` would become a single `--bundle`
+  flag), and `docs/PUBLISHING.md`'s downstream-verification section.
+- **Brew formula path** — GoReleaser writes `<name>.rb` at the tap
+  root by default. Both layouts work for `brew install`, but
+  `Formula/<name>.rb` is the conventional Homebrew tap structure.
+  Add `directory: Formula` to the `brews:` block and re-tag.

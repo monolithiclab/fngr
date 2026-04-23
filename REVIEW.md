@@ -1,57 +1,71 @@
-# Code Review — 2026-04-22 (post-`--format=md` + /simplify + security pass)
+# Code Review — 2026-04-23 (post-v0.0.1 release pipeline ship)
 
-Snapshot taken after the `--format=md` epic shipped (commits
-`7ed7cfc..25f4819`), a whole-codebase /simplify pass (`2b52748`), the
-GitHub Actions roadmap entry (`e4ba501`), and a defensive input-bound
-pass (`6059857`, `13da4e3`). The codebase is now ~3 100 LoC of
-production Go (~9 100 with tests), 86.1% test coverage, all linters
-green. Architecture is unchanged at the package boundaries.
+Snapshot taken after the GitHub Actions CI + release pipeline shipped
+end-to-end (commits `b229295..03244cf`). The codebase is now ~3 200
+LoC of production Go (~9 300 with tests), 86.1% test coverage, all
+linters green. **Architecture is unchanged at the package
+boundaries** — this round's deliverable is operational
+infrastructure, not Go code.
 
-What's new since the prior review (2026-04-20):
+The project now publishes through three channels: `go install`,
+`brew install monolithiclab/tap/fngr`, and `docker pull
+ghcr.io/monolithiclab/fngr:<version>`. Every release artifact (binary
+SHA256SUMS + multi-arch container manifest) is cosign-signed via
+Sigstore keyless. v0.0.1 is the first stable release.
 
-- **Markdown output** (`internal/render/markdown.go`, ~75 LoC) —
-  buffered `Markdown` + streaming `MarkdownStream` reusing the shared
-  `renderMarkdownEvent` helper; wired into all three render dispatchers
-  via `FormatMarkdown` and into Kong via the existing `${LIST_FORMATS}`
-  / `${EVENT_FORMATS}` interpolation.
-- **Time splicing** (`internal/timefmt/timefmt.go`) — `SpliceTime` and
-  `SpliceDate` mirror-image helpers extracted from `EventTimeCmd` /
-  `EventDateCmd` (replaced two near-identical inline `time.Date(...)`
-  calls). 100% direct unit-test coverage.
-- **Meta-name regex consolidation** (`internal/parse/parse.go`) — three
-  copies of `[\w][\w/\-]*` collapsed onto a single `metaNamePattern`
-  string constant; the anchored form is now the exported `MetaNameRe`,
-  reused from `cmd/fngr/meta.go::parseMetaFilter`.
-- **Render hot-path tightening** — `toJSONEvent` and
-  `renderMarkdownEvent` pre-allocate the meta `pairs` slice to exact
-  capacity and use index assignment; the markdown path drops
-  `fmt.Sprintf` per tuple in favor of `m.Key + "=" + m.Value` plus
-  `slices.Sort` over the formatted strings.
-- **Defensive input bounds** — `cmd/fngr/body.go::readStdin` now wraps
-  the reader in `io.LimitReader` at 16 MiB (`maxStdinBytes`) so a
-  runaway pipe can't OOM. `cmd/fngr/add_json.go::parseJSONAddInput`
-  rejects array imports over 10 000 records, dispatches deterministically
-  on the first non-whitespace character, and uses `json.Decoder` with
-  `DisallowUnknownFields` so typos surface instead of being silently
-  dropped.
-- **Empty-list UX** — `fngr` (default tree path) now writes
-  `"No events found."` to stderr instead of exiting silently; the
-  message matches `fngr meta`'s convention.
-- **GitHub Actions roadmap entry** — `Project infrastructure` section
-  in `docs/superpowers/roadmap.md` describes the planned CI workflow
-  (`make ci` on push/PR, matrix on ubuntu+macOS) and the release
-  workflow (cross-compile on `v*.*.*` tags).
+## What's new since the prior review (2026-04-22)
 
-All findings from the 2026-04-17, 2026-04-19, and 2026-04-20 reviews
-remain resolved. The compact list below carries forward only the items
-that are actually open today.
-
-## Resolved this round
-
-- **F2** — godoc comments added across the listed surface: `event.go` (`ErrNotFound`, `Event`, `MetaCount`, `Add`, `Get`, `Delete`, `Update`, `HasChildren`, `UpdateMeta`, `DeleteMeta`, `CountMeta`, `ListOpts`, `GetSubtree`); `meta.go` (`MetaKeyAuthor`/`MetaKeyPeople`/`MetaKeyTag`, `CollectMeta`); `store.go` (`NewStore`); `render.go` (`Tree`, `Flat`, `JSON`, `CSV`, `Event`); `parse.go` (`MetaNameRe`). The remaining symbols on the original list (`AddMany`, `AddInput`, `Reparent`, `AddTags`, `RemoveTags`, `ErrCycle`, `ListMeta`, `ListMetaOpts`, `ListSeq`, `List`, `Store`, `FlatStream`, `CSVStream`, `JSONStream`) already had godoc; the F2 evidence list overstated the gap.
-- **F6** — Makefile fallback drops `--always` and emits `dev-<short-SHA>` when no tag exists. Tagged builds keep `git describe`'s native `v0.1.0[-N-gXXXX][-dirty]` shape.
-- **B10** — `parse.MetaArg` now wraps `KeyValue`'s error with `parse meta arg %q: %w`, matching `FlagMeta`'s pattern. (Defensive: today the path is unreachable because `MetaArg` pre-checks for `=`, but the wrap protects against future `KeyValue` validation tightening.)
-- **S4** — `applyMigration` gained a doc comment reminding writers to use `CREATE ... IF NOT EXISTS` / `DROP ... IF EXISTS` clauses so manual recovery scripts stay re-runnable.
+- **GitHub Actions CI workflow** (`.github/workflows/ci.yml`) — push
+  to `main` + every PR runs `make lint test` on a Linux + macOS
+  matrix; coverage profile uploaded as artifact from the ubuntu cell.
+  Concurrency block kills in-flight runs on force-push. Branch
+  protection on `main` requires both cells green before merge.
+- **GitHub Actions release workflow** (`.github/workflows/release.yml`) —
+  `v*.*.*` and `v*.*.*-*` tag pushes invoke goreleaser with QEMU +
+  Buildx (multi-arch Docker), cosign-installer, ghcr.io login.
+  Workflow-level `permissions: {contents: write, packages: write,
+  id-token: write}`. `replace_existing_artifacts: true` makes
+  partial-release re-runs idempotent.
+- **GoReleaser config** (`.goreleaser.yaml`) — single source of truth
+  for: 4-arch binaries (linux/darwin × amd64/arm64) with `CGO_ENABLED=0`
+  + `-s -w` strip + git-derived `-X main.version`; tar.gz archives
+  bundling `LICENSE` + `README.md`; `SHA256SUMS` checksum file with
+  cosign keyless signing; multi-arch ghcr.io image via `docker_manifests`
+  with cosign-signed manifest; Homebrew formula on
+  `monolithiclab/homebrew-tap` with `skip_upload: auto` for
+  pre-releases; Conventional-Commits-grouped changelog (Features /
+  Bug fixes / Documentation / Other) excluding `chore:` and merge
+  commits; `prerelease: auto` detects `-rc` / `-beta` / `-alpha`
+  suffixes and marks the GitHub Release accordingly.
+- **`Dockerfile`** — distroless-static-debian13 base (~2 MB), single
+  COPY of the cross-compiled binary, `ENTRYPOINT ["/fngr"]`. Final
+  image ~6 MB. Includes CA certs + `/usr/share/zoneinfo` + `/tmp`.
+- **`LICENSE`** — MIT, attached to every release archive.
+- **External infrastructure**:
+  - `monolithiclab/homebrew-tap` repo created (public, README only;
+    fngr formula lands at root as `fngr.rb`).
+  - `monolithiclab` org packages policy updated to allow public
+    container packages (UI-only setting, no REST API).
+  - Fine-grained PAT (`fngr-release-homebrew-tap-token`, expires
+    2027-04-22) scoped to Contents:R+W on the tap repo.
+  - `HOMEBREW_TAP_TOKEN` set as **repo-level** secret on
+    `monolithiclab/fngr` (not org-level — see Won't Fix below).
+  - `monolithiclab/fngr` made public (required for branch protection
+    on free plan; consistent with the open-source distribution
+    posture).
+  - `ghcr.io/monolithiclab/fngr` package visibility flipped to
+    public (UI-only).
+- **`docs/PUBLISHING.md`** (~445 lines) — reproducible playbook for
+  shipping any sibling repo through the same pipeline. Captures
+  prerequisites, org-level one-time setup, per-repo checklist, the
+  exact verification commands, and a comprehensive "Gotchas" section
+  recording every failure mode hit during the v0.0.1 rollout.
+- **README** restructured: Install section reordered (brew → go
+  install → pre-built binaries with cosign verify → build from
+  source); Container usage promoted to a top-level section
+  documenting the must-mount-DB rule, FNGR_DB pattern, IANA timezone
+  via TZ, common one-liners, and the "no editor / no pager / no
+  prompts" limitations.
 
 ## Findings
 
@@ -60,20 +74,24 @@ that are actually open today.
 | F7 | low      | Filter syntax errors bubble raw FTS5 / SQLite error text. Users hitting `fngr -S '"unmatched'` see `fts5: syntax error near ...` with no hint to consult `--help`. | `cmd/fngr/list.go::Run` returns the error from `s.ListSeq` / `s.List` unchanged; same for `cmd/fngr/event.go::EventShowCmd.Run` when filtering would apply.                                                              | Wrap match errors at the command layer with `fmt.Errorf("invalid filter syntax (%w); see --help for the -S grammar", err)` when the underlying error mentions FTS. Small change; gates on detecting "FTS5"/"fts5" in the error text or a sentinel.        |
 | P6 | low      | Migration 2 deduplicates `event_meta` and rebuilds the unique index but doesn't run `ANALYZE event_meta`. SQLite's planner uses stale stats until the auto-analyze threshold (10% row change) trips. | `internal/db/migrations/2.sql`                                                                                                                                                                                          | Append `ANALYZE event_meta;` to migration 2 only if shipping a new migration anyway (don't bump for ANALYZE alone — existing users have already drifted past the 10% threshold). Riding along with migration 3 is fine.                                |
 
+Both findings carry forward from the previous round. No new code-review-level findings emerged from this round (the rollout was infrastructure + docs; no production Go code shipped).
+
 ## Documentation Gaps
 
 Already applied in this review's change set:
 
-- `CLAUDE.md` — `parse` bullet mentions `metaNamePattern` constant and exported `MetaNameRe`; `timefmt` bullet mentions `SpliceTime` / `SpliceDate`; `body` bullet mentions the 16 MiB stdin cap; `add_json` bullet mentions dispatch-by-first-char + 10 000-record cap + DisallowUnknownFields; `render` bullet already mentions Markdown/MarkdownStream.
-- `README.md` — explicit note that JSON is the only round-trip format (flat/csv/md are lossy output-only); markdown explanation moved adjacent to its example.
+- `README.md` — Install section reordered (Homebrew first); new Container usage subsection with the must-mount-DB rule.
+- `docs/PUBLISHING.md` (new) — full reproducible publishing playbook.
+- `docs/superpowers/roadmap.md` — new "Publishing pipeline polish" section captures the four deferred GoReleaser / Homebrew / cosign / brew-formula-path migrations from the rollout.
 
 Not yet addressed (intentional):
 
-- README has no troubleshooting section (e.g. "DB corruption: `cp` recovery"). Single-user tool; document on the first real user request.
+- README has no troubleshooting section for the `fngr` CLI itself (e.g. "DB corruption: `cp` recovery"). Single-user tool; document on the first real user request.
+- `CLAUDE.md` doesn't reference `docs/PUBLISHING.md`; that's by design — CLAUDE.md is the architecture/conventions reference for in-repo work, not a publishing how-to.
 
 ## Won't Fix / Out of Scope
 
-Carried forward from prior reviews. New entries (this review) marked **(new)**. Each entry states why so we don't re-propose them.
+Carried forward from prior reviews. New entries (this round) marked **(new)**. Each entry states why so we don't re-propose them.
 
 | Topic                                                              | Reason                                                                                                                                                                  |
 | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -92,8 +110,8 @@ Carried forward from prior reviews. New entries (this review) marked **(new)**. 
 | Two `testDB` helpers (in `internal/db` and `internal/event`)       | Different scopes (raw connection vs. `db.Open`-wrapped). Sharing them would couple test packages without removing real duplication.                                       |
 | FTS triggers for INSERT/UPDATE on `events`                         | FTS content combines event text *and* meta tokens, so triggers can't see the full picture. `event.Add`/`Update`/`AddTags`/`RemoveTags` keep FTS in sync.                  |
 | Bulk operations / filtered delete                                  | Composes from `fngr -S '...' --format json | jq | xargs fngr delete` for the rare case. Adding `--filter` to `delete` adds destructive surface area for marginal value.   |
-| Relative dates (`today`, `yesterday`)                              | `timefmt` is the natural place to add them later if requested. Not load-bearing for current usage; do not preempt. **(new — confirmed)** Shell already handles this fine: `--time "$(date -d yesterday +%F)"`. |
-| Splitting `cmd/fngr/event.go` per verb                             | Spec deliberately put all eight verbs in one file (single cohesive responsibility). 244 LoC is fine.                                                                     |
+| Relative dates (`today`, `yesterday`)                              | `timefmt` is the natural place to add them later if requested. Shell already handles this fine: `--time "$(date -d yesterday +%F)"`.                                       |
+| Splitting `cmd/fngr/event.go` per verb                             | Spec deliberately put all eight verbs in one file (single cohesive responsibility).                                                                                       |
 | Extra exit-code signaling on not-found                             | Kong's `ctx.FatalIfErrorf` already propagates non-zero on every returned error.                                                                                          |
 | Drop `idx_event_meta_event_id` after migration 2                   | The two indexes have different prefix orders: `(event_id, key, value)` for `loadMetaBatch`/per-event lookups; `(key, value, event_id)` for `ListMeta`/`CountMeta` and uniqueness. Not redundant. |
 | Tune `loadMetaBatch` chunk size                                    | 500 is well under SQLite's default `SQLITE_MAX_VARIABLE_NUMBER` (999). No measured benefit to changing without profiling.                                                |
@@ -106,18 +124,24 @@ Carried forward from prior reviews. New entries (this review) marked **(new)**. 
 | Comment-strip `git commit`-style editor template                   | Deliberately rejected during brainstorming (Q4 of body-input modes). Adds parsing surface for marginal gain — the user typed the flags themselves seconds ago.          |
 | `-` as explicit stdin form (`fngr add -`)                          | Auto-detect via non-TTY pipe handles every real workflow; explicit form would only force stdin in a TTY, no use case today.                                              |
 | Hardcoded editor fallback (`vi`/`nano`)                            | Minimal containers / CI may lack the chosen fallback; better to fail loudly with "set $EDITOR or $VISUAL" than wedge the user into an unfamiliar editor.                |
-| Drop `t.Parallel()` from add-editor dispatch case                  | Race detector clean across 10+ iterations; the swap window is narrow and `TestResolveBody` inner subtests are sequential. Contingency documented in the body-modes plan. |
-| `withTx(ctx, db, fn)` helper around the six `BeginTx` blocks       | **(new)** The closure indirection costs more clarity than the literal four-line pattern saves; six explicit copies read fine and each one is an obvious atomic boundary. |
-| Move `MetaKeyAuthor` / `MetaKeyPeople` / `MetaKeyTag` to `parse`   | **(new)** Considered: parse.go would gain type safety for body-tag keys. Costs: parse needs to import event (it doesn't today), or constants move *into* parse (forces every caller to update). Trade-off favors leaving the three string literals where they sit — the test surface catches typos. |
-| `--format` flag on `fngr delete`                                   | **(new)** Destructive verb; adding a "preview" format would compound with the existing confirmation UX without removing the prompt. `fngr event N --format=json` already shows what would be deleted.                                                              |
-| Tree format on bare `fngr event N`                                 | **(new)** Single events have no topology; the `--tree` flag explicitly opts into the subtree view. Adding tree as a default format would invalidate `EventFormats`'s text-default contract.                                                                       |
-| `slices.Sort(pairs)` over `slices.SortFunc(pairs, cmp.Compare)` for `[][2]string` in `toJSONEvent` | **(new)** The tuple version needs the lambda comparator (`(key, value)` order); `slices.Sort` only works on `cmp.Ordered`. The plain `slices.Sort` IS already used in markdown.go where pairs are pre-formatted strings. |
-| Drop redundant meta sort in `toJSONEvent`                          | **(new)** SQL queries already `ORDER BY key, value` — but the in-Go sort guarantees deterministic output regardless of meta source (e.g. tests building `event.Event` literals directly). Cheap belt-and-suspenders. |
-| Single-line fast path around `strings.Split(ev.Text, "\n")` in `renderMarkdownEvent` | **(new)** Saves one slice allocation per event but doubles the function's branching. The path is already dominated by `Fprintf` overhead; clarity wins.                                                                       |
-| `sync.Once`-memoize `loadMigrations()` at startup                  | **(new)** Two migrations today; `embed.FS.ReadDir` + sort is sub-millisecond. Becomes interesting at ~10 migrations; profile-then-ship.                                                                                              |
-| CSV header row dedup between `CSV` and `CSVStream`                 | **(new)** Five-element string slice repeated twice; extracting `var csvHeader = []string{...}` saves five tokens. Not worth the import scope.                                                                                                                       |
-| Test helper duplication between `markdownSeq`/`markdownErrAt` and `staticSeq`/`errorAtSeq` | **Already resolved** in `25f4819`: markdown_test.go now uses the shared helpers from render_test.go.                                                                                                                                                                |
-| Cache `pagerCommand()` via `sync.OnceValue`                        | **(new — confirmed)** Memoization breaks `t.Setenv` isolation in `TestWithPager_PagerStartFailureSurfaces` and `TestWithPager_PipesToPagerProcess`. Magnitude is sub-microsecond per one-shot CLI invocation (one call per `fngr list`); a test-only reset hatch isn't justified by the saving. |
+| Drop `t.Parallel()` from add-editor dispatch case                  | Race detector clean across 10+ iterations; the swap window is narrow and `TestResolveBody` inner subtests are sequential.                                                |
+| `withTx(ctx, db, fn)` helper around the six `BeginTx` blocks       | The closure indirection costs more clarity than the literal four-line pattern saves; six explicit copies read fine and each one is an obvious atomic boundary.            |
+| Move `MetaKeyAuthor` / `MetaKeyPeople` / `MetaKeyTag` to `parse`   | Considered: parse.go would gain type safety for body-tag keys. Costs: parse needs to import event (it doesn't today), or constants move *into* parse (forces every caller to update). The three string literals stay where they are — the test surface catches typos. |
+| `--format` flag on `fngr delete`                                   | Destructive verb; adding a "preview" format would compound with the existing confirmation UX without removing the prompt. `fngr event N --format=json` already shows what would be deleted.                                                              |
+| Tree format on bare `fngr event N`                                 | Single events have no topology; the `--tree` flag explicitly opts into the subtree view.                                                                                                                                                                                |
+| `slices.Sort(pairs)` over `slices.SortFunc(pairs, cmp.Compare)` for `[][2]string` in `toJSONEvent` | The tuple version needs the lambda comparator; `slices.Sort` only works on `cmp.Ordered`. The plain `slices.Sort` IS already used in markdown.go where pairs are pre-formatted strings. |
+| Drop redundant meta sort in `toJSONEvent`                          | SQL queries already `ORDER BY key, value` — but the in-Go sort guarantees deterministic output regardless of meta source. Cheap belt-and-suspenders.                       |
+| Single-line fast path around `strings.Split(ev.Text, "\n")` in `renderMarkdownEvent` | Saves one slice allocation per event but doubles the function's branching. The path is already dominated by `Fprintf` overhead; clarity wins.                            |
+| `sync.Once`-memoize `loadMigrations()` at startup                  | Two migrations today; `embed.FS.ReadDir` + sort is sub-millisecond. Becomes interesting at ~10 migrations; profile-then-ship.                                              |
+| CSV header row dedup between `CSV` and `CSVStream`                 | Five-element string slice repeated twice; extracting `var csvHeader = []string{...}` saves five tokens. Not worth the import scope.                                       |
+| Cache `pagerCommand()` via `sync.OnceValue`                        | Memoization breaks `t.Setenv` isolation in pager tests. Magnitude is sub-microsecond per one-shot CLI invocation; a test-only reset hatch isn't justified.               |
+| **(new)** Org-level Actions secret with `--visibility selected` for `HOMEBREW_TAP_TOKEN` | Despite passing all visibility checks (`gh secret list --org`, repo appears in `/orgs/.../actions/secrets/<NAME>/repositories`), the env var arrived **empty** in the workflow runner. Confirmed via a debug step printing `${#HOMEBREW_TAP_TOKEN}` (was 0). Workaround: set as a repo-level secret. Root cause unknown; documented in `docs/PUBLISHING.md`. |
+| **(new)** Migrate `dockers:` + `docker_manifests:` to `dockers_v2:` now | Tracked in roadmap "Publishing pipeline polish". `dockers_v2` needs a multi-stage Dockerfile rewrite using buildx's `TARGETOS`/`TARGETARCH` build args. Defer until removal of `dockers:` becomes urgent. |
+| **(new)** Migrate `brews:` to `homebrew_casks:` now                | Tracked in roadmap. `homebrew_casks` generates Cask DSL files (macOS-only, `brew install --cask`), which would break our cross-platform install path. Wait for GoReleaser to ship a `homebrew_formulas:` key. |
+| **(new)** Upgrade `sigstore/cosign-installer` to `@v4`             | Tracked in roadmap. Cosign v4 deprecated `--output-signature`/`--output-certificate` in favor of a single `.sigstore.json` bundle. Migration touches `signs:`, README verification example, and `docs/PUBLISHING.md`. |
+| **(new)** Move brew formula from tap root to `Formula/` subdir     | Tracked in roadmap. Both layouts work for `brew install`; `Formula/` is the conventional layout. One-line `directory: Formula` change in `brews:` block + re-tag. |
+| **(new)** REST API for ghcr.io package visibility flip              | None exists. The "public/private" toggle is UI-only. `gh api -X PATCH /orgs/.../packages/container/<name>` returns 404. Documented in `docs/PUBLISHING.md`.              |
+| **(new)** Auto-tag character expansion (`^location`, `+company`, `~mood`) | Open question; brainstorm separately before commitment. Existing `@person` / `#tag` covers the use case; expansion adds CLI vocabulary without measured demand.       |
 
 ## Next Review Pointers
 
@@ -131,7 +155,7 @@ Areas most likely to drift between now and the next review:
   (`TestMigrate_BumpsUserVersion`, `TestMigrate_DetectsLegacyV1`,
   `TestMigrate_V2DedupesAndAddsUnique`) all assert against `migrations[len(migrations)-1].version`
   — keep that invariant when migration 3 lands. Use `IF NOT EXISTS` / `IF EXISTS` clauses
-  in new migration SQL to keep the failure mode safe (see S4).
+  in new migration SQL to keep the failure mode safe.
 - **`cmd/fngr/event.go`** — the per-verb pattern (own ID arg, no parent context) is locked in
   by Kong's constraint. New verbs should follow it. Time-splice helpers now live in `timefmt`,
   not inline.
@@ -156,5 +180,14 @@ Areas most likely to drift between now and the next review:
 - **`cmd/fngr/dispatch_test.go`** — every new top-level command or verb needs an entry. The
   `isTTY bool` per-case toggle and the per-case `launchEditor` swap pattern (currently scoped
   to `add-editor`) are the template for any future stdin/editor-touching dispatch entry.
-- **GitHub Actions workflows** — once added (per `roadmap.md` "Project infrastructure"),
-  CI green should be a hard prerequisite for merge. Until then, `make ci` is the local gate.
+- **`.goreleaser.yaml`** — load-bearing for releases; behavior is exercised on every tag push
+  + by local `goreleaser check` / `goreleaser release --snapshot --skip=publish,sign`. Two
+  intentional deprecation warnings (`dockers:`, `brews:`) — both have inline rationale
+  comments AND tracking entries in roadmap "Publishing pipeline polish".
+- **`.github/workflows/release.yml`** — pin discipline: `sigstore/cosign-installer` is on
+  `@v3` (NOT a moving major-alias issue; v4 has a real behavior break — see roadmap). Other
+  actions track major-alias tags. New action additions should prefer major-alias tags where
+  the maintainer ships one.
+- **`docs/PUBLISHING.md`** — the "Gotchas" section is the institutional memory of this
+  rollout. Add to it when you hit a new failure mode shipping a sibling repo through this
+  pipeline.
