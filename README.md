@@ -227,6 +227,11 @@ fngr meta -S '#ops'         # filter: shorthand for tag=ops
 fngr meta rename tag=wip tag=done   # or '#wip' '#done'
 fngr meta delete tag=obsolete       # or '#obsolete'
 
+# Show help (alias for --help; takes a command path, including verb trees)
+fngr help
+fngr help add
+fngr help event show
+
 # Print version
 fngr --version
 ```

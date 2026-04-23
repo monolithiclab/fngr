@@ -37,18 +37,11 @@ cycle. Specs land under `docs/superpowers/specs/`, plans under
   Homebrew formula on `monolithiclab/homebrew-tap`). Pre-release tags
   (`v*.*.*-rc1` etc.) skip the `:latest` Docker tag and the brew
   formula bump.
-
-## CLI surface alignment
-
-- **Compact help** — reformat help output to
-  `command args [flags]   description`, one line per command, column-aligned.
-- **`-S` for search everywhere** — `fngr -S "..."` for list and
-  `fngr meta -S "..."` for meta share the same flag spelling. Meta requires
-  `-S` because of its subcommand tree; list mirrors the idiom so users learn
-  one form. Load-bearing: `fngr add` now accepts multi-arg input, so
-  positional search on the bare command would be ambiguous.
-- **`help` alias** — `fngr help` ≡ `fngr --help`; `fngr help <cmd>` ≡
-  `fngr <cmd> --help`.
+- **CLI surface alignment** — `fngr help [<cmd>...]` is a verb-form alias
+  for `--help` (multi-arg paths supported: `fngr help event show`); every
+  help screen uses Kong's `HelpOptions{Compact: true}` layout (one line
+  per command in the command list, with full per-command details on the
+  `--help` of each command).
 
 ## Data model
 
