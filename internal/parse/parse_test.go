@@ -191,48 +191,35 @@ func TestFlagMeta(t *testing.T) {
 func TestFTSContent(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name string
-		text string
-		meta []Meta
-		want string
+		name  string
+		title string
+		body  string
+		meta  []Meta
+		want  string
 	}{
+		{"empty", "", "", nil, ""},
+		{"title only", "hello", "", nil, "hello"},
+		{"body only", "", "world", nil, "world"},
+		{"title + body", "hello", "world", nil, "hello world"},
 		{
-			name: "text with metadata",
-			text: "Deploy done",
-			meta: []Meta{
-				{Key: "author", Value: "nicolas"},
-				{Key: "tag", Value: "ops"},
-			},
-			want: "Deploy done author=nicolas tag=ops",
+			"title + body + meta",
+			"hello", "world",
+			[]Meta{{Key: "tag", Value: "ops"}, {Key: "people", Value: "sarah"}},
+			"hello world tag=ops people=sarah",
 		},
 		{
-			name: "text only",
-			text: "Just some text",
-			meta: nil,
-			want: "Just some text",
-		},
-		{
-			name: "empty text with metadata",
-			text: "",
-			meta: []Meta{
-				{Key: "author", Value: "nicolas"},
-			},
-			want: "author=nicolas",
-		},
-		{
-			name: "empty text and no metadata",
-			text: "",
-			meta: nil,
-			want: "",
+			"empty title with meta",
+			"", "world",
+			[]Meta{{Key: "tag", Value: "ops"}},
+			"world tag=ops",
 		},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := FTSContent(tt.text, tt.meta)
-			if got != tt.want {
-				t.Errorf("FTSContent(%q, %v) = %q, want %q", tt.text, tt.meta, got, tt.want)
+			if got := FTSContent(tt.title, tt.body, tt.meta); got != tt.want {
+				t.Errorf("FTSContent(%q, %q, %v) = %q, want %q",
+					tt.title, tt.body, tt.meta, got, tt.want)
 			}
 		})
 	}

@@ -114,10 +114,21 @@ func FlagMeta(flags []string) ([]Meta, error) {
 	return result, nil
 }
 
-func FTSContent(text string, meta []Meta) string {
-	parts := make([]string, 0, 1+len(meta))
-	if text != "" {
-		parts = append(parts, text)
+// FTSContent builds the searchable string indexed in events_fts. Empty
+// title or body contribute nothing (no leading/trailing or doubled
+// spaces). Meta entries render as "key=value" tokens — the FTS
+// tokenizer treats '=' as a token char, so a -S '#ops' filter matches
+// the literal "tag=ops" emitted here.
+//
+// The SQL rebuild query in internal/db/migrations/3.sql must match
+// this formula. If you change one, change the other.
+func FTSContent(title, body string, meta []Meta) string {
+	parts := make([]string, 0, 2+len(meta))
+	if title != "" {
+		parts = append(parts, title)
+	}
+	if body != "" {
+		parts = append(parts, body)
 	}
 	for _, m := range meta {
 		parts = append(parts, m.Key+"="+m.Value)

@@ -156,7 +156,7 @@ func addInTx(ctx context.Context, tx *sql.Tx, inputs []AddInput) ([]int64, error
 			}
 		}
 
-		if _, err := insertFTS.ExecContext(ctx, id, parse.FTSContent(in.Text, in.Meta)); err != nil {
+		if _, err := insertFTS.ExecContext(ctx, id, parse.FTSContent(in.Text, "", in.Meta)); err != nil {
 			return nil, fmt.Errorf("insert FTS content: %w", err)
 		}
 
@@ -515,7 +515,7 @@ func rebuildEventFTS(ctx context.Context, tx *sql.Tx, id int64) error {
 	}
 	if _, err := tx.ExecContext(ctx,
 		"UPDATE events_fts SET content = ? WHERE rowid = ?",
-		parse.FTSContent(text, meta), id,
+		parse.FTSContent(text, "", meta), id,
 	); err != nil {
 		return fmt.Errorf("update FTS: %w", err)
 	}
