@@ -124,3 +124,14 @@ func FTSContent(text string, meta []Meta) string {
 	}
 	return strings.Join(parts, " ")
 }
+
+// SplitTitleBody splits text on the first occurrence of ". " (dot
+// followed by a space). The dot+space sequence is dropped; both sides
+// are trimmed of surrounding whitespace. When no ". " appears the
+// whole input becomes the title and the body is empty.
+func SplitTitleBody(text string) (title, body string) {
+	if before, after, ok := strings.Cut(text, ". "); ok {
+		return strings.TrimSpace(before), strings.TrimSpace(after)
+	}
+	return strings.TrimSpace(text), ""
+}

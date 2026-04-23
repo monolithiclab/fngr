@@ -281,3 +281,34 @@ func TestMetaArg(t *testing.T) {
 		})
 	}
 }
+
+func TestSplitTitleBody(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		input string
+		title string
+		body  string
+	}{
+		{"", "", ""},
+		{"   ", "", ""},
+		{"hello", "hello", ""},
+		{"hello.", "hello.", ""},
+		{"hello. world", "hello", "world"},
+		{"  hello  .  world  ", "hello", "world"},
+		{"v1.2 done. Hotfix", "v1.2 done", "Hotfix"},
+		{"v1.2.3 released", "v1.2.3 released", ""},
+		{"first. second. third", "first", "second. third"},
+		{". hello", "", "hello"},
+		{"hello. ", "hello", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			t.Parallel()
+			gotTitle, gotBody := SplitTitleBody(tt.input)
+			if gotTitle != tt.title || gotBody != tt.body {
+				t.Errorf("SplitTitleBody(%q) = (%q, %q), want (%q, %q)",
+					tt.input, gotTitle, gotBody, tt.title, tt.body)
+			}
+		})
+	}
+}
