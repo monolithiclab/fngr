@@ -131,13 +131,13 @@ func TestCascadeDelete_RemovesChildrenAndMeta(t *testing.T) {
 	t.Parallel()
 	db := testDBWithSchema(t)
 
-	res, err := db.Exec("INSERT INTO events (text) VALUES (?)", "parent event")
+	res, err := db.Exec("INSERT INTO events (title) VALUES (?)", "parent event")
 	if err != nil {
 		t.Fatalf("insert parent: %v", err)
 	}
 	parentID, _ := res.LastInsertId()
 
-	res, err = db.Exec("INSERT INTO events (parent_id, text) VALUES (?, ?)", parentID, "child event")
+	res, err = db.Exec("INSERT INTO events (parent_id, title) VALUES (?, ?)", parentID, "child event")
 	if err != nil {
 		t.Fatalf("insert child: %v", err)
 	}
@@ -174,7 +174,7 @@ func TestFTSDeleteTrigger(t *testing.T) {
 	t.Parallel()
 	db := testDBWithSchema(t)
 
-	res, err := db.Exec("INSERT INTO events (text) VALUES (?)", "searchable event")
+	res, err := db.Exec("INSERT INTO events (title) VALUES (?)", "searchable event")
 	if err != nil {
 		t.Fatalf("insert event: %v", err)
 	}
@@ -434,7 +434,96 @@ func TestMigrate_V2DedupesAndAddsUnique(t *testing.T) {
 	if err != nil {
 		t.Fatalf("userVersion: %v", err)
 	}
-	if v != 2 {
-		t.Errorf("user_version = %d, want 2", v)
+	migrations := loadMigrations()
+	want := migrations[len(migrations)-1].version
+	if v != want {
+		t.Errorf("user_version = %d, want %d", v, want)
+	}
+}
+
+func TestMigrate_V3SplitsTitleBody(t *testing.T) {
+	t.Parallel()
+	db := testDB(t)
+
+	// Bring schema up to v2 (run migrations 1 and 2).
+	if _, err := db.Exec(migrationSQL(t, 0)); err != nil {
+		t.Fatalf("seed v1 schema: %v", err)
+	}
+	if _, err := db.Exec(migrationSQL(t, 1)); err != nil {
+		t.Fatalf("apply migration 2: %v", err)
+	}
+	if err := setUserVersion(db, 2); err != nil {
+		t.Fatalf("set v2: %v", err)
+	}
+
+	rows := []struct {
+		text      string
+		wantTitle string
+		wantBody  string
+	}{
+		{"hello", "hello", ""},
+		{"v1.2 done. Hotfix", "v1.2 done", "Hotfix"},
+		{"no separator here", "no separator here", ""},
+		{". body only", "", "body only"},
+		{"v1.2.3 released", "v1.2.3 released", ""},
+		{"   . body", "", "body"},                       // leading whitespace + leading separator → empty title, trimmed body
+		{"hello.  world", "hello", "world"},             // dot + double space → trimmed body (no leading space)
+		{"   hello   ", "hello", ""},                    // no separator, surrounding whitespace → trimmed title, empty body
+	}
+	for _, r := range rows {
+		if _, err := db.Exec("INSERT INTO events (text) VALUES (?)", r.text); err != nil {
+			t.Fatalf("insert %q: %v", r.text, err)
+		}
+	}
+	if _, err := db.Exec(
+		"INSERT INTO event_meta (event_id, key, value) VALUES (2, 'tag', 'ops')",
+	); err != nil {
+		t.Fatalf("insert meta: %v", err)
+	}
+	if _, err := db.Exec(
+		"INSERT INTO events_fts (rowid, content) VALUES (2, 'v1.2 done. Hotfix tag=ops')",
+	); err != nil {
+		t.Fatalf("insert fts: %v", err)
+	}
+
+	if err := migrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	v, err := userVersion(db)
+	if err != nil {
+		t.Fatalf("userVersion: %v", err)
+	}
+	if v != 3 {
+		t.Errorf("user_version = %d, want 3", v)
+	}
+
+	for i, r := range rows {
+		var title, body string
+		err := db.QueryRow("SELECT title, body FROM events WHERE id = ?", i+1).Scan(&title, &body)
+		if err != nil {
+			t.Fatalf("select id %d: %v", i+1, err)
+		}
+		if title != r.wantTitle || body != r.wantBody {
+			t.Errorf("id %d: got (title=%q, body=%q), want (%q, %q)",
+				i+1, title, body, r.wantTitle, r.wantBody)
+		}
+	}
+
+	var ftsContent string
+	if err := db.QueryRow("SELECT content FROM events_fts WHERE rowid = 2").Scan(&ftsContent); err != nil {
+		t.Fatalf("select fts row 2: %v", err)
+	}
+	want := "v1.2 done Hotfix tag=ops"
+	if ftsContent != want {
+		t.Errorf("FTS content for row 2 = %q, want %q", ftsContent, want)
+	}
+
+	var emptyFTS string
+	if err := db.QueryRow("SELECT content FROM events_fts WHERE rowid = 1").Scan(&emptyFTS); err != nil {
+		t.Fatalf("select fts row 1: %v", err)
+	}
+	if emptyFTS != "hello" {
+		t.Errorf("FTS content for row 1 = %q, want %q", emptyFTS, "hello")
 	}
 }
