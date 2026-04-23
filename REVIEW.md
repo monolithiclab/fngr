@@ -87,14 +87,12 @@ No open code-review findings.
 
 Already applied in this review's change set:
 
-- `README.md` — Install section reordered (Homebrew first); new Container usage subsection with the must-mount-DB rule.
+- `README.md` — Install section reordered (Homebrew first); new Container usage subsection with the must-mount-DB rule; new Troubleshooting section covering DB lock / corruption recovery, empty-text editor cancel, missing `$EDITOR`, FTS filter parse errors, pager bypass, `dev-<sha>` version, container DB-mount reminder.
 - `docs/PUBLISHING.md` (new) — full reproducible publishing playbook.
 - `docs/superpowers/roadmap.md` — new "Publishing pipeline polish" section captures the four deferred GoReleaser / Homebrew / cosign / brew-formula-path migrations from the rollout.
+- `CLAUDE.md` — top-level Project section now points to `docs/PUBLISHING.md` for release-pipeline work, so a future maintainer touching `.goreleaser.yaml` / workflows / Dockerfile knows the playbook + gotchas exist.
 
-Not yet addressed (intentional):
-
-- README has no troubleshooting section for the `fngr` CLI itself (e.g. "DB corruption: `cp` recovery"). Single-user tool; document on the first real user request.
-- `CLAUDE.md` doesn't reference `docs/PUBLISHING.md`; that's by design — CLAUDE.md is the architecture/conventions reference for in-repo work, not a publishing how-to.
+No outstanding documentation gaps.
 
 ## Won't Fix / Out of Scope
 

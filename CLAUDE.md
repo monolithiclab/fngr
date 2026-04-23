@@ -6,6 +6,10 @@ fngr is a CLI tool for logging and tracking events, written in Go. It uses Kong 
 modernc.org/sqlite (pure-Go, CGo-free) for storage. Events support parent-child trees, key-value
 metadata, and FTS5 full-text search.
 
+When touching the release pipeline (`.goreleaser.yaml`, `.github/workflows/release.yml`,
+`Dockerfile`, the brew tap, ghcr.io image, cosign signing), see `docs/PUBLISHING.md` for the full
+operational playbook + every gotcha hit shipping v0.0.1.
+
 ## Commands
 
 ```bash

@@ -263,3 +263,63 @@ Resolved in order:
 3. `~/.fngr.db`
 
 The database is created automatically on the first `fngr add`.
+
+## Troubleshooting
+
+**`database is locked`** — another process has the file open with a
+write lock (a long-running `fngr add -e` editor session, a
+manually-opened SQLite shell, a desktop file-sync agent, etc.). Close
+the other holder and retry. fngr opens the DB with WAL +
+`busy_timeout=5000ms`, so transient locks self-heal; only a stuck
+holder produces this error.
+
+**`database disk image is malformed` / corruption** — restore from
+backup. The DB is a single SQLite file with no auxiliary state; a
+backup is just a copy:
+
+```
+# Take a backup before any risky operation
+cp ~/.fngr.db ~/.fngr.db.bak
+
+# Restore
+mv ~/.fngr.db.bak ~/.fngr.db
+```
+
+If you have no backup, the canonical SQLite recovery dance applies:
+
+```
+sqlite3 ~/.fngr.db ".recover" | sqlite3 ~/.fngr.db.recovered
+mv ~/.fngr.db.recovered ~/.fngr.db
+```
+
+If recovery fails too, delete the file (`rm ~/.fngr.db`) and start
+fresh — `fngr add` will re-create the schema.
+
+**`event text cannot be empty`** — `fngr add` (no args, no piped
+stdin) launches `$VISUAL` / `$EDITOR`; saving an empty buffer is
+treated as a cancel. To force an empty event, that's not supported
+by design.
+
+**`set $EDITOR or $VISUAL` from `fngr add -e`** — the editor mode
+needs an editor binary on `PATH`. `export EDITOR=vim` (or whichever)
+in your shell rc.
+
+**`invalid filter syntax (...); see --help for the -S grammar`** —
+your `-S` expression broke the parser. Common causes: unmatched
+quotes, unbalanced operators, or a stray special character. The full
+grammar is in the [Filter syntax](#filter-syntax) section above.
+
+**Pager misbehavior on `fngr list`** — pass `--no-pager` to bypass.
+The default pager is `$PAGER` (fallback `less -FRX`); `less -F`
+quits-if-fits-on-screen, so very short result sets don't trigger
+the pager at all.
+
+**`fngr --version` shows `dev-<sha>`** — you built from source
+without a tag. Either install a tagged release (`brew install
+monolithiclab/tap/fngr`, `go install ...@v0.0.1`) or build from a
+checkout that has tags reachable.
+
+**Container fails to find the database** — the container has no
+persistent storage of its own. See [Container usage](#container-usage)
+above for the volume-mount pattern; without it, every `docker run`
+starts fresh.
