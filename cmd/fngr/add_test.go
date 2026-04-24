@@ -492,3 +492,59 @@ func TestAddCmd_FormatJSON_MetaFlagFallback(t *testing.T) {
 		t.Errorf("Meta = %v, want env=prod from --meta fallback", ev.Meta)
 	}
 }
+
+func TestAddCmd_SplitsTitleBody(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, _ := newTestIO("")
+
+	cmd := &AddCmd{
+		Args:   []string{"deployed v1.2 to staging. needed a manual restart"},
+		Author: "alice",
+	}
+	if err := cmd.Run(s, io); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	events, err := s.List(context.Background(), event.ListOpts{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("got %d events, want 1", len(events))
+	}
+	ev := events[0]
+	if ev.Title != "deployed v1.2 to staging" || ev.Body != "needed a manual restart" {
+		t.Errorf("got (title=%q, body=%q), want (deployed v1.2 to staging, needed a manual restart)",
+			ev.Title, ev.Body)
+	}
+}
+
+func TestAddCmd_NoSeparator(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, _ := newTestIO("")
+
+	cmd := &AddCmd{Args: []string{"v1.2.3 released"}, Author: "alice"}
+	if err := cmd.Run(s, io); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	events, err := s.List(context.Background(), event.ListOpts{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if events[0].Title != "v1.2.3 released" || events[0].Body != "" {
+		t.Errorf("got (title=%q, body=%q), want (v1.2.3 released, '')", events[0].Title, events[0].Body)
+	}
+}
+
+func TestAddCmd_RejectsEmptyTitle(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, _ := newTestIO("")
+
+	cmd := &AddCmd{Args: []string{". body only"}, Author: "alice"}
+	if err := cmd.Run(s, io); err == nil {
+		t.Error("expected empty-title error")
+	}
+}

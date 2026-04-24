@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/monolithiclab/fngr/internal/event"
+	"github.com/monolithiclab/fngr/internal/parse"
 	"github.com/monolithiclab/fngr/internal/render"
 	"github.com/monolithiclab/fngr/internal/timefmt"
 )
@@ -50,7 +51,11 @@ func (c *AddCmd) runText(s eventStore, io ioStreams, text string) error {
 	if c.Author == "" {
 		return fmt.Errorf("author is required: use --author, FNGR_AUTHOR, or ensure $USER is set")
 	}
-	meta, err := event.CollectMeta(text, c.Meta, c.Author)
+	title, body := parse.SplitTitleBody(text)
+	if title == "" {
+		return fmt.Errorf("event title cannot be empty")
+	}
+	meta, err := event.CollectMeta(title+" "+body, c.Meta, c.Author)
 	if err != nil {
 		return err
 	}
@@ -65,8 +70,8 @@ func (c *AddCmd) runText(s eventStore, io ioStreams, text string) error {
 	}
 
 	id, err := s.Add(context.Background(), event.AddInput{
-		Title:     text,
-		Body:      "",
+		Title:     title,
+		Body:      body,
 		ParentID:  c.Parent,
 		Meta:      meta,
 		CreatedAt: createdAt,
