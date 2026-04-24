@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/monolithiclab/fngr/internal/event"
 	"github.com/monolithiclab/fngr/internal/parse"
 )
 
@@ -27,9 +28,9 @@ func TestMetaListCmd_Format(t *testing.T) {
 	s := newTestStore(t)
 	io, out := newTestIO("")
 
-	if _, err := s.Add(context.Background(), "x", nil, []parse.Meta{
+	if _, err := s.Add(context.Background(), event.AddInput{Title: "x", Meta: []parse.Meta{
 		{Key: "tag", Value: "ops"},
-	}, nil); err != nil {
+	}}); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
@@ -48,10 +49,10 @@ func TestMetaListCmd_SearchByKey(t *testing.T) {
 	s := newTestStore(t)
 	io, out := newTestIO("")
 
-	if _, err := s.Add(context.Background(), "x", nil, []parse.Meta{
+	if _, err := s.Add(context.Background(), event.AddInput{Title: "x", Meta: []parse.Meta{
 		{Key: "tag", Value: "ops"},
 		{Key: "people", Value: "alice"},
-	}, nil); err != nil {
+	}}); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
@@ -74,15 +75,15 @@ func TestMetaListCmd_SearchByKeyValue(t *testing.T) {
 	io, out := newTestIO("")
 
 	for range 2 {
-		if _, err := s.Add(context.Background(), "x", nil, []parse.Meta{
+		if _, err := s.Add(context.Background(), event.AddInput{Title: "x", Meta: []parse.Meta{
 			{Key: "tag", Value: "ops"},
-		}, nil); err != nil {
+		}}); err != nil {
 			t.Fatalf("Add: %v", err)
 		}
 	}
-	if _, err := s.Add(context.Background(), "y", nil, []parse.Meta{
+	if _, err := s.Add(context.Background(), event.AddInput{Title: "y", Meta: []parse.Meta{
 		{Key: "tag", Value: "deploy"},
-	}, nil); err != nil {
+	}}); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
@@ -104,9 +105,9 @@ func TestMetaListCmd_SearchPeopleShorthand(t *testing.T) {
 	s := newTestStore(t)
 	io, out := newTestIO("")
 
-	if _, err := s.Add(context.Background(), "x", nil, []parse.Meta{
+	if _, err := s.Add(context.Background(), event.AddInput{Title: "x", Meta: []parse.Meta{
 		{Key: "people", Value: "sarah"},
-	}, nil); err != nil {
+	}}); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
@@ -124,9 +125,9 @@ func TestMetaListCmd_SearchTagShorthand(t *testing.T) {
 	s := newTestStore(t)
 	io, out := newTestIO("")
 
-	if _, err := s.Add(context.Background(), "x", nil, []parse.Meta{
+	if _, err := s.Add(context.Background(), event.AddInput{Title: "x", Meta: []parse.Meta{
 		{Key: "tag", Value: "urgent"},
-	}, nil); err != nil {
+	}}); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
@@ -180,9 +181,9 @@ func TestMetaRenameCmd_AbortDoesNotMutate(t *testing.T) {
 	s := newTestStore(t)
 	io, out := newTestIO("n\n")
 
-	if _, err := s.Add(context.Background(), "x", nil, []parse.Meta{
+	if _, err := s.Add(context.Background(), event.AddInput{Title: "x", Meta: []parse.Meta{
 		{Key: "tag", Value: "ops"},
-	}, nil); err != nil {
+	}}); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
@@ -209,9 +210,9 @@ func TestMetaRenameCmd_ConfirmAppliesOnce(t *testing.T) {
 	io, out := newTestIO("y\n")
 
 	for range 3 {
-		if _, err := s.Add(context.Background(), "x", nil, []parse.Meta{
+		if _, err := s.Add(context.Background(), event.AddInput{Title: "x", Meta: []parse.Meta{
 			{Key: "tag", Value: "old"},
-		}, nil); err != nil {
+		}}); err != nil {
 			t.Fatalf("Add: %v", err)
 		}
 	}
@@ -246,9 +247,9 @@ func TestMetaRenameCmd_AcceptsShorthand(t *testing.T) {
 	s := newTestStore(t)
 	io, _ := newTestIO("")
 
-	if _, err := s.Add(context.Background(), "x", nil, []parse.Meta{
+	if _, err := s.Add(context.Background(), event.AddInput{Title: "x", Meta: []parse.Meta{
 		{Key: "tag", Value: "wip"},
-	}, nil); err != nil {
+	}}); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
@@ -284,9 +285,9 @@ func TestMetaDeleteCmd_AbortDoesNotMutate(t *testing.T) {
 	s := newTestStore(t)
 	io, out := newTestIO("n\n")
 
-	if _, err := s.Add(context.Background(), "x", nil, []parse.Meta{
+	if _, err := s.Add(context.Background(), event.AddInput{Title: "x", Meta: []parse.Meta{
 		{Key: "tag", Value: "keep"},
-	}, nil); err != nil {
+	}}); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
@@ -309,9 +310,9 @@ func TestMetaDeleteCmd_Force(t *testing.T) {
 	s := newTestStore(t)
 	io, out := newTestIO("")
 
-	if _, err := s.Add(context.Background(), "x", nil, []parse.Meta{
+	if _, err := s.Add(context.Background(), event.AddInput{Title: "x", Meta: []parse.Meta{
 		{Key: "tag", Value: "obsolete"},
-	}, nil); err != nil {
+	}}); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
@@ -329,9 +330,9 @@ func TestMetaDeleteCmd_AcceptsShorthand(t *testing.T) {
 	s := newTestStore(t)
 	io, _ := newTestIO("")
 
-	if _, err := s.Add(context.Background(), "x", nil, []parse.Meta{
+	if _, err := s.Add(context.Background(), event.AddInput{Title: "x", Meta: []parse.Meta{
 		{Key: "tag", Value: "obsolete"},
-	}, nil); err != nil {
+	}}); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 

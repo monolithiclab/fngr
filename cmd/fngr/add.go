@@ -64,7 +64,13 @@ func (c *AddCmd) runText(s eventStore, io ioStreams, text string) error {
 		createdAt = &t
 	}
 
-	id, err := s.Add(context.Background(), text, c.Parent, meta, createdAt)
+	id, err := s.Add(context.Background(), event.AddInput{
+		Title:     text,
+		Body:      "",
+		ParentID:  c.Parent,
+		Meta:      meta,
+		CreatedAt: createdAt,
+	})
 	if err != nil {
 		return err
 	}

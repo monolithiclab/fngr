@@ -16,7 +16,7 @@ import (
 func mdEvent(ts time.Time, text string, meta ...parse.Meta) event.Event {
 	return event.Event{
 		ID:        1,
-		Text:      text,
+		Title:     text,
 		CreatedAt: ts,
 		Meta:      meta,
 	}

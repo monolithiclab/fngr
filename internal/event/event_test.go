@@ -42,7 +42,7 @@ func TestAdd(t *testing.T) {
 		{Key: "people", Value: "bob"},
 	}
 
-	id, err := Add(ctx, database, "standup with @bob #meeting", nil, meta, nil)
+	id, err := Add(ctx, database, AddInput{Title: "standup with @bob #meeting", Meta: meta})
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestAdd(t *testing.T) {
 	}
 
 	var text string
-	err = database.QueryRow("SELECT text FROM events WHERE id = ?", id).Scan(&text)
+	err = database.QueryRow("SELECT title FROM events WHERE id = ?", id).Scan(&text)
 	if err != nil {
 		t.Fatalf("query event row: %v", err)
 	}
@@ -82,12 +82,12 @@ func TestAdd_WithParent(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
 
-	parentID, err := Add(ctx, database, "parent event", nil, nil, nil)
+	parentID, err := Add(ctx, database, AddInput{Title: "parent event"})
 	if err != nil {
 		t.Fatalf("Add parent: %v", err)
 	}
 
-	childID, err := Add(ctx, database, "child event", &parentID, nil, nil)
+	childID, err := Add(ctx, database, AddInput{Title: "child event", ParentID: &parentID})
 	if err != nil {
 		t.Fatalf("Add child: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestAdd_InvalidParent(t *testing.T) {
 	database := testDB(t)
 
 	invalidParent := int64(9999)
-	_, err := Add(ctx, database, "orphan event", &invalidParent, nil, nil)
+	_, err := Add(ctx, database, AddInput{Title: "orphan event", ParentID: &invalidParent})
 	if err == nil {
 		t.Fatal("expected error for invalid parent, got nil")
 	}
@@ -125,7 +125,7 @@ func TestGet(t *testing.T) {
 		{Key: "tag", Value: "work"},
 	}
 
-	id, err := Add(ctx, database, "get me", nil, meta, nil)
+	id, err := Add(ctx, database, AddInput{Title: "get me", Meta: meta})
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -135,8 +135,8 @@ func TestGet(t *testing.T) {
 		t.Fatalf("Get: %v", err)
 	}
 
-	if ev.Text != "get me" {
-		t.Errorf("event.Text = %q, want %q", ev.Text, "get me")
+	if ev.Title != "get me" {
+		t.Errorf("event.Title = %q, want %q", ev.Title, "get me")
 	}
 	if len(ev.Meta) != 2 {
 		t.Errorf("len(event.Meta) = %d, want 2", len(ev.Meta))
@@ -160,7 +160,7 @@ func TestDelete(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
 
-	id, err := Add(ctx, database, "to be deleted", nil, nil, nil)
+	id, err := Add(ctx, database, AddInput{Title: "to be deleted"})
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -196,16 +196,16 @@ func TestUpdate_TextOnly(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
 
-	id, err := Add(ctx, database, "old text", nil, []parse.Meta{
+	id, err := Add(ctx, database, AddInput{Title: "old text", Meta: []parse.Meta{
 		{Key: MetaKeyAuthor, Value: "alice"},
 		{Key: MetaKeyTag, Value: "ops"},
-	}, nil)
+	}})
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
 	newText := "new text"
-	if err := Update(ctx, database, id, &newText, nil); err != nil {
+	if err := Update(ctx, database, id, &newText, nil, nil); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 
@@ -213,8 +213,8 @@ func TestUpdate_TextOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if ev.Text != newText {
-		t.Errorf("text = %q, want %q", ev.Text, newText)
+	if ev.Title != newText {
+		t.Errorf("text = %q, want %q", ev.Title, newText)
 	}
 
 	matches, err := List(ctx, database, ListOpts{Filter: "new"})
@@ -237,13 +237,13 @@ func TestUpdate_TimeOnly(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
 
-	id, err := Add(ctx, database, "stamped", nil, nil, nil)
+	id, err := Add(ctx, database, AddInput{Title: "stamped"})
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
 	newTime := time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC)
-	if err := Update(ctx, database, id, nil, &newTime); err != nil {
+	if err := Update(ctx, database, id, nil, nil, &newTime); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 
@@ -260,7 +260,7 @@ func TestUpdate_NoOp(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
 
-	if err := Update(ctx, database, 9999, nil, nil); err != nil {
+	if err := Update(ctx, database, 9999, nil, nil, nil); err != nil {
 		t.Errorf("no-op Update returned error: %v", err)
 	}
 }
@@ -270,7 +270,7 @@ func TestUpdate_NotFound(t *testing.T) {
 	database := testDB(t)
 
 	newText := "x"
-	err := Update(ctx, database, 9999, &newText, nil)
+	err := Update(ctx, database, 9999, &newText, nil, nil)
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("error = %v, want ErrNotFound", err)
 	}
@@ -280,12 +280,12 @@ func TestDelete_CascadesChildren(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
 
-	parentID, err := Add(ctx, database, "parent", nil, []parse.Meta{{Key: "author", Value: "alice"}}, nil)
+	parentID, err := Add(ctx, database, AddInput{Title: "parent", Meta: []parse.Meta{{Key: "author", Value: "alice"}}})
 	if err != nil {
 		t.Fatalf("Add parent: %v", err)
 	}
 
-	childID, err := Add(ctx, database, "child", &parentID, []parse.Meta{{Key: "tag", Value: "reply"}}, nil)
+	childID, err := Add(ctx, database, AddInput{Title: "child", ParentID: &parentID, Meta: []parse.Meta{{Key: "tag", Value: "reply"}}})
 	if err != nil {
 		t.Fatalf("Add child: %v", err)
 	}
@@ -308,11 +308,11 @@ func TestList_NoFilter(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
 
-	_, err := Add(ctx, database, "first event #work", nil, []parse.Meta{{Key: "tag", Value: "work"}}, nil)
+	_, err := Add(ctx, database, AddInput{Title: "first event #work", Meta: []parse.Meta{{Key: "tag", Value: "work"}}})
 	if err != nil {
 		t.Fatalf("Add 1: %v", err)
 	}
-	_, err = Add(ctx, database, "second event #personal", nil, []parse.Meta{{Key: "tag", Value: "personal"}}, nil)
+	_, err = Add(ctx, database, AddInput{Title: "second event #personal", Meta: []parse.Meta{{Key: "tag", Value: "personal"}}})
 	if err != nil {
 		t.Fatalf("Add 2: %v", err)
 	}
@@ -324,11 +324,11 @@ func TestList_NoFilter(t *testing.T) {
 	if len(events) != 2 {
 		t.Fatalf("len(events) = %d, want 2", len(events))
 	}
-	if events[0].Text != "second event #personal" {
-		t.Errorf("events[0].Text = %q, want %q", events[0].Text, "second event #personal")
+	if events[0].Title != "second event #personal" {
+		t.Errorf("events[0].Title = %q, want %q", events[0].Title, "second event #personal")
 	}
-	if events[1].Text != "first event #work" {
-		t.Errorf("events[1].Text = %q, want %q", events[1].Text, "first event #work")
+	if events[1].Title != "first event #work" {
+		t.Errorf("events[1].Title = %q, want %q", events[1].Title, "first event #work")
 	}
 }
 
@@ -336,11 +336,11 @@ func TestList_WithFilter(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
 
-	_, err := Add(ctx, database, "deploy to prod #ops", nil, []parse.Meta{{Key: "tag", Value: "ops"}}, nil)
+	_, err := Add(ctx, database, AddInput{Title: "deploy to prod #ops", Meta: []parse.Meta{{Key: "tag", Value: "ops"}}})
 	if err != nil {
 		t.Fatalf("Add 1: %v", err)
 	}
-	_, err = Add(ctx, database, "standup meeting #work", nil, []parse.Meta{{Key: "tag", Value: "work"}}, nil)
+	_, err = Add(ctx, database, AddInput{Title: "standup meeting #work", Meta: []parse.Meta{{Key: "tag", Value: "work"}}})
 	if err != nil {
 		t.Fatalf("Add 2: %v", err)
 	}
@@ -352,8 +352,8 @@ func TestList_WithFilter(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("len(events) = %d, want 1", len(events))
 	}
-	if events[0].Text != "deploy to prod #ops" {
-		t.Errorf("events[0].Text = %q, want %q", events[0].Text, "deploy to prod #ops")
+	if events[0].Title != "deploy to prod #ops" {
+		t.Errorf("events[0].Title = %q, want %q", events[0].Title, "deploy to prod #ops")
 	}
 }
 
@@ -361,7 +361,7 @@ func TestList_WithDateRange(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
 
-	_, err := database.Exec("INSERT INTO events (text, created_at) VALUES (?, ?)", "old event", "2026-01-01 00:00:00")
+	_, err := database.Exec("INSERT INTO events (title, created_at) VALUES (?, ?)", "old event", "2026-01-01 00:00:00")
 	if err != nil {
 		t.Fatalf("insert old event: %v", err)
 	}
@@ -370,7 +370,7 @@ func TestList_WithDateRange(t *testing.T) {
 		t.Fatalf("insert old FTS: %v", err)
 	}
 
-	_, err = database.Exec("INSERT INTO events (text, created_at) VALUES (?, ?)", "new event", "2026-03-15 12:00:00")
+	_, err = database.Exec("INSERT INTO events (title, created_at) VALUES (?, ?)", "new event", "2026-03-15 12:00:00")
 	if err != nil {
 		t.Fatalf("insert new event: %v", err)
 	}
@@ -388,7 +388,7 @@ func TestList_WithDateRange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List with From: %v", err)
 	}
-	if len(events) != 1 || events[0].Text != "new event" {
+	if len(events) != 1 || events[0].Title != "new event" {
 		t.Errorf("From only got %d events; want [new event]", len(events))
 	}
 
@@ -396,7 +396,7 @@ func TestList_WithDateRange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List with To: %v", err)
 	}
-	if len(events) != 1 || events[0].Text != "old event" {
+	if len(events) != 1 || events[0].Title != "old event" {
 		t.Errorf("To only got %d events; want [old event]", len(events))
 	}
 
@@ -404,7 +404,7 @@ func TestList_WithDateRange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List with From and To: %v", err)
 	}
-	if len(events) != 1 || events[0].Text != "new event" {
+	if len(events) != 1 || events[0].Title != "new event" {
 		t.Errorf("From+To got %d events; want [new event]", len(events))
 	}
 }
@@ -414,15 +414,15 @@ func TestCountMeta(t *testing.T) {
 	database := testDB(t)
 
 	for range 3 {
-		if _, err := Add(ctx, database, "evt", nil, []parse.Meta{
+		if _, err := Add(ctx, database, AddInput{Title: "evt", Meta: []parse.Meta{
 			{Key: MetaKeyTag, Value: "ops"},
-		}, nil); err != nil {
+		}}); err != nil {
 			t.Fatalf("Add: %v", err)
 		}
 	}
-	if _, err := Add(ctx, database, "other", nil, []parse.Meta{
+	if _, err := Add(ctx, database, AddInput{Title: "other", Meta: []parse.Meta{
 		{Key: MetaKeyTag, Value: "work"},
-	}, nil); err != nil {
+	}}); err != nil {
 		t.Fatalf("Add other: %v", err)
 	}
 
@@ -447,9 +447,9 @@ func TestUpdateMeta_RejectsWellKnownKey(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
 
-	if _, err := Add(ctx, database, "x", nil, []parse.Meta{
+	if _, err := Add(ctx, database, AddInput{Title: "x", Meta: []parse.Meta{
 		{Key: MetaKeyAuthor, Value: "alice"},
-	}, nil); err != nil {
+	}}); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
@@ -463,9 +463,9 @@ func TestDeleteMeta_RejectsWellKnownKey(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
 
-	if _, err := Add(ctx, database, "x", nil, []parse.Meta{
+	if _, err := Add(ctx, database, AddInput{Title: "x", Meta: []parse.Meta{
 		{Key: MetaKeyAuthor, Value: "alice"},
-	}, nil); err != nil {
+	}}); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
@@ -479,7 +479,7 @@ func TestHasChildren_False(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
 
-	id, err := Add(ctx, database, "lonely", nil, nil, nil)
+	id, err := Add(ctx, database, AddInput{Title: "lonely"})
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -497,18 +497,18 @@ func TestListMeta(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
 
-	_, err := Add(ctx, database, "event one", nil, []parse.Meta{
+	_, err := Add(ctx, database, AddInput{Title: "event one", Meta: []parse.Meta{
 		{Key: "author", Value: "alice"},
 		{Key: "tag", Value: "work"},
-	}, nil)
+	}})
 	if err != nil {
 		t.Fatalf("Add 1: %v", err)
 	}
 
-	_, err = Add(ctx, database, "event two", nil, []parse.Meta{
+	_, err = Add(ctx, database, AddInput{Title: "event two", Meta: []parse.Meta{
 		{Key: "author", Value: "alice"},
 		{Key: "tag", Value: "personal"},
-	}, nil)
+	}})
 	if err != nil {
 		t.Fatalf("Add 2: %v", err)
 	}
@@ -545,11 +545,11 @@ func TestListMeta_FilterByKey(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
 
-	if _, err := Add(ctx, database, "x", nil, []parse.Meta{
+	if _, err := Add(ctx, database, AddInput{Title: "x", Meta: []parse.Meta{
 		{Key: "tag", Value: "ops"},
 		{Key: "tag", Value: "deploy"},
 		{Key: "people", Value: "alice"},
-	}, nil); err != nil {
+	}}); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
@@ -572,15 +572,15 @@ func TestListMeta_FilterByKeyValue(t *testing.T) {
 	database := testDB(t)
 
 	for range 3 {
-		if _, err := Add(ctx, database, "x", nil, []parse.Meta{
+		if _, err := Add(ctx, database, AddInput{Title: "x", Meta: []parse.Meta{
 			{Key: "tag", Value: "ops"},
-		}, nil); err != nil {
+		}}); err != nil {
 			t.Fatalf("Add: %v", err)
 		}
 	}
-	if _, err := Add(ctx, database, "y", nil, []parse.Meta{
+	if _, err := Add(ctx, database, AddInput{Title: "y", Meta: []parse.Meta{
 		{Key: "tag", Value: "other"},
-	}, nil); err != nil {
+	}}); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
@@ -600,9 +600,9 @@ func TestListMeta_FilterEmptyResult(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
 
-	if _, err := Add(ctx, database, "x", nil, []parse.Meta{
+	if _, err := Add(ctx, database, AddInput{Title: "x", Meta: []parse.Meta{
 		{Key: "tag", Value: "ops"},
-	}, nil); err != nil {
+	}}); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
@@ -619,22 +619,22 @@ func TestGetSubtree(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
 
-	root, err := Add(ctx, database, "root", nil, []parse.Meta{{Key: MetaKeyAuthor, Value: "alice"}}, nil)
+	root, err := Add(ctx, database, AddInput{Title: "root", Meta: []parse.Meta{{Key: MetaKeyAuthor, Value: "alice"}}})
 	if err != nil {
 		t.Fatalf("Add root: %v", err)
 	}
 
-	child, err := Add(ctx, database, "child", &root, []parse.Meta{{Key: MetaKeyAuthor, Value: "alice"}}, nil)
+	child, err := Add(ctx, database, AddInput{Title: "child", ParentID: &root, Meta: []parse.Meta{{Key: MetaKeyAuthor, Value: "alice"}}})
 	if err != nil {
 		t.Fatalf("Add child: %v", err)
 	}
 
-	grandchild, err := Add(ctx, database, "grandchild", &child, []parse.Meta{{Key: MetaKeyAuthor, Value: "bob"}}, nil)
+	grandchild, err := Add(ctx, database, AddInput{Title: "grandchild", ParentID: &child, Meta: []parse.Meta{{Key: MetaKeyAuthor, Value: "bob"}}})
 	if err != nil {
 		t.Fatalf("Add grandchild: %v", err)
 	}
 
-	if _, err := Add(ctx, database, "unrelated", nil, nil, nil); err != nil {
+	if _, err := Add(ctx, database, AddInput{Title: "unrelated"}); err != nil {
 		t.Fatalf("Add unrelated: %v", err)
 	}
 
@@ -665,7 +665,7 @@ func TestGetSubtree_LeafNode(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
 
-	id, err := Add(ctx, database, "leaf", nil, nil, nil)
+	id, err := Add(ctx, database, AddInput{Title: "leaf"})
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -677,8 +677,8 @@ func TestGetSubtree_LeafNode(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("len(events) = %d, want 1", len(events))
 	}
-	if events[0].Text != "leaf" {
-		t.Errorf("events[0].Text = %q, want %q", events[0].Text, "leaf")
+	if events[0].Title != "leaf" {
+		t.Errorf("events[0].Title = %q, want %q", events[0].Title, "leaf")
 	}
 }
 
@@ -699,10 +699,10 @@ func TestFTSIsolation_MetaTokensNotMatchedByBareWords(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
 
-	_, err := Add(ctx, database, "pushed to production", nil, []parse.Meta{
+	_, err := Add(ctx, database, AddInput{Title: "pushed to production", Meta: []parse.Meta{
 		{Key: MetaKeyAuthor, Value: "alice"},
 		{Key: MetaKeyTag, Value: "deploy"},
-	}, nil)
+	}})
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -728,9 +728,9 @@ func TestFTSIsolation_BodyWordsNotMatchedByMetaFilter(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
 
-	_, err := Add(ctx, database, "heading to work early", nil, []parse.Meta{
+	_, err := Add(ctx, database, AddInput{Title: "heading to work early", Meta: []parse.Meta{
 		{Key: MetaKeyAuthor, Value: "alice"},
-	}, nil)
+	}})
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -755,7 +755,7 @@ func TestFTSIsolation_BodyWordsNotMatchedByMetaFilter(t *testing.T) {
 func TestListSeq_PropagatesDBError(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
-	if _, err := Add(ctx, database, "ok", nil, nil, nil); err != nil {
+	if _, err := Add(ctx, database, AddInput{Title: "ok"}); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 	if err := database.Close(); err != nil {
@@ -769,7 +769,7 @@ func TestListSeq_PropagatesDBError(t *testing.T) {
 		if err == nil {
 			t.Fatalf("yield #%d returned (%+v, nil), want non-nil error", calls, ev)
 		}
-		if ev.ID != 0 || ev.Text != "" || ev.ParentID != nil || len(ev.Meta) != 0 {
+		if ev.ID != 0 || ev.Title != "" || ev.ParentID != nil || len(ev.Meta) != 0 {
 			t.Errorf("yield #%d returned non-zero event with err: %+v", calls, ev)
 		}
 		lastErr = err
@@ -788,7 +788,7 @@ func TestList_LimitAndSort(t *testing.T) {
 
 	for i := range 5 {
 		_, err := database.Exec(
-			"INSERT INTO events (text, created_at) VALUES (?, ?)",
+			"INSERT INTO events (title, created_at) VALUES (?, ?)",
 			fmt.Sprintf("evt %d", i),
 			fmt.Sprintf("2026-01-0%d 10:00:00", i+1),
 		)
@@ -806,16 +806,16 @@ func TestList_LimitAndSort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List default limit: %v", err)
 	}
-	if len(desc) != 2 || desc[0].Text != "evt 4" {
-		t.Errorf("default limit got %d events, first=%q; want 2 starting with 'evt 4'", len(desc), desc[0].Text)
+	if len(desc) != 2 || desc[0].Title != "evt 4" {
+		t.Errorf("default limit got %d events, first=%q; want 2 starting with 'evt 4'", len(desc), desc[0].Title)
 	}
 
 	asc, err := List(ctx, database, ListOpts{Limit: 2, Ascending: true})
 	if err != nil {
 		t.Fatalf("List ascending limit: %v", err)
 	}
-	if len(asc) != 2 || asc[0].Text != "evt 0" {
-		t.Errorf("ascending limit got %d events, first=%q; want 2 starting with 'evt 0'", len(asc), asc[0].Text)
+	if len(asc) != 2 || asc[0].Title != "evt 0" {
+		t.Errorf("ascending limit got %d events, first=%q; want 2 starting with 'evt 0'", len(asc), asc[0].Title)
 	}
 }
 
@@ -825,7 +825,7 @@ func TestList_LoadMetaAcrossChunkBoundary(t *testing.T) {
 
 	const n = metaBatchSize + 50
 	for i := range n {
-		if _, err := Add(ctx, database, "evt", nil, []parse.Meta{{Key: MetaKeyAuthor, Value: "alice"}}, nil); err != nil {
+		if _, err := Add(ctx, database, AddInput{Title: "evt", Meta: []parse.Meta{{Key: MetaKeyAuthor, Value: "alice"}}}); err != nil {
 			t.Fatalf("Add %d: %v", i, err)
 		}
 	}
@@ -848,30 +848,30 @@ func TestList_ComplexFilters(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
 
-	_, err := Add(ctx, database, "deploy to prod", nil, []parse.Meta{
+	_, err := Add(ctx, database, AddInput{Title: "deploy to prod", Meta: []parse.Meta{
 		{Key: MetaKeyAuthor, Value: "alice"},
 		{Key: MetaKeyTag, Value: "ops"},
 		{Key: MetaKeyPeople, Value: "alice"},
-	}, nil)
+	}})
 	if err != nil {
 		t.Fatalf("Add 1: %v", err)
 	}
 
-	_, err = Add(ctx, database, "standup meeting", nil, []parse.Meta{
+	_, err = Add(ctx, database, AddInput{Title: "standup meeting", Meta: []parse.Meta{
 		{Key: MetaKeyAuthor, Value: "bob"},
 		{Key: MetaKeyTag, Value: "work"},
 		{Key: MetaKeyPeople, Value: "bob"},
-	}, nil)
+	}})
 	if err != nil {
 		t.Fatalf("Add 2: %v", err)
 	}
 
-	_, err = Add(ctx, database, "deploy standup", nil, []parse.Meta{
+	_, err = Add(ctx, database, AddInput{Title: "deploy standup", Meta: []parse.Meta{
 		{Key: MetaKeyAuthor, Value: "alice"},
 		{Key: MetaKeyTag, Value: "ops"},
 		{Key: MetaKeyTag, Value: "work"},
 		{Key: MetaKeyPeople, Value: "alice"},
-	}, nil)
+	}})
 	if err != nil {
 		t.Fatalf("Add 3: %v", err)
 	}
@@ -898,7 +898,7 @@ func TestList_ComplexFilters(t *testing.T) {
 			if len(events) != tt.want {
 				texts := make([]string, len(events))
 				for i, e := range events {
-					texts[i] = e.Text
+					texts[i] = e.Title
 				}
 				t.Errorf("filter %q matched %d events %v, want %d", tt.filter, len(events), texts, tt.want)
 			}
@@ -911,9 +911,9 @@ func TestListSeq_YieldsAllInOrder(t *testing.T) {
 	database := testDB(t)
 
 	for i := range 3 {
-		if _, err := Add(ctx, database, fmt.Sprintf("evt %d", i), nil, []parse.Meta{
+		if _, err := Add(ctx, database, AddInput{Title: fmt.Sprintf("evt %d", i), Meta: []parse.Meta{
 			{Key: MetaKeyAuthor, Value: "alice"},
-		}, nil); err != nil {
+		}}); err != nil {
 			t.Fatalf("Add %d: %v", i, err)
 		}
 	}
@@ -926,7 +926,7 @@ func TestListSeq_YieldsAllInOrder(t *testing.T) {
 		if len(ev.Meta) != 1 || ev.Meta[0].Value != "alice" {
 			t.Errorf("event %d meta = %v, want [{author alice}]", ev.ID, ev.Meta)
 		}
-		got = append(got, ev.Text)
+		got = append(got, ev.Title)
 	}
 	want := []string{"evt 0", "evt 1", "evt 2"}
 	if len(got) != 3 || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
@@ -940,9 +940,9 @@ func TestListSeq_AcrossBatchBoundary(t *testing.T) {
 
 	const n = metaBatchSize + 50
 	for i := range n {
-		if _, err := Add(ctx, database, fmt.Sprintf("e%d", i), nil, []parse.Meta{
+		if _, err := Add(ctx, database, AddInput{Title: fmt.Sprintf("e%d", i), Meta: []parse.Meta{
 			{Key: MetaKeyAuthor, Value: "alice"},
-		}, nil); err != nil {
+		}}); err != nil {
 			t.Fatalf("Add %d: %v", i, err)
 		}
 	}
@@ -966,11 +966,11 @@ func TestReparent_DetachClearsParent(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
 
-	parent, err := Add(ctx, database, "parent", nil, nil, nil)
+	parent, err := Add(ctx, database, AddInput{Title: "parent"})
 	if err != nil {
 		t.Fatalf("Add parent: %v", err)
 	}
-	child, err := Add(ctx, database, "child", &parent, nil, nil)
+	child, err := Add(ctx, database, AddInput{Title: "child", ParentID: &parent})
 	if err != nil {
 		t.Fatalf("Add child: %v", err)
 	}
@@ -992,9 +992,9 @@ func TestReparent_AllowsValidMove(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
 
-	a, _ := Add(ctx, database, "a", nil, nil, nil)
-	b, _ := Add(ctx, database, "b", nil, nil, nil)
-	c, _ := Add(ctx, database, "c", &a, nil, nil)
+	a, _ := Add(ctx, database, AddInput{Title: "a"})
+	b, _ := Add(ctx, database, AddInput{Title: "b"})
+	c, _ := Add(ctx, database, AddInput{Title: "c", ParentID: &a})
 
 	if err := Reparent(ctx, database, c, &b); err != nil {
 		t.Fatalf("Reparent: %v", err)
@@ -1009,7 +1009,7 @@ func TestReparent_RejectsSelf(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
 
-	id, _ := Add(ctx, database, "x", nil, nil, nil)
+	id, _ := Add(ctx, database, AddInput{Title: "x"})
 
 	err := Reparent(ctx, database, id, &id)
 	if !errors.Is(err, ErrCycle) {
@@ -1022,9 +1022,9 @@ func TestReparent_RejectsAncestryCycle(t *testing.T) {
 	database := testDB(t)
 
 	// 1 -> 2 -> 3   (3 has parent 2 has parent 1)
-	a, _ := Add(ctx, database, "a", nil, nil, nil)
-	b, _ := Add(ctx, database, "b", &a, nil, nil)
-	c, _ := Add(ctx, database, "c", &b, nil, nil)
+	a, _ := Add(ctx, database, AddInput{Title: "a"})
+	b, _ := Add(ctx, database, AddInput{Title: "b", ParentID: &a})
+	c, _ := Add(ctx, database, AddInput{Title: "c", ParentID: &b})
 
 	// Attaching a (top) to c (descendant) would form a cycle.
 	err := Reparent(ctx, database, a, &c)
@@ -1046,7 +1046,7 @@ func TestReparent_NotFound(t *testing.T) {
 func TestReparent_NewParentNotFound(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
-	id, _ := Add(ctx, database, "x", nil, nil, nil)
+	id, _ := Add(ctx, database, AddInput{Title: "x"})
 
 	missing := int64(9999)
 	err := Reparent(ctx, database, id, &missing)
@@ -1059,9 +1059,9 @@ func TestAddTags_DedupsAtDB(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
 
-	id, _ := Add(ctx, database, "x", nil, []parse.Meta{
+	id, _ := Add(ctx, database, AddInput{Title: "x", Meta: []parse.Meta{
 		{Key: "tag", Value: "ops"},
-	}, nil)
+	}})
 
 	tags := []parse.Meta{
 		{Key: "tag", Value: "ops"},
@@ -1099,7 +1099,7 @@ func TestAddTags_DedupsAtDB(t *testing.T) {
 func TestAddTags_AddedCount(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
-	id, _ := Add(ctx, database, "x", nil, []parse.Meta{{Key: "tag", Value: "ops"}}, nil)
+	id, _ := Add(ctx, database, AddInput{Title: "x", Meta: []parse.Meta{{Key: "tag", Value: "ops"}}})
 
 	cases := []struct {
 		name string
@@ -1139,7 +1139,7 @@ func TestAddTags_RebuildsFTS(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
 
-	id, _ := Add(ctx, database, "no tags here", nil, nil, nil)
+	id, _ := Add(ctx, database, AddInput{Title: "no tags here"})
 	if _, err := AddTags(ctx, database, id, []parse.Meta{{Key: "tag", Value: "ops"}}); err != nil {
 		t.Fatalf("AddTags: %v", err)
 	}
@@ -1165,7 +1165,7 @@ func TestAddTags_NotFound(t *testing.T) {
 func TestAddTags_EmptyIsNoOp(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
-	id, _ := Add(ctx, database, "x", nil, nil, nil)
+	id, _ := Add(ctx, database, AddInput{Title: "x"})
 	added, err := AddTags(ctx, database, id, nil)
 	if err != nil {
 		t.Errorf("empty AddTags returned err: %v", err)
@@ -1179,11 +1179,11 @@ func TestRemoveTags_ReturnsCount(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
 
-	id, _ := Add(ctx, database, "x", nil, []parse.Meta{
+	id, _ := Add(ctx, database, AddInput{Title: "x", Meta: []parse.Meta{
 		{Key: "tag", Value: "ops"},
 		{Key: "tag", Value: "deploy"},
 		{Key: "people", Value: "alice"},
-	}, nil)
+	}})
 
 	n, err := RemoveTags(ctx, database, id, []parse.Meta{
 		{Key: "tag", Value: "ops"},
@@ -1208,9 +1208,9 @@ func TestRemoveTags_RebuildsFTS(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
 
-	id, _ := Add(ctx, database, "x #ops", nil, []parse.Meta{
+	id, _ := Add(ctx, database, AddInput{Title: "x #ops", Meta: []parse.Meta{
 		{Key: "tag", Value: "ops"},
-	}, nil)
+	}})
 
 	if _, err := RemoveTags(ctx, database, id, []parse.Meta{
 		{Key: "tag", Value: "ops"},
@@ -1231,7 +1231,7 @@ func TestRemoveTags_NoMatchReturnsZero(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
 
-	id, _ := Add(ctx, database, "x", nil, nil, nil)
+	id, _ := Add(ctx, database, AddInput{Title: "x"})
 	n, err := RemoveTags(ctx, database, id, []parse.Meta{
 		{Key: "tag", Value: "ghost"},
 	})
@@ -1255,7 +1255,7 @@ func TestRemoveTags_NotFound(t *testing.T) {
 func TestRemoveTags_EmptyIsNoOp(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
-	id, _ := Add(ctx, database, "x", nil, nil, nil)
+	id, _ := Add(ctx, database, AddInput{Title: "x"})
 	n, err := RemoveTags(ctx, database, id, nil)
 	if err != nil {
 		t.Errorf("empty RemoveTags err: %v", err)
@@ -1270,19 +1270,19 @@ func TestUpdate_TextSyncsBodyTags(t *testing.T) {
 	database := testDB(t)
 
 	// Pre-existing meta: body-derived (alice, ops) plus non-body (env=prod, author).
-	id, err := Add(ctx, database, "deploy with @alice #ops", nil, []parse.Meta{
+	id, err := Add(ctx, database, AddInput{Title: "deploy with @alice #ops", Meta: []parse.Meta{
 		{Key: "author", Value: "nicolas"},
 		{Key: "people", Value: "alice"},
 		{Key: "tag", Value: "ops"},
 		{Key: "env", Value: "prod"},
-	}, nil)
+	}})
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
 	// Replace text: drop @alice, add @bob, keep #ops.
 	newText := "rolled back with @bob #ops"
-	if err := Update(ctx, database, id, &newText, nil); err != nil {
+	if err := Update(ctx, database, id, &newText, nil, nil); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 
@@ -1311,12 +1311,12 @@ func TestUpdate_TextDedupsRepeatedBodyTags(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
 
-	id, _ := Add(ctx, database, "x #ops", nil, []parse.Meta{
+	id, _ := Add(ctx, database, AddInput{Title: "x #ops", Meta: []parse.Meta{
 		{Key: "tag", Value: "ops"},
-	}, nil)
+	}})
 
 	newText := "y #ops #ops"
-	if err := Update(ctx, database, id, &newText, nil); err != nil {
+	if err := Update(ctx, database, id, &newText, nil, nil); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 
@@ -1363,9 +1363,9 @@ func TestAddMany_HappyPath(t *testing.T) {
 	database := testDB(t)
 
 	inputs := []AddInput{
-		{Text: "a", Meta: []parse.Meta{{Key: "tag", Value: "x"}}},
-		{Text: "b"},
-		{Text: "c", Meta: []parse.Meta{{Key: "tag", Value: "y"}, {Key: "people", Value: "alice"}}},
+		{Title: "a", Meta: []parse.Meta{{Key: "tag", Value: "x"}}},
+		{Title: "b"},
+		{Title: "c", Meta: []parse.Meta{{Key: "tag", Value: "y"}, {Key: "people", Value: "alice"}}},
 	}
 	ids, err := AddMany(ctx, database, inputs)
 	if err != nil {
@@ -1385,8 +1385,8 @@ func TestAddMany_HappyPath(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Get(%d): %v", id, err)
 		}
-		if ev.Text != inputs[i].Text {
-			t.Errorf("event %d text = %q, want %q", id, ev.Text, inputs[i].Text)
+		if ev.Title != inputs[i].Title {
+			t.Errorf("event %d text = %q, want %q", id, ev.Title, inputs[i].Title)
 		}
 		if len(ev.Meta) != len(inputs[i].Meta) {
 			t.Errorf("event %d meta count = %d, want %d", id, len(ev.Meta), len(inputs[i].Meta))
@@ -1400,10 +1400,10 @@ func TestAddMany_AtomicOnError(t *testing.T) {
 
 	bogusParent := int64(9999)
 	inputs := []AddInput{
-		{Text: "good 1"},
-		{Text: "good 2"},
-		{Text: "bad", ParentID: &bogusParent}, // parent does not exist
-		{Text: "good 3"},
+		{Title: "good 1"},
+		{Title: "good 2"},
+		{Title: "bad", ParentID: &bogusParent}, // parent does not exist
+		{Title: "good 3"},
 	}
 	_, err := AddMany(ctx, database, inputs)
 	if err == nil {
@@ -1424,8 +1424,8 @@ func TestAddMany_FTSPopulatedPerRecord(t *testing.T) {
 	database := testDB(t)
 
 	inputs := []AddInput{
-		{Text: "deploy ops", Meta: []parse.Meta{{Key: "tag", Value: "ops"}}},
-		{Text: "lunch chat", Meta: []parse.Meta{{Key: "tag", Value: "personal"}}},
+		{Title: "deploy ops", Meta: []parse.Meta{{Key: "tag", Value: "ops"}}},
+		{Title: "lunch chat", Meta: []parse.Meta{{Key: "tag", Value: "personal"}}},
 	}
 	if _, err := AddMany(ctx, database, inputs); err != nil {
 		t.Fatalf("AddMany: %v", err)
@@ -1435,7 +1435,126 @@ func TestAddMany_FTSPopulatedPerRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if len(matches) != 1 || matches[0].Text != "deploy ops" {
+	if len(matches) != 1 || matches[0].Title != "deploy ops" {
 		t.Errorf("FTS not populated: matches = %v", matches)
+	}
+}
+
+func TestAdd_RejectsEmptyTitle(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+	if _, err := Add(context.Background(), database, AddInput{Title: ""}); err == nil {
+		t.Error("Add with empty title: expected error")
+	}
+}
+
+func TestUpdate_RejectsEmptyTitle(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+	id, err := Add(context.Background(), database, AddInput{Title: "starter"})
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	empty := ""
+	if err := Update(context.Background(), database, id, &empty, nil, nil); err == nil {
+		t.Error("Update with empty title: expected error")
+	}
+}
+
+func TestUpdate_BodyOnly(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+	id, err := Add(context.Background(), database, AddInput{Title: "title", Body: "body"})
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	newBody := "newbody"
+	if err := Update(context.Background(), database, id, nil, &newBody, nil); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	ev, err := Get(context.Background(), database, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if ev.Title != "title" || ev.Body != "newbody" {
+		t.Errorf("got (title=%q, body=%q), want (title, newbody)", ev.Title, ev.Body)
+	}
+}
+
+func TestUpdate_TitleOnly(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+	id, err := Add(context.Background(), database, AddInput{Title: "title", Body: "body"})
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	newTitle := "newtitle"
+	if err := Update(context.Background(), database, id, &newTitle, nil, nil); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	ev, err := Get(context.Background(), database, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if ev.Title != "newtitle" || ev.Body != "body" {
+		t.Errorf("got (title=%q, body=%q), want (newtitle, body)", ev.Title, ev.Body)
+	}
+}
+
+func TestUpdate_ClearsBody(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+	id, err := Add(context.Background(), database, AddInput{Title: "title", Body: "body"})
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	empty := ""
+	if err := Update(context.Background(), database, id, nil, &empty, nil); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	ev, err := Get(context.Background(), database, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if ev.Title != "title" || ev.Body != "" {
+		t.Errorf("got (title=%q, body=%q), want (title, '')", ev.Title, ev.Body)
+	}
+}
+
+func TestUpdate_BodyTagSyncAcrossFields(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+	id, err := Add(context.Background(), database, AddInput{
+		Title: "deploy #ops",
+		Body:  "@sarah",
+		Meta: []parse.Meta{
+			{Key: "tag", Value: "ops"},
+			{Key: "people", Value: "sarah"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	// Move tags from title→body and body→title; expected meta set is unchanged.
+	newTitle := "@sarah deploy"
+	newBody := "#ops"
+	if err := Update(context.Background(), database, id, &newTitle, &newBody, nil); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	ev, err := Get(context.Background(), database, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	wantSet := map[parse.Meta]bool{
+		{Key: "tag", Value: "ops"}:      true,
+		{Key: "people", Value: "sarah"}: true,
+	}
+	for _, m := range ev.Meta {
+		if wantSet[m] {
+			delete(wantSet, m)
+		}
+	}
+	if len(wantSet) != 0 {
+		t.Errorf("missing meta after move: %v", wantSet)
 	}
 }

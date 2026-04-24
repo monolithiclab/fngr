@@ -13,12 +13,12 @@ import (
 // eventStore is the narrow surface that CLI commands depend on. *event.Store
 // satisfies it for production; tests provide their own implementations.
 type eventStore interface {
-	Add(ctx context.Context, text string, parentID *int64, meta []parse.Meta, createdAt *time.Time) (int64, error)
+	Add(ctx context.Context, in event.AddInput) (int64, error)
 	AddMany(ctx context.Context, inputs []event.AddInput) ([]int64, error)
 	AddTags(ctx context.Context, id int64, tags []parse.Meta) (int64, error)
 	Get(ctx context.Context, id int64) (*event.Event, error)
 	Delete(ctx context.Context, id int64) error
-	Update(ctx context.Context, id int64, text *string, createdAt *time.Time) error
+	Update(ctx context.Context, id int64, title, body *string, createdAt *time.Time) error
 	Reparent(ctx context.Context, id int64, newParent *int64) error
 	RemoveTags(ctx context.Context, id int64, tags []parse.Meta) (int64, error)
 	HasChildren(ctx context.Context, id int64) (bool, error)

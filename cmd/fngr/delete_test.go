@@ -15,7 +15,7 @@ func TestDeleteCmd_Confirm(t *testing.T) {
 	s := newTestStore(t)
 	io, out := newTestIO("y\n")
 
-	id, err := s.Add(context.Background(), "doomed", nil, nil, nil)
+	id, err := s.Add(context.Background(), event.AddInput{Title: "doomed"})
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -38,7 +38,7 @@ func TestDeleteCmd_Abort(t *testing.T) {
 	s := newTestStore(t)
 	io, out := newTestIO("n\n")
 
-	id, err := s.Add(context.Background(), "saved by abort", nil, nil, nil)
+	id, err := s.Add(context.Background(), event.AddInput{Title: "saved by abort"})
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestDeleteCmd_Force(t *testing.T) {
 	s := newTestStore(t)
 	io, _ := newTestIO("")
 
-	id, err := s.Add(context.Background(), "forced", nil, nil, nil)
+	id, err := s.Add(context.Background(), event.AddInput{Title: "forced"})
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -80,11 +80,11 @@ func TestDeleteCmd_HasChildrenWithoutRecursive(t *testing.T) {
 	s := newTestStore(t)
 	io, _ := newTestIO("y\n")
 
-	parent, err := s.Add(context.Background(), "parent", nil, nil, nil)
+	parent, err := s.Add(context.Background(), event.AddInput{Title: "parent"})
 	if err != nil {
 		t.Fatalf("Add parent: %v", err)
 	}
-	if _, err := s.Add(context.Background(), "child", &parent, nil, nil); err != nil {
+	if _, err := s.Add(context.Background(), event.AddInput{Title: "child", ParentID: &parent}); err != nil {
 		t.Fatalf("Add child: %v", err)
 	}
 
@@ -100,13 +100,13 @@ func TestDeleteCmd_Recursive(t *testing.T) {
 	s := newTestStore(t)
 	io, _ := newTestIO("y\n")
 
-	parent, err := s.Add(context.Background(), "parent", nil, []parse.Meta{
+	parent, err := s.Add(context.Background(), event.AddInput{Title: "parent", Meta: []parse.Meta{
 		{Key: "author", Value: "alice"},
-	}, nil)
+	}})
 	if err != nil {
 		t.Fatalf("Add parent: %v", err)
 	}
-	child, err := s.Add(context.Background(), "child", &parent, nil, nil)
+	child, err := s.Add(context.Background(), event.AddInput{Title: "child", ParentID: &parent})
 	if err != nil {
 		t.Fatalf("Add child: %v", err)
 	}

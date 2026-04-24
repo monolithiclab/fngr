@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/monolithiclab/fngr/internal/event"
 	"github.com/monolithiclab/fngr/internal/parse"
 )
 
@@ -15,10 +16,10 @@ func TestListCmd_DefaultTree(t *testing.T) {
 	s := newTestStore(t)
 	io, out := newTestIO("")
 
-	if _, err := s.Add(context.Background(), "deploy #ops", nil, []parse.Meta{
+	if _, err := s.Add(context.Background(), event.AddInput{Title: "deploy #ops", Meta: []parse.Meta{
 		{Key: "author", Value: "alice"},
 		{Key: "tag", Value: "ops"},
-	}, nil); err != nil {
+	}}); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
@@ -38,9 +39,9 @@ func TestListCmd_FTSSyntaxErrorIsWrapped(t *testing.T) {
 
 	// Force a write so the FTS index has at least one row to query against
 	// (otherwise FTS5 short-circuits before parsing the MATCH expression).
-	if _, err := s.Add(context.Background(), "any", nil, []parse.Meta{
+	if _, err := s.Add(context.Background(), event.AddInput{Title: "any", Meta: []parse.Meta{
 		{Key: "author", Value: "alice"},
-	}, nil); err != nil {
+	}}); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
@@ -111,9 +112,9 @@ func TestListCmd_JSON(t *testing.T) {
 	s := newTestStore(t)
 	io, out := newTestIO("")
 
-	if _, err := s.Add(context.Background(), "json me", nil, []parse.Meta{
+	if _, err := s.Add(context.Background(), event.AddInput{Title: "json me", Meta: []parse.Meta{
 		{Key: "author", Value: "alice"},
-	}, nil); err != nil {
+	}}); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
@@ -137,9 +138,9 @@ func TestListCmd_LimitAndDefaultSort(t *testing.T) {
 	io, out := newTestIO("")
 
 	for _, text := range []string{"alpha", "beta", "gamma"} {
-		if _, err := s.Add(context.Background(), text, nil, []parse.Meta{
+		if _, err := s.Add(context.Background(), event.AddInput{Title: text, Meta: []parse.Meta{
 			{Key: "author", Value: "alice"},
-		}, nil); err != nil {
+		}}); err != nil {
 			t.Fatalf("Add %s: %v", text, err)
 		}
 	}
@@ -163,9 +164,9 @@ func TestListCmd_Reverse(t *testing.T) {
 	io, out := newTestIO("")
 
 	for _, text := range []string{"alpha", "beta", "gamma"} {
-		if _, err := s.Add(context.Background(), text, nil, []parse.Meta{
+		if _, err := s.Add(context.Background(), event.AddInput{Title: text, Meta: []parse.Meta{
 			{Key: "author", Value: "alice"},
-		}, nil); err != nil {
+		}}); err != nil {
 			t.Fatalf("Add %s: %v", text, err)
 		}
 	}
@@ -209,16 +210,16 @@ func TestListCmd_FilterAndDateRange(t *testing.T) {
 	s := newTestStore(t)
 	io, out := newTestIO("")
 
-	if _, err := s.Add(context.Background(), "match", nil, []parse.Meta{
+	if _, err := s.Add(context.Background(), event.AddInput{Title: "match", Meta: []parse.Meta{
 		{Key: "author", Value: "alice"},
 		{Key: "tag", Value: "ops"},
-	}, nil); err != nil {
+	}}); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
-	if _, err := s.Add(context.Background(), "skip", nil, []parse.Meta{
+	if _, err := s.Add(context.Background(), event.AddInput{Title: "skip", Meta: []parse.Meta{
 		{Key: "author", Value: "alice"},
 		{Key: "tag", Value: "work"},
-	}, nil); err != nil {
+	}}); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
@@ -239,9 +240,9 @@ func TestListCmd_JSONUsesStreamingPath(t *testing.T) {
 	io, out := newTestIO("")
 
 	for i := range 3 {
-		if _, err := s.Add(context.Background(), fmt.Sprintf("e%d", i), nil, []parse.Meta{
+		if _, err := s.Add(context.Background(), event.AddInput{Title: fmt.Sprintf("e%d", i), Meta: []parse.Meta{
 			{Key: "author", Value: "alice"},
-		}, nil); err != nil {
+		}}); err != nil {
 			t.Fatalf("Add %d: %v", i, err)
 		}
 	}
@@ -265,9 +266,9 @@ func TestListCmd_NoPagerStillRendersToBuffer(t *testing.T) {
 	s := newTestStore(t)
 	io, out := newTestIO("")
 
-	if _, err := s.Add(context.Background(), "evt", nil, []parse.Meta{
+	if _, err := s.Add(context.Background(), event.AddInput{Title: "evt", Meta: []parse.Meta{
 		{Key: "author", Value: "alice"},
-	}, nil); err != nil {
+	}}); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 

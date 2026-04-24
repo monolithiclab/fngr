@@ -134,8 +134,8 @@ func TestJSONInputToAddInput(t *testing.T) {
 			if err != nil {
 				t.Fatalf("jsonInputToAddInput: %v", err)
 			}
-			if got.Text != tc.wantText {
-				t.Errorf("Text = %q, want %q", got.Text, tc.wantText)
+			if got.Title != tc.wantText {
+				t.Errorf("Text = %q, want %q", got.Title, tc.wantText)
 			}
 			if tc.wantAuthor != "" {
 				var authors []string

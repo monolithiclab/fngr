@@ -128,7 +128,7 @@ func Tree(w io.Writer, events []event.Event) error {
 func renderNode(w io.Writer, events []event.Event, byID map[int64]int, children map[int64][]int64, id int64, linePrefix, childPrefix string) error {
 	idx := byID[id]
 	ev := events[idx]
-	line := formatEventLine(ev.ID, formatLocalStamp(ev.CreatedAt), eventAuthor(ev), ev.Text)
+	line := formatEventLine(ev.ID, formatLocalStamp(ev.CreatedAt), eventAuthor(ev), ev.Title)
 
 	if _, err := fmt.Fprintf(w, "%s%s\n", linePrefix, line); err != nil {
 		return err
@@ -157,7 +157,7 @@ func renderNode(w io.Writer, events []event.Event, byID map[int64]int, children 
 // Parent/child topology is ignored; for that, use Tree.
 func Flat(w io.Writer, events []event.Event) error {
 	for _, ev := range events {
-		line := formatEventLine(ev.ID, formatLocalStamp(ev.CreatedAt), eventAuthor(ev), ev.Text)
+		line := formatEventLine(ev.ID, formatLocalStamp(ev.CreatedAt), eventAuthor(ev), ev.Title)
 		if _, err := fmt.Fprintln(w, line); err != nil {
 			return err
 		}
@@ -177,7 +177,7 @@ func toJSONEvent(ev event.Event) jsonEvent {
 	out := jsonEvent{
 		ID:        ev.ID,
 		ParentID:  ev.ParentID,
-		Text:      ev.Text,
+		Text:      ev.Title,
 		CreatedAt: ev.CreatedAt.UTC().Format(time.RFC3339),
 	}
 	if len(ev.Meta) == 0 {
@@ -229,7 +229,7 @@ func CSV(w io.Writer, events []event.Event) error {
 			parentID,
 			ev.CreatedAt.UTC().Format(time.RFC3339),
 			eventAuthor(ev),
-			ev.Text,
+			ev.Title,
 		})
 	}
 	cw.Flush()
@@ -250,7 +250,7 @@ func Event(w io.Writer, ev *event.Event) error {
 	if _, err := fmt.Fprintf(w, "Date:   %s\n", formatLocalDateTime(ev.CreatedAt)); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(w, "Text:   %s\n", ev.Text); err != nil {
+	if _, err := fmt.Fprintf(w, "Text:   %s\n", ev.Title); err != nil {
 		return err
 	}
 
@@ -276,7 +276,7 @@ func FlatStream(w io.Writer, seq iter.Seq2[event.Event, error]) error {
 		if err != nil {
 			return err
 		}
-		line := formatEventLine(ev.ID, formatLocalStamp(ev.CreatedAt), eventAuthor(ev), ev.Text)
+		line := formatEventLine(ev.ID, formatLocalStamp(ev.CreatedAt), eventAuthor(ev), ev.Title)
 		if _, err := fmt.Fprintln(w, line); err != nil {
 			return err
 		}
@@ -305,7 +305,7 @@ func CSVStream(w io.Writer, seq iter.Seq2[event.Event, error]) error {
 			parentID,
 			ev.CreatedAt.UTC().Format(time.RFC3339),
 			eventAuthor(ev),
-			ev.Text,
+			ev.Title,
 		}); err != nil {
 			return err
 		}

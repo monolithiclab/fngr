@@ -20,8 +20,8 @@ type Store struct {
 // caller still controls the lifecycle of the underlying connection.
 func NewStore(db *sql.DB) *Store { return &Store{DB: db} }
 
-func (s *Store) Add(ctx context.Context, text string, parentID *int64, meta []parse.Meta, createdAt *time.Time) (int64, error) {
-	return Add(ctx, s.DB, text, parentID, meta, createdAt)
+func (s *Store) Add(ctx context.Context, in AddInput) (int64, error) {
+	return Add(ctx, s.DB, in)
 }
 
 func (s *Store) AddMany(ctx context.Context, inputs []AddInput) ([]int64, error) {
@@ -36,8 +36,8 @@ func (s *Store) Delete(ctx context.Context, id int64) error {
 	return Delete(ctx, s.DB, id)
 }
 
-func (s *Store) Update(ctx context.Context, id int64, text *string, createdAt *time.Time) error {
-	return Update(ctx, s.DB, id, text, createdAt)
+func (s *Store) Update(ctx context.Context, id int64, title, body *string, createdAt *time.Time) error {
+	return Update(ctx, s.DB, id, title, body, createdAt)
 }
 
 func (s *Store) HasChildren(ctx context.Context, id int64) (bool, error) {

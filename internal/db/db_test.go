@@ -466,9 +466,9 @@ func TestMigrate_V3SplitsTitleBody(t *testing.T) {
 		{"no separator here", "no separator here", ""},
 		{". body only", "", "body only"},
 		{"v1.2.3 released", "v1.2.3 released", ""},
-		{"   . body", "", "body"},                       // leading whitespace + leading separator → empty title, trimmed body
-		{"hello.  world", "hello", "world"},             // dot + double space → trimmed body (no leading space)
-		{"   hello   ", "hello", ""},                    // no separator, surrounding whitespace → trimmed title, empty body
+		{"   . body", "", "body"},           // leading whitespace + leading separator → empty title, trimmed body
+		{"hello.  world", "hello", "world"}, // dot + double space → trimmed body (no leading space)
+		{"   hello   ", "hello", ""},        // no separator, surrounding whitespace → trimmed title, empty body
 	}
 	for _, r := range rows {
 		if _, err := db.Exec("INSERT INTO events (text) VALUES (?)", r.text); err != nil {

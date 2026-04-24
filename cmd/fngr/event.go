@@ -60,7 +60,9 @@ func (c *EventTextCmd) Run(s eventStore, io ioStreams) error {
 	if c.Body == "" {
 		return fmt.Errorf("event text cannot be empty")
 	}
-	if err := s.Update(ctx, c.ID, &c.Body, nil); err != nil {
+	title := c.Body
+	// Preserve existing body until T7 introduces real '. ' splitting.
+	if err := s.Update(ctx, c.ID, &title, nil, nil); err != nil {
 		return err
 	}
 	fmt.Fprintf(io.Out, "Updated event %d\n", c.ID)
@@ -96,7 +98,7 @@ func (c *EventTimeCmd) Run(s eventStore, io ioStreams) error {
 		when = timefmt.SpliceTime(ev.CreatedAt.Local(), parsed)
 	}
 
-	if err := s.Update(ctx, c.ID, nil, &when); err != nil {
+	if err := s.Update(ctx, c.ID, nil, nil, &when); err != nil {
 		return err
 	}
 	fmt.Fprintf(io.Out, "Updated event %d\n", c.ID)
@@ -132,7 +134,7 @@ func (c *EventDateCmd) Run(s eventStore, io ioStreams) error {
 		when = timefmt.SpliceDate(ev.CreatedAt.Local(), parsed)
 	}
 
-	if err := s.Update(ctx, c.ID, nil, &when); err != nil {
+	if err := s.Update(ctx, c.ID, nil, nil, &when); err != nil {
 		return err
 	}
 	fmt.Fprintf(io.Out, "Updated event %d\n", c.ID)

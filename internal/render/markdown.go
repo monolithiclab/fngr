@@ -46,7 +46,7 @@ func renderMarkdownEvent(w io.Writer, lastDate *string, ev event.Event) error {
 
 	timeStr := local.Format(timefmt.LayoutToday)
 
-	lines := strings.Split(ev.Text, "\n")
+	lines := strings.Split(ev.Title, "\n")
 	for i, line := range lines {
 		lines[i] = strings.TrimSuffix(line, "\r")
 	}

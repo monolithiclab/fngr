@@ -25,8 +25,8 @@ func TestAddCmd_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if ev.Text != "hello world" {
-		t.Errorf("event text = %q, want %q", ev.Text, "hello world")
+	if ev.Title != "hello world" {
+		t.Errorf("event text = %q, want %q", ev.Title, "hello world")
 	}
 }
 
@@ -106,8 +106,8 @@ func TestAddCmd_MultiArgJoinsWithSpace(t *testing.T) {
 	}
 
 	ev, _ := s.Get(context.Background(), 1)
-	if ev.Text != "deploy v1.2 to staging" {
-		t.Errorf("text = %q, want %q", ev.Text, "deploy v1.2 to staging")
+	if ev.Title != "deploy v1.2 to staging" {
+		t.Errorf("text = %q, want %q", ev.Title, "deploy v1.2 to staging")
 	}
 }
 
@@ -125,8 +125,8 @@ func TestAddCmd_StdinBody(t *testing.T) {
 	}
 
 	ev, _ := s.Get(context.Background(), 1)
-	if ev.Text != "piped body content" {
-		t.Errorf("text = %q, want %q", ev.Text, "piped body content")
+	if ev.Title != "piped body content" {
+		t.Errorf("text = %q, want %q", ev.Title, "piped body content")
 	}
 }
 
@@ -151,8 +151,8 @@ func TestAddCmd_EditorBody(t *testing.T) {
 		t.Errorf("output = %q, want 'Added event 1'", out.String())
 	}
 	ev, _ := s.Get(context.Background(), 1)
-	if ev.Text != "from editor" {
-		t.Errorf("text = %q, want 'from editor'", ev.Text)
+	if ev.Title != "from editor" {
+		t.Errorf("text = %q, want 'from editor'", ev.Title)
 	}
 }
 
@@ -176,8 +176,8 @@ func TestAddCmd_ArgsPlusEditorPrefills(t *testing.T) {
 		t.Errorf("editor initial = %q, want %q", gotInit, "x y")
 	}
 	ev, _ := s.Get(context.Background(), 1)
-	if ev.Text != "x y z" {
-		t.Errorf("text = %q, want %q", ev.Text, "x y z")
+	if ev.Title != "x y z" {
+		t.Errorf("text = %q, want %q", ev.Title, "x y z")
 	}
 }
 
@@ -262,8 +262,8 @@ func TestAddCmd_FormatJSON_Single(t *testing.T) {
 	}
 
 	ev, _ := s.Get(context.Background(), 1)
-	if ev.Text != "hi" {
-		t.Errorf("text = %q, want 'hi'", ev.Text)
+	if ev.Title != "hi" {
+		t.Errorf("text = %q, want 'hi'", ev.Title)
 	}
 }
 
@@ -355,8 +355,8 @@ func TestAddCmd_FormatJSON_FromArgs(t *testing.T) {
 		t.Errorf("output = %q, want 'Imported 1 event'", out.String())
 	}
 	ev, _ := s.Get(context.Background(), 1)
-	if ev.Text != "from arg" {
-		t.Errorf("text = %q, want 'from arg'", ev.Text)
+	if ev.Title != "from arg" {
+		t.Errorf("text = %q, want 'from arg'", ev.Title)
 	}
 }
 

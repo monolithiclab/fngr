@@ -27,7 +27,8 @@ var ErrCycle = errors.New("would create a parent cycle")
 type Event struct {
 	ID        int64
 	ParentID  *int64
-	Text      string
+	Title     string
+	Body      string
 	CreatedAt time.Time
 	Meta      []parse.Meta
 }
@@ -40,28 +41,29 @@ type MetaCount struct {
 	Count int
 }
 
-// AddInput holds the fields needed to insert one event. Used by AddMany;
-// the single-event Add keeps its positional signature so existing call
-// sites don't need to construct a struct literal.
+// AddInput holds the fields needed to insert one event. Used by both
+// AddMany and the single-event Add.
 type AddInput struct {
-	Text      string
+	Title     string
+	Body      string
 	ParentID  *int64
 	Meta      []parse.Meta
 	CreatedAt *time.Time
 }
 
 // Add inserts a single event with its meta tuples and FTS row inside one
-// transaction, returning the new event ID. A nil parentID creates a root
-// event; a non-nil parentID must reference an existing event or
-// ErrNotFound is returned. A nil createdAt defaults to the SQL CURRENT_TIMESTAMP.
-func Add(ctx context.Context, db *sql.DB, text string, parentID *int64, meta []parse.Meta, createdAt *time.Time) (int64, error) {
+// transaction, returning the new event ID. A nil ParentID creates a root
+// event; a non-nil ParentID must reference an existing event or
+// ErrNotFound is returned. A nil CreatedAt defaults to the SQL
+// CURRENT_TIMESTAMP. Title is required; Body may be empty.
+func Add(ctx context.Context, db *sql.DB, in AddInput) (int64, error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("begin transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	ids, err := addInTx(ctx, tx, []AddInput{{Text: text, ParentID: parentID, Meta: meta, CreatedAt: createdAt}})
+	ids, err := addInTx(ctx, tx, []AddInput{in})
 	if err != nil {
 		return 0, err
 	}
@@ -129,16 +131,20 @@ func addInTx(ctx context.Context, tx *sql.Tx, inputs []AddInput) ([]int64, error
 			}
 		}
 
+		if in.Title == "" {
+			return nil, fmt.Errorf("title cannot be empty")
+		}
+
 		var res sql.Result
 		if in.CreatedAt != nil {
 			res, err = tx.ExecContext(ctx,
-				"INSERT INTO events (parent_id, text, created_at) VALUES (?, ?, ?)",
-				in.ParentID, in.Text, in.CreatedAt.UTC().Format(timefmt.DateTimeFormat),
+				"INSERT INTO events (parent_id, title, body, created_at) VALUES (?, ?, ?, ?)",
+				in.ParentID, in.Title, in.Body, in.CreatedAt.UTC().Format(timefmt.DateTimeFormat),
 			)
 		} else {
 			res, err = tx.ExecContext(ctx,
-				"INSERT INTO events (parent_id, text) VALUES (?, ?)",
-				in.ParentID, in.Text,
+				"INSERT INTO events (parent_id, title, body) VALUES (?, ?, ?)",
+				in.ParentID, in.Title, in.Body,
 			)
 		}
 		if err != nil {
@@ -156,7 +162,7 @@ func addInTx(ctx context.Context, tx *sql.Tx, inputs []AddInput) ([]int64, error
 			}
 		}
 
-		if _, err := insertFTS.ExecContext(ctx, id, parse.FTSContent(in.Text, "", in.Meta)); err != nil {
+		if _, err := insertFTS.ExecContext(ctx, id, parse.FTSContent(in.Title, in.Body, in.Meta)); err != nil {
 			return nil, fmt.Errorf("insert FTS content: %w", err)
 		}
 
@@ -169,7 +175,7 @@ func addInTx(ctx context.Context, tx *sql.Tx, inputs []AddInput) ([]int64, error
 // Returns ErrNotFound when no such event exists.
 func Get(ctx context.Context, db *sql.DB, id int64) (*Event, error) {
 	rows, err := db.QueryContext(ctx,
-		"SELECT id, parent_id, text, created_at FROM events WHERE id = ?", id,
+		"SELECT id, parent_id, title, body, created_at FROM events WHERE id = ?", id,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query event: %w", err)
@@ -207,14 +213,20 @@ func Delete(ctx context.Context, db *sql.DB, id int64) error {
 	return nil
 }
 
-// Update mutates an existing event's text and/or createdAt timestamp.
-// Either or both may be nil; nil leaves that column untouched. When text
-// changes, body-derived tags (`@person`, `#tag`) are synced — old ones
-// removed, new ones inserted via ON CONFLICT DO NOTHING — and the FTS
-// row is rebuilt. Returns ErrNotFound when no such event exists.
-func Update(ctx context.Context, db *sql.DB, id int64, text *string, createdAt *time.Time) error {
-	if text == nil && createdAt == nil {
+// Update mutates an existing event's title, body, and/or createdAt
+// timestamp. Any field with a nil pointer is left untouched. When
+// either title or body changes, body-derived tags (`@person`,
+// `#tag`) are synced — the old set (extracted from title+body
+// joined) is removed, the new set is inserted via ON CONFLICT DO
+// NOTHING — and the FTS row is rebuilt. Empty title is rejected;
+// empty body clears it. Returns ErrNotFound when no such event
+// exists.
+func Update(ctx context.Context, db *sql.DB, id int64, title, body *string, createdAt *time.Time) error {
+	if title == nil && body == nil && createdAt == nil {
 		return nil
+	}
+	if title != nil && *title == "" {
+		return fmt.Errorf("title cannot be empty")
 	}
 
 	tx, err := db.BeginTx(ctx, nil)
@@ -227,23 +239,30 @@ func Update(ctx context.Context, db *sql.DB, id int64, text *string, createdAt *
 		return err
 	}
 
-	if text != nil {
-		// Body-tag sync, step 1: remove tags parsed from the *previous* text.
-		var existing string
-		if err := tx.QueryRowContext(ctx, "SELECT text FROM events WHERE id = ?", id).Scan(&existing); err != nil {
-			return fmt.Errorf("query event text: %w", err)
+	textChanged := title != nil || body != nil
+
+	if textChanged {
+		var oldTitle, oldBody string
+		if err := tx.QueryRowContext(ctx,
+			"SELECT title, body FROM events WHERE id = ?", id,
+		).Scan(&oldTitle, &oldBody); err != nil {
+			return fmt.Errorf("query event title/body: %w", err)
 		}
-		oldBodyTags := parse.BodyTags(existing)
+		oldBodyTags := parse.BodyTags(oldTitle + " " + oldBody)
 		if err := deleteMetaTuples(ctx, tx, id, oldBodyTags); err != nil {
 			return err
 		}
 	}
 
-	sets := make([]string, 0, 2)
-	args := make([]any, 0, 3)
-	if text != nil {
-		sets = append(sets, "text = ?")
-		args = append(args, *text)
+	sets := make([]string, 0, 3)
+	args := make([]any, 0, 4)
+	if title != nil {
+		sets = append(sets, "title = ?")
+		args = append(args, *title)
+	}
+	if body != nil {
+		sets = append(sets, "body = ?")
+		args = append(args, *body)
 	}
 	if createdAt != nil {
 		sets = append(sets, "created_at = ?")
@@ -254,9 +273,14 @@ func Update(ctx context.Context, db *sql.DB, id int64, text *string, createdAt *
 		return fmt.Errorf("update event: %w", err)
 	}
 
-	if text != nil {
-		// Body-tag sync, step 2: insert tags parsed from the *new* text.
-		newBodyTags := parse.BodyTags(*text)
+	if textChanged {
+		var newTitle, newBody string
+		if err := tx.QueryRowContext(ctx,
+			"SELECT title, body FROM events WHERE id = ?", id,
+		).Scan(&newTitle, &newBody); err != nil {
+			return fmt.Errorf("query event title/body after update: %w", err)
+		}
+		newBodyTags := parse.BodyTags(newTitle + " " + newBody)
 		if err := insertMetaTuples(ctx, tx, id, newBodyTags); err != nil {
 			return err
 		}
@@ -502,12 +526,14 @@ func requireEventExists(ctx context.Context, tx *sql.Tx, id int64) error {
 	return nil
 }
 
-// rebuildEventFTS reads the event's current text + meta inside tx and
-// writes parse.FTSContent into events_fts.
+// rebuildEventFTS reads the event's current title + body + meta inside
+// tx and writes parse.FTSContent into events_fts.
 func rebuildEventFTS(ctx context.Context, tx *sql.Tx, id int64) error {
-	var text string
-	if err := tx.QueryRowContext(ctx, "SELECT text FROM events WHERE id = ?", id).Scan(&text); err != nil {
-		return fmt.Errorf("read event text for FTS: %w", err)
+	var title, body string
+	if err := tx.QueryRowContext(ctx,
+		"SELECT title, body FROM events WHERE id = ?", id,
+	).Scan(&title, &body); err != nil {
+		return fmt.Errorf("read event title/body for FTS: %w", err)
 	}
 	meta, err := readMetaTx(ctx, tx, id)
 	if err != nil {
@@ -515,7 +541,7 @@ func rebuildEventFTS(ctx context.Context, tx *sql.Tx, id int64) error {
 	}
 	if _, err := tx.ExecContext(ctx,
 		"UPDATE events_fts SET content = ? WHERE rowid = ?",
-		parse.FTSContent(text, "", meta), id,
+		parse.FTSContent(title, body, meta), id,
 	); err != nil {
 		return fmt.Errorf("update FTS: %w", err)
 	}
@@ -681,7 +707,7 @@ func ListSeq(ctx context.Context, db *sql.DB, opts ListOpts) iter.Seq2[Event, er
 		for rows.Next() {
 			var e Event
 			var parentID sql.NullInt64
-			if err := rows.Scan(&e.ID, &parentID, &e.Text, &e.CreatedAt); err != nil {
+			if err := rows.Scan(&e.ID, &parentID, &e.Title, &e.Body, &e.CreatedAt); err != nil {
 				yield(Event{}, fmt.Errorf("scan event: %w", err))
 				return
 			}
@@ -724,21 +750,21 @@ func buildListQuery(opts ListOpts) (string, []any) {
 	if opts.Filter != "" {
 		matchExpr := preprocessFilter(opts.Filter)
 		if positiveExpr, ok := strings.CutPrefix(matchExpr, "NOT "); ok {
-			query = `SELECT e.id, e.parent_id, e.text, e.created_at
+			query = `SELECT e.id, e.parent_id, e.title, e.body, e.created_at
 				FROM events e
 				WHERE e.id NOT IN (
 					SELECT rowid FROM events_fts WHERE events_fts MATCH ?
 				)`
 			args = append(args, positiveExpr)
 		} else {
-			query = `SELECT e.id, e.parent_id, e.text, e.created_at
+			query = `SELECT e.id, e.parent_id, e.title, e.body, e.created_at
 				FROM events e
 				JOIN events_fts f ON f.rowid = e.id
 				WHERE events_fts MATCH ?`
 			args = append(args, matchExpr)
 		}
 	} else {
-		query = `SELECT e.id, e.parent_id, e.text, e.created_at
+		query = `SELECT e.id, e.parent_id, e.title, e.body, e.created_at
 			FROM events e
 			WHERE 1=1`
 	}
@@ -771,12 +797,12 @@ func buildListQuery(opts ListOpts) (string, []any) {
 func GetSubtree(ctx context.Context, db *sql.DB, rootID int64) ([]Event, error) {
 	rows, err := db.QueryContext(ctx, `
 		WITH RECURSIVE subtree AS (
-			SELECT id, parent_id, text, created_at FROM events WHERE id = ?
+			SELECT id, parent_id, title, body, created_at FROM events WHERE id = ?
 			UNION ALL
-			SELECT e.id, e.parent_id, e.text, e.created_at
+			SELECT e.id, e.parent_id, e.title, e.body, e.created_at
 			FROM events e JOIN subtree s ON e.parent_id = s.id
 		)
-		SELECT id, parent_id, text, created_at FROM subtree ORDER BY created_at ASC
+		SELECT id, parent_id, title, body, created_at FROM subtree ORDER BY created_at ASC
 	`, rootID)
 	if err != nil {
 		return nil, fmt.Errorf("query subtree: %w", err)
@@ -798,7 +824,7 @@ func scanEvents(ctx context.Context, db *sql.DB, rows *sql.Rows) ([]Event, error
 	for rows.Next() {
 		var e Event
 		var parentID sql.NullInt64
-		if err := rows.Scan(&e.ID, &parentID, &e.Text, &e.CreatedAt); err != nil {
+		if err := rows.Scan(&e.ID, &parentID, &e.Title, &e.Body, &e.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan event: %w", err)
 		}
 		if parentID.Valid {

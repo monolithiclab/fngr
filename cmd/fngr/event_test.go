@@ -16,9 +16,9 @@ func TestEventCmd_ShowText(t *testing.T) {
 	s := newTestStore(t)
 	io, out := newTestIO("")
 
-	id, err := s.Add(context.Background(), "show me", nil, []parse.Meta{
+	id, err := s.Add(context.Background(), event.AddInput{Title: "show me", Meta: []parse.Meta{
 		{Key: "author", Value: "alice"},
-	}, nil)
+	}})
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -38,15 +38,15 @@ func TestEventCmd_ShowSubtree(t *testing.T) {
 	s := newTestStore(t)
 	io, out := newTestIO("")
 
-	parent, err := s.Add(context.Background(), "parent", nil, []parse.Meta{
+	parent, err := s.Add(context.Background(), event.AddInput{Title: "parent", Meta: []parse.Meta{
 		{Key: "author", Value: "alice"},
-	}, nil)
+	}})
 	if err != nil {
 		t.Fatalf("Add parent: %v", err)
 	}
-	if _, err := s.Add(context.Background(), "child", &parent, []parse.Meta{
+	if _, err := s.Add(context.Background(), event.AddInput{Title: "child", ParentID: &parent, Meta: []parse.Meta{
 		{Key: "author", Value: "alice"},
-	}, nil); err != nil {
+	}}); err != nil {
 		t.Fatalf("Add child: %v", err)
 	}
 
@@ -77,7 +77,7 @@ func TestEventCmd_TextRequiresNonEmpty(t *testing.T) {
 	s := newTestStore(t)
 	io, _ := newTestIO("")
 
-	id, _ := s.Add(context.Background(), "x", nil, nil, nil)
+	id, _ := s.Add(context.Background(), event.AddInput{Title: "x"})
 	cmd := &EventTextCmd{ID: id, Body: ""}
 	err := cmd.Run(s, io)
 	if err == nil || !strings.Contains(err.Error(), "cannot be empty") {
@@ -90,10 +90,10 @@ func TestEventCmd_TextSyncs(t *testing.T) {
 	s := newTestStore(t)
 	io, out := newTestIO("")
 
-	id, _ := s.Add(context.Background(), "first @alice", nil, []parse.Meta{
+	id, _ := s.Add(context.Background(), event.AddInput{Title: "first @alice", Meta: []parse.Meta{
 		{Key: "author", Value: "alice"},
 		{Key: "people", Value: "alice"},
-	}, nil)
+	}})
 
 	cmd := &EventTextCmd{ID: id, Body: "second @bob"}
 	if err := cmd.Run(s, io); err != nil {
@@ -124,7 +124,7 @@ func TestEventCmd_TimePreservesDate(t *testing.T) {
 	io, _ := newTestIO("")
 
 	orig := time.Date(2026, 4, 15, 14, 0, 0, 0, time.UTC)
-	id, _ := s.Add(context.Background(), "x", nil, nil, &orig)
+	id, _ := s.Add(context.Background(), event.AddInput{Title: "x", CreatedAt: &orig})
 
 	cmd := &EventTimeCmd{ID: id, Value: "09:30"}
 	if err := cmd.Run(s, io); err != nil {
@@ -146,7 +146,7 @@ func TestEventCmd_TimeRejectsDateOnly(t *testing.T) {
 	s := newTestStore(t)
 	io, _ := newTestIO("")
 
-	id, _ := s.Add(context.Background(), "x", nil, nil, nil)
+	id, _ := s.Add(context.Background(), event.AddInput{Title: "x"})
 	cmd := &EventTimeCmd{ID: id, Value: "2026-04-15"}
 	err := cmd.Run(s, io)
 	if err == nil || !strings.Contains(err.Error(), "date-only") {
@@ -160,7 +160,7 @@ func TestEventCmd_DatePreservesTime(t *testing.T) {
 	io, _ := newTestIO("")
 
 	orig := time.Date(2026, 4, 15, 14, 30, 0, 0, time.Local)
-	id, _ := s.Add(context.Background(), "x", nil, nil, &orig)
+	id, _ := s.Add(context.Background(), event.AddInput{Title: "x", CreatedAt: &orig})
 
 	cmd := &EventDateCmd{ID: id, Value: "2026-05-01"}
 	if err := cmd.Run(s, io); err != nil {
@@ -182,7 +182,7 @@ func TestEventCmd_DateRejectsTimeOnly(t *testing.T) {
 	s := newTestStore(t)
 	io, _ := newTestIO("")
 
-	id, _ := s.Add(context.Background(), "x", nil, nil, nil)
+	id, _ := s.Add(context.Background(), event.AddInput{Title: "x"})
 	cmd := &EventDateCmd{ID: id, Value: "09:30"}
 	err := cmd.Run(s, io)
 	if err == nil || !strings.Contains(err.Error(), "time-only") {
@@ -195,8 +195,8 @@ func TestEventCmd_AttachAndDetach(t *testing.T) {
 	s := newTestStore(t)
 	io, _ := newTestIO("")
 
-	a, _ := s.Add(context.Background(), "a", nil, nil, nil)
-	b, _ := s.Add(context.Background(), "b", nil, nil, nil)
+	a, _ := s.Add(context.Background(), event.AddInput{Title: "a"})
+	b, _ := s.Add(context.Background(), event.AddInput{Title: "b"})
 
 	if err := (&EventAttachCmd{ID: b, Parent: a}).Run(s, io); err != nil {
 		t.Fatalf("Attach: %v", err)
@@ -220,8 +220,8 @@ func TestEventCmd_AttachRejectsCycle(t *testing.T) {
 	s := newTestStore(t)
 	io, _ := newTestIO("")
 
-	a, _ := s.Add(context.Background(), "a", nil, nil, nil)
-	b, _ := s.Add(context.Background(), "b", &a, nil, nil)
+	a, _ := s.Add(context.Background(), event.AddInput{Title: "a"})
+	b, _ := s.Add(context.Background(), event.AddInput{Title: "b", ParentID: &a})
 
 	err := (&EventAttachCmd{ID: a, Parent: b}).Run(s, io)
 	if !errors.Is(err, event.ErrCycle) {
@@ -234,9 +234,9 @@ func TestEventCmd_TagAddsAndDedups(t *testing.T) {
 	s := newTestStore(t)
 	io, _ := newTestIO("")
 
-	id, _ := s.Add(context.Background(), "x", nil, []parse.Meta{
+	id, _ := s.Add(context.Background(), event.AddInput{Title: "x", Meta: []parse.Meta{
 		{Key: "tag", Value: "ops"},
-	}, nil)
+	}})
 
 	cmd := &EventTagCmd{ID: id, Args: []string{"#ops", "@alice", "env=prod"}}
 	if err := cmd.Run(s, io); err != nil {
@@ -293,7 +293,7 @@ func TestEventCmd_TagMessage(t *testing.T) {
 			s := newTestStore(t)
 			io, out := newTestIO("")
 
-			id, _ := s.Add(context.Background(), "x", nil, tc.seed, nil)
+			id, _ := s.Add(context.Background(), event.AddInput{Title: "x", Meta: tc.seed})
 			cmd := &EventTagCmd{ID: id, Args: tc.args}
 			if err := cmd.Run(s, io); err != nil {
 				t.Fatalf("Tag: %v", err)
@@ -313,7 +313,7 @@ func TestEventCmd_TagInvalidArgErrors(t *testing.T) {
 	s := newTestStore(t)
 	io, _ := newTestIO("")
 
-	id, _ := s.Add(context.Background(), "x", nil, nil, nil)
+	id, _ := s.Add(context.Background(), event.AddInput{Title: "x"})
 	cmd := &EventTagCmd{ID: id, Args: []string{"#ops", "bare-word", "env=prod"}}
 	err := cmd.Run(s, io)
 	if err == nil {
@@ -331,10 +331,10 @@ func TestEventCmd_UntagRemovesAndReportsCount(t *testing.T) {
 	s := newTestStore(t)
 	io, out := newTestIO("")
 
-	id, _ := s.Add(context.Background(), "x", nil, []parse.Meta{
+	id, _ := s.Add(context.Background(), event.AddInput{Title: "x", Meta: []parse.Meta{
 		{Key: "tag", Value: "ops"},
 		{Key: "people", Value: "alice"},
-	}, nil)
+	}})
 
 	cmd := &EventUntagCmd{ID: id, Args: []string{"#ops", "@alice"}}
 	if err := cmd.Run(s, io); err != nil {
@@ -354,7 +354,7 @@ func TestEventCmd_UntagNothingMatches(t *testing.T) {
 	s := newTestStore(t)
 	io, _ := newTestIO("")
 
-	id, _ := s.Add(context.Background(), "x", nil, nil, nil)
+	id, _ := s.Add(context.Background(), event.AddInput{Title: "x"})
 	cmd := &EventUntagCmd{ID: id, Args: []string{"#ghost"}}
 	err := cmd.Run(s, io)
 	if err == nil || !strings.Contains(err.Error(), "nothing to untag") {

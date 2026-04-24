@@ -26,9 +26,9 @@ func TestStore_AddAndGet(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
 
-	id, err := s.Add(ctx, "via store", nil, []parse.Meta{
+	id, err := s.Add(ctx, AddInput{Title: "via store", Meta: []parse.Meta{
 		{Key: MetaKeyAuthor, Value: "alice"},
-	}, nil)
+	}})
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -40,8 +40,8 @@ func TestStore_AddAndGet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if ev.Text != "via store" {
-		t.Errorf("text = %q, want %q", ev.Text, "via store")
+	if ev.Title != "via store" {
+		t.Errorf("text = %q, want %q", ev.Title, "via store")
 	}
 	if len(ev.Meta) != 1 || ev.Meta[0].Value != "alice" {
 		t.Errorf("meta = %v, want [{author alice}]", ev.Meta)
@@ -60,11 +60,11 @@ func TestStore_DeleteAndHasChildren(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
 
-	parent, err := s.Add(ctx, "parent", nil, nil, nil)
+	parent, err := s.Add(ctx, AddInput{Title: "parent"})
 	if err != nil {
 		t.Fatalf("Add parent: %v", err)
 	}
-	if _, err := s.Add(ctx, "child", &parent, nil, nil); err != nil {
+	if _, err := s.Add(ctx, AddInput{Title: "child", ParentID: &parent}); err != nil {
 		t.Fatalf("Add child: %v", err)
 	}
 
@@ -96,15 +96,15 @@ func TestStore_UpdateTextRefreshesFTS(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
 
-	id, err := s.Add(ctx, "before", nil, []parse.Meta{
+	id, err := s.Add(ctx, AddInput{Title: "before", Meta: []parse.Meta{
 		{Key: MetaKeyAuthor, Value: "alice"},
-	}, nil)
+	}})
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
 	newText := "after"
-	if err := s.Update(ctx, id, &newText, nil); err != nil {
+	if err := s.Update(ctx, id, &newText, nil, nil); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
 
@@ -121,7 +121,7 @@ func TestStore_UpdateNotFound(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
 	text := "x"
-	if err := s.Update(ctx, 9999, &text, nil); !errors.Is(err, ErrNotFound) {
+	if err := s.Update(ctx, 9999, &text, nil, nil); !errors.Is(err, ErrNotFound) {
 		t.Errorf("Update not-found err = %v, want ErrNotFound", err)
 	}
 }
@@ -130,14 +130,14 @@ func TestStore_List(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
 
-	if _, err := s.Add(ctx, "a", nil, []parse.Meta{
+	if _, err := s.Add(ctx, AddInput{Title: "a", Meta: []parse.Meta{
 		{Key: MetaKeyTag, Value: "ops"},
-	}, nil); err != nil {
+	}}); err != nil {
 		t.Fatalf("Add a: %v", err)
 	}
-	if _, err := s.Add(ctx, "b", nil, []parse.Meta{
+	if _, err := s.Add(ctx, AddInput{Title: "b", Meta: []parse.Meta{
 		{Key: MetaKeyTag, Value: "work"},
-	}, nil); err != nil {
+	}}); err != nil {
 		t.Fatalf("Add b: %v", err)
 	}
 
@@ -153,7 +153,7 @@ func TestStore_List(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List filtered: %v", err)
 	}
-	if len(filtered) != 1 || filtered[0].Text != "a" {
+	if len(filtered) != 1 || filtered[0].Title != "a" {
 		t.Errorf("filtered = %v, want [a]", filtered)
 	}
 }
@@ -162,11 +162,11 @@ func TestStore_GetSubtree(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
 
-	root, err := s.Add(ctx, "root", nil, nil, nil)
+	root, err := s.Add(ctx, AddInput{Title: "root"})
 	if err != nil {
 		t.Fatalf("Add root: %v", err)
 	}
-	child, err := s.Add(ctx, "child", &root, nil, nil)
+	child, err := s.Add(ctx, AddInput{Title: "child", ParentID: &root})
 	if err != nil {
 		t.Fatalf("Add child: %v", err)
 	}
@@ -193,9 +193,9 @@ func TestStore_MetaCRUD(t *testing.T) {
 	s := newTestStore(t)
 
 	for _, v := range []string{"ops", "ops", "work"} {
-		if _, err := s.Add(ctx, "x", nil, []parse.Meta{
+		if _, err := s.Add(ctx, AddInput{Title: "x", Meta: []parse.Meta{
 			{Key: MetaKeyTag, Value: v},
-		}, nil); err != nil {
+		}}); err != nil {
 			t.Fatalf("Add: %v", err)
 		}
 	}
@@ -245,10 +245,10 @@ func TestStore_ListMeta_Filter(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
 
-	if _, err := s.Add(ctx, "x", nil, []parse.Meta{
+	if _, err := s.Add(ctx, AddInput{Title: "x", Meta: []parse.Meta{
 		{Key: "tag", Value: "ops"},
 		{Key: "people", Value: "alice"},
-	}, nil); err != nil {
+	}}); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
@@ -266,7 +266,7 @@ func TestStore_AddWithCreatedAtRoundTrips(t *testing.T) {
 	s := newTestStore(t)
 
 	want := time.Date(2024, 6, 1, 10, 30, 0, 0, time.UTC)
-	id, err := s.Add(ctx, "ts", nil, nil, &want)
+	id, err := s.Add(ctx, AddInput{Title: "ts", CreatedAt: &want})
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -285,7 +285,7 @@ func TestStore_ListSeq(t *testing.T) {
 	s := newTestStore(t)
 
 	for i := range 3 {
-		if _, err := s.Add(ctx, fmt.Sprintf("e%d", i), nil, nil, nil); err != nil {
+		if _, err := s.Add(ctx, AddInput{Title: fmt.Sprintf("e%d", i)}); err != nil {
 			t.Fatalf("Add %d: %v", i, err)
 		}
 	}
@@ -295,7 +295,7 @@ func TestStore_ListSeq(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ListSeq: %v", err)
 		}
-		got = append(got, ev.Text)
+		got = append(got, ev.Title)
 	}
 	want := []string{"e0", "e1", "e2"}
 	if len(got) != 3 || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
@@ -307,9 +307,9 @@ func TestStore_Reparent(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
 
-	a, _ := s.Add(ctx, "a", nil, nil, nil)
-	b, _ := s.Add(ctx, "b", nil, nil, nil)
-	c, _ := s.Add(ctx, "c", &a, nil, nil)
+	a, _ := s.Add(ctx, AddInput{Title: "a"})
+	b, _ := s.Add(ctx, AddInput{Title: "b"})
+	c, _ := s.Add(ctx, AddInput{Title: "c", ParentID: &a})
 
 	if err := s.Reparent(ctx, c, &b); err != nil {
 		t.Fatalf("Reparent: %v", err)
@@ -327,7 +327,7 @@ func TestStore_AddTags(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
 
-	id, _ := s.Add(ctx, "x", nil, nil, nil)
+	id, _ := s.Add(ctx, AddInput{Title: "x"})
 	added, err := s.AddTags(ctx, id, []parse.Meta{{Key: "tag", Value: "ops"}})
 	if err != nil {
 		t.Fatalf("AddTags: %v", err)
@@ -348,9 +348,9 @@ func TestStore_RemoveTags(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
 
-	id, _ := s.Add(ctx, "x", nil, []parse.Meta{
+	id, _ := s.Add(ctx, AddInput{Title: "x", Meta: []parse.Meta{
 		{Key: "tag", Value: "ops"},
-	}, nil)
+	}})
 
 	n, err := s.RemoveTags(ctx, id, []parse.Meta{{Key: "tag", Value: "ops"}})
 	if err != nil {
@@ -366,8 +366,8 @@ func TestStore_AddMany(t *testing.T) {
 	s := newTestStore(t)
 
 	ids, err := s.AddMany(ctx, []AddInput{
-		{Text: "a"},
-		{Text: "b"},
+		{Title: "a"},
+		{Title: "b"},
 	})
 	if err != nil {
 		t.Fatalf("AddMany: %v", err)

@@ -21,7 +21,7 @@ func makeEvent(id int64, parentID *int64, text string, date string, author strin
 	return event.Event{
 		ID:        id,
 		ParentID:  parentID,
-		Text:      text,
+		Title:     text,
 		CreatedAt: t,
 		Meta:      []parse.Meta{{Key: event.MetaKeyAuthor, Value: author}},
 	}
@@ -199,7 +199,7 @@ func TestEvent_DetailIncludesParentAndMeta(t *testing.T) {
 
 func TestEvent_DetailWithoutParentOrMeta(t *testing.T) {
 	t.Parallel()
-	ev := event.Event{ID: 7, Text: "lone entry"}
+	ev := event.Event{ID: 7, Title: "lone entry"}
 
 	var b bytes.Buffer
 	if err := Event(&b, &ev); err != nil {
@@ -317,7 +317,7 @@ func TestJSON_MultiValuePerKey(t *testing.T) {
 
 	ev := event.Event{
 		ID:        1,
-		Text:      "x",
+		Title:     "x",
 		CreatedAt: time.Date(2026, 4, 10, 0, 0, 0, 0, time.UTC),
 		Meta: []parse.Meta{
 			{Key: "tag", Value: "ops"},
@@ -352,7 +352,7 @@ func TestJSON_NoMetaOmitsField(t *testing.T) {
 
 	ev := event.Event{
 		ID:        1,
-		Text:      "x",
+		Title:     "x",
 		CreatedAt: time.Date(2026, 4, 10, 0, 0, 0, 0, time.UTC),
 	}
 	var buf bytes.Buffer

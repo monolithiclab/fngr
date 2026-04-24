@@ -170,7 +170,8 @@ func jsonInputToAddInput(in jsonAddInput, defaults cliDefaults, defaultAuthor st
 	}
 
 	return event.AddInput{
-		Text:      text,
+		Title:     text,
+		Body:      "",
 		ParentID:  parent,
 		Meta:      merged,
 		CreatedAt: createdAt,
