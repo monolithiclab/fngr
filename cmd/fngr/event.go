@@ -14,7 +14,9 @@ import (
 // EventCmd is the parent for all `fngr event <verb>` invocations.
 type EventCmd struct {
 	Show   EventShowCmd   `cmd:"" default:"withargs" help:"Show event detail (default)."`
-	Text   EventTextCmd   `cmd:"" help:"Replace event text."`
+	Text   EventTextCmd   `cmd:"" help:"Replace event text — re-splits on '. ' into title+body."`
+	Title  EventTitleCmd  `cmd:"" help:"Replace event title (body untouched)."`
+	Body   EventBodyCmd   `cmd:"" help:"Replace event body (title untouched; empty arg clears)."`
 	Time   EventTimeCmd   `cmd:"" help:"Replace clock time (or full timestamp)."`
 	Date   EventDateCmd   `cmd:"" help:"Replace date (or full timestamp)."`
 	Attach EventAttachCmd `cmd:"" help:"Set parent event."`
@@ -48,21 +50,56 @@ func (c *EventShowCmd) Run(s eventStore, io ioStreams) error {
 	return render.SingleEvent(io.Out, c.Format, ev)
 }
 
-// EventTextCmd replaces the event's text. Body tags are synced.
+// EventTextCmd replaces the event's text by re-splitting it into title +
+// body via parse.SplitTitleBody. Body tags are synced.
 type EventTextCmd struct {
 	ID   int64  `arg:"" help:"Event ID."`
-	Body string `arg:"" help:"New event text."`
+	Text string `arg:"" help:"New event text. Re-split on '. ' into title+body."`
 }
 
 func (c *EventTextCmd) Run(s eventStore, io ioStreams) error {
 	ctx := context.Background()
 
-	if c.Body == "" {
-		return fmt.Errorf("event text cannot be empty")
+	title, body := parse.SplitTitleBody(c.Text)
+	if title == "" {
+		return fmt.Errorf("event title cannot be empty")
 	}
-	title := c.Body
-	// Preserve existing body until T7 introduces real '. ' splitting.
-	if err := s.Update(ctx, c.ID, &title, nil, nil); err != nil {
+	if err := s.Update(ctx, c.ID, &title, &body, nil); err != nil {
+		return err
+	}
+	fmt.Fprintf(io.Out, "Updated event %d\n", c.ID)
+	return nil
+}
+
+// EventTitleCmd replaces only the title.
+type EventTitleCmd struct {
+	ID    int64  `arg:"" help:"Event ID."`
+	Title string `arg:"" help:"New event title."`
+}
+
+func (c *EventTitleCmd) Run(s eventStore, io ioStreams) error {
+	ctx := context.Background()
+
+	if c.Title == "" {
+		return fmt.Errorf("event title cannot be empty")
+	}
+	if err := s.Update(ctx, c.ID, &c.Title, nil, nil); err != nil {
+		return err
+	}
+	fmt.Fprintf(io.Out, "Updated event %d\n", c.ID)
+	return nil
+}
+
+// EventBodyCmd replaces only the body. Empty arg clears the body.
+type EventBodyCmd struct {
+	ID   int64  `arg:"" help:"Event ID."`
+	Body string `arg:"" help:"New event body (empty clears)."`
+}
+
+func (c *EventBodyCmd) Run(s eventStore, io ioStreams) error {
+	ctx := context.Background()
+
+	if err := s.Update(ctx, c.ID, nil, &c.Body, nil); err != nil {
 		return err
 	}
 	fmt.Fprintf(io.Out, "Updated event %d\n", c.ID)

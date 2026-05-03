@@ -78,7 +78,7 @@ func TestEventCmd_TextRequiresNonEmpty(t *testing.T) {
 	io, _ := newTestIO("")
 
 	id, _ := s.Add(context.Background(), event.AddInput{Title: "x"})
-	cmd := &EventTextCmd{ID: id, Body: ""}
+	cmd := &EventTextCmd{ID: id, Text: ""}
 	err := cmd.Run(s, io)
 	if err == nil || !strings.Contains(err.Error(), "cannot be empty") {
 		t.Errorf("err = %v, want empty-text error", err)
@@ -95,7 +95,7 @@ func TestEventCmd_TextSyncs(t *testing.T) {
 		{Key: "people", Value: "alice"},
 	}})
 
-	cmd := &EventTextCmd{ID: id, Body: "second @bob"}
+	cmd := &EventTextCmd{ID: id, Text: "second @bob"}
 	if err := cmd.Run(s, io); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -359,5 +359,118 @@ func TestEventCmd_UntagNothingMatches(t *testing.T) {
 	err := cmd.Run(s, io)
 	if err == nil || !strings.Contains(err.Error(), "nothing to untag") {
 		t.Errorf("err = %v, want 'nothing to untag'", err)
+	}
+}
+
+func TestEventCmd_TitleVerb(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, _ := newTestIO("")
+
+	id, err := s.Add(context.Background(), event.AddInput{
+		Title: "old", Body: "body stays",
+		Meta: []parse.Meta{{Key: "author", Value: "alice"}},
+	})
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	cmd := &EventTitleCmd{ID: id, Title: "new title"}
+	if err := cmd.Run(s, io); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	ev, _ := s.Get(context.Background(), id)
+	if ev.Title != "new title" || ev.Body != "body stays" {
+		t.Errorf("got (title=%q, body=%q), want (new title, body stays)", ev.Title, ev.Body)
+	}
+}
+
+func TestEventCmd_TitleRejectsEmpty(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, _ := newTestIO("")
+
+	id, _ := s.Add(context.Background(), event.AddInput{
+		Title: "x",
+		Meta:  []parse.Meta{{Key: "author", Value: "alice"}},
+	})
+	cmd := &EventTitleCmd{ID: id, Title: ""}
+	if err := cmd.Run(s, io); err == nil {
+		t.Error("expected empty-title error")
+	}
+}
+
+func TestEventCmd_BodyVerb(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, _ := newTestIO("")
+
+	id, _ := s.Add(context.Background(), event.AddInput{
+		Title: "title stays", Body: "old",
+		Meta: []parse.Meta{{Key: "author", Value: "alice"}},
+	})
+
+	cmd := &EventBodyCmd{ID: id, Body: "new body"}
+	if err := cmd.Run(s, io); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	ev, _ := s.Get(context.Background(), id)
+	if ev.Title != "title stays" || ev.Body != "new body" {
+		t.Errorf("got (title=%q, body=%q), want (title stays, new body)", ev.Title, ev.Body)
+	}
+}
+
+func TestEventCmd_BodyAcceptsEmpty(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, _ := newTestIO("")
+	id, _ := s.Add(context.Background(), event.AddInput{
+		Title: "stays", Body: "to clear",
+		Meta: []parse.Meta{{Key: "author", Value: "alice"}},
+	})
+
+	cmd := &EventBodyCmd{ID: id, Body: ""}
+	if err := cmd.Run(s, io); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	ev, _ := s.Get(context.Background(), id)
+	if ev.Title != "stays" || ev.Body != "" {
+		t.Errorf("got (title=%q, body=%q), want (stays, '')", ev.Title, ev.Body)
+	}
+}
+
+func TestEventCmd_TextVerbResplits(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, _ := newTestIO("")
+
+	id, _ := s.Add(context.Background(), event.AddInput{
+		Title: "old", Body: "old body",
+		Meta: []parse.Meta{{Key: "author", Value: "alice"}},
+	})
+
+	cmd := &EventTextCmd{ID: id, Text: "fresh title. fresh body"}
+	if err := cmd.Run(s, io); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	ev, _ := s.Get(context.Background(), id)
+	if ev.Title != "fresh title" || ev.Body != "fresh body" {
+		t.Errorf("got (title=%q, body=%q), want (fresh title, fresh body)", ev.Title, ev.Body)
+	}
+}
+
+func TestEventCmd_TextVerbRejectsEmptyTitle(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, _ := newTestIO("")
+
+	id, _ := s.Add(context.Background(), event.AddInput{
+		Title: "x",
+		Meta:  []parse.Meta{{Key: "author", Value: "alice"}},
+	})
+	cmd := &EventTextCmd{ID: id, Text: ". body only"}
+	if err := cmd.Run(s, io); err == nil {
+		t.Error("expected empty-title error")
 	}
 }
