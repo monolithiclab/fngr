@@ -16,7 +16,8 @@ import (
 // Pointer types distinguish "field omitted" (apply CLI/built-in default)
 // from "field present" (JSON value wins, even if zero/empty).
 type jsonAddInput struct {
-	Text      string      `json:"text"`
+	Title     string      `json:"title"`
+	Body      string      `json:"body"`
 	ParentID  *int64      `json:"parent_id"`
 	CreatedAt *string     `json:"created_at"`
 	Meta      [][2]string `json:"meta"`
@@ -117,10 +118,11 @@ func buildCLIDefaults(c *AddCmd) (cliDefaults, error) {
 }
 
 func jsonInputToAddInput(in jsonAddInput, defaults cliDefaults, defaultAuthor string, index int) (event.AddInput, error) {
-	text := strings.TrimSpace(in.Text)
-	if text == "" {
-		return event.AddInput{}, fmt.Errorf("--format=json: record %d: text is required", index)
+	title := strings.TrimSpace(in.Title)
+	if title == "" {
+		return event.AddInput{}, fmt.Errorf("--format=json: record %d: title is required", index)
 	}
+	body := strings.TrimSpace(in.Body)
 
 	parent := in.ParentID
 	if parent == nil {
@@ -155,8 +157,9 @@ func jsonInputToAddInput(in jsonAddInput, defaults cliDefaults, defaultAuthor st
 
 	// Merge explicit meta + body tags + default author with dedup. CollectMeta
 	// would inject defaultAuthor unconditionally, so we hand-roll the merge
-	// here to honour an explicit JSON `author` entry instead.
-	merged := mergeMetaForJSON(text, explicit, defaultAuthor)
+	// here to honour an explicit JSON `author` entry instead. Body-tag
+	// extraction runs against title+body so tags from either are picked up.
+	merged := mergeMetaForJSON(title+" "+body, explicit, defaultAuthor)
 
 	hasAuthor := false
 	for _, m := range merged {
@@ -170,8 +173,8 @@ func jsonInputToAddInput(in jsonAddInput, defaults cliDefaults, defaultAuthor st
 	}
 
 	return event.AddInput{
-		Title:     text,
-		Body:      "",
+		Title:     title,
+		Body:      body,
 		ParentID:  parent,
 		Meta:      merged,
 		CreatedAt: createdAt,

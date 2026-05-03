@@ -251,7 +251,7 @@ func TestAddCmd_EditFlagPipedError(t *testing.T) {
 func TestAddCmd_FormatJSON_Single(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out, _ := newTestIOFull(`{"text":"hi"}`, false) // piped stdin
+	io, out, _ := newTestIOFull(`{"title":"hi"}`, false) // piped stdin
 
 	cmd := &AddCmd{Format: "json", Author: "alice"}
 	if err := cmd.Run(s, io); err != nil {
@@ -263,14 +263,14 @@ func TestAddCmd_FormatJSON_Single(t *testing.T) {
 
 	ev, _ := s.Get(context.Background(), 1)
 	if ev.Title != "hi" {
-		t.Errorf("text = %q, want 'hi'", ev.Title)
+		t.Errorf("title = %q, want 'hi'", ev.Title)
 	}
 }
 
 func TestAddCmd_FormatJSON_Array(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out, _ := newTestIOFull(`[{"text":"a"},{"text":"b"},{"text":"c"}]`, false)
+	io, out, _ := newTestIOFull(`[{"title":"a"},{"title":"b"},{"title":"c"}]`, false)
 
 	cmd := &AddCmd{Format: "json", Author: "alice"}
 	if err := cmd.Run(s, io); err != nil {
@@ -304,7 +304,7 @@ func TestAddCmd_FormatJSON_AtomicRollback(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
 	// Second record references parent_id=9999 which doesn't exist → rollback.
-	io, _, _ := newTestIOFull(`[{"text":"good"},{"text":"bad","parent_id":9999}]`, false)
+	io, _, _ := newTestIOFull(`[{"title":"good"},{"title":"bad","parent_id":9999}]`, false)
 
 	cmd := &AddCmd{Format: "json", Author: "alice"}
 	err := cmd.Run(s, io)
@@ -347,7 +347,7 @@ func TestAddCmd_FormatJSON_FromArgs(t *testing.T) {
 	s := newTestStore(t)
 	io, out := newTestIO("")
 
-	cmd := &AddCmd{Format: "json", Args: []string{`{"text":"from arg"}`}, Author: "alice"}
+	cmd := &AddCmd{Format: "json", Args: []string{`{"title":"from arg"}`}, Author: "alice"}
 	if err := cmd.Run(s, io); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -356,14 +356,14 @@ func TestAddCmd_FormatJSON_FromArgs(t *testing.T) {
 	}
 	ev, _ := s.Get(context.Background(), 1)
 	if ev.Title != "from arg" {
-		t.Errorf("text = %q, want 'from arg'", ev.Title)
+		t.Errorf("title = %q, want 'from arg'", ev.Title)
 	}
 }
 
 func TestAddCmd_FormatJSON_TimeFlagFallback(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _, _ := newTestIOFull(`{"text":"hi"}`, false)
+	io, _, _ := newTestIOFull(`{"title":"hi"}`, false)
 
 	cmd := &AddCmd{Format: "json", Time: "2026-04-01", Author: "alice"}
 	if err := cmd.Run(s, io); err != nil {
@@ -381,7 +381,7 @@ func TestAddCmd_FormatJSON_TimeFlagFallback(t *testing.T) {
 func TestAddCmd_FormatJSON_MalformedJSON(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _, _ := newTestIOFull(`{"text":`, false)
+	io, _, _ := newTestIOFull(`{"title":`, false)
 
 	cmd := &AddCmd{Format: "json", Author: "alice"}
 	err := cmd.Run(s, io)
@@ -393,7 +393,7 @@ func TestAddCmd_FormatJSON_MalformedJSON(t *testing.T) {
 func TestAddCmd_FormatJSON_BadCLITimeFallback(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _, _ := newTestIOFull(`{"text":"hi"}`, false)
+	io, _, _ := newTestIOFull(`{"title":"hi"}`, false)
 
 	cmd := &AddCmd{Format: "json", Time: "not-a-time", Author: "alice"}
 	err := cmd.Run(s, io)
@@ -405,7 +405,7 @@ func TestAddCmd_FormatJSON_BadCLITimeFallback(t *testing.T) {
 func TestAddCmd_FormatJSON_BadCLIMetaFallback(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _, _ := newTestIOFull(`{"text":"hi"}`, false)
+	io, _, _ := newTestIOFull(`{"title":"hi"}`, false)
 
 	cmd := &AddCmd{Format: "json", Meta: []string{"noequals"}, Author: "alice"}
 	err := cmd.Run(s, io)
@@ -417,13 +417,13 @@ func TestAddCmd_FormatJSON_BadCLIMetaFallback(t *testing.T) {
 func TestAddCmd_FormatJSON_PerRecordError(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	// Second record has empty text → jsonInputToAddInput returns an error.
-	io, _, _ := newTestIOFull(`[{"text":"good"},{"text":""}]`, false)
+	// Second record has empty title → jsonInputToAddInput returns an error.
+	io, _, _ := newTestIOFull(`[{"title":"good"},{"title":""}]`, false)
 
 	cmd := &AddCmd{Format: "json", Author: "alice"}
 	err := cmd.Run(s, io)
-	if err == nil || !strings.Contains(err.Error(), "record 1: text is required") {
-		t.Errorf("err = %v, want 'record 1: text is required'", err)
+	if err == nil || !strings.Contains(err.Error(), "record 1: title is required") {
+		t.Errorf("err = %v, want 'record 1: title is required'", err)
 	}
 
 	events, _ := s.List(context.Background(), event.ListOpts{})
@@ -435,7 +435,7 @@ func TestAddCmd_FormatJSON_PerRecordError(t *testing.T) {
 func TestAddCmd_FormatJSON_AuthorFromJSONOverride(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out, _ := newTestIOFull(`{"text":"hi","meta":[["author","bob"]]}`, false)
+	io, out, _ := newTestIOFull(`{"title":"hi","meta":[["author","bob"]]}`, false)
 
 	// Empty CLI author is OK because the JSON record names its own author.
 	cmd := &AddCmd{Format: "json", Author: ""}
@@ -463,7 +463,7 @@ func TestAddCmd_FormatJSON_AuthorFromJSONOverride(t *testing.T) {
 func TestAddCmd_FormatJSON_NoAuthorAnywhereRejects(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _, _ := newTestIOFull(`{"text":"hi"}`, false)
+	io, _, _ := newTestIOFull(`{"title":"hi"}`, false)
 
 	cmd := &AddCmd{Format: "json", Author: ""}
 	err := cmd.Run(s, io)
@@ -475,7 +475,7 @@ func TestAddCmd_FormatJSON_NoAuthorAnywhereRejects(t *testing.T) {
 func TestAddCmd_FormatJSON_MetaFlagFallback(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _, _ := newTestIOFull(`{"text":"hi"}`, false)
+	io, _, _ := newTestIOFull(`{"title":"hi"}`, false)
 
 	cmd := &AddCmd{Format: "json", Meta: []string{"env=prod"}, Author: "alice"}
 	if err := cmd.Run(s, io); err != nil {

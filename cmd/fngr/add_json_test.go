@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"strings"
 	"testing"
 
+	"github.com/monolithiclab/fngr/internal/event"
 	"github.com/monolithiclab/fngr/internal/parse"
 )
 
@@ -15,18 +17,18 @@ func TestParseJSONAddInput(t *testing.T) {
 		wantLen int
 		wantErr string
 	}{
-		{name: "single-object", input: `{"text":"hi"}`, wantLen: 1},
-		{name: "array-of-one", input: `[{"text":"hi"}]`, wantLen: 1},
-		{name: "array-of-three", input: `[{"text":"a"},{"text":"b"},{"text":"c"}]`, wantLen: 3},
+		{name: "single-object", input: `{"title":"hi"}`, wantLen: 1},
+		{name: "array-of-one", input: `[{"title":"hi"}]`, wantLen: 1},
+		{name: "array-of-three", input: `[{"title":"a"},{"title":"b"},{"title":"c"}]`, wantLen: 3},
 		{name: "empty-array", input: `[]`, wantLen: 0},
-		{name: "malformed-json", input: `{"text":`, wantErr: "--format=json"},
+		{name: "malformed-json", input: `{"title":`, wantErr: "--format=json"},
 		{name: "scalar-string", input: `"hello"`, wantErr: "--format=json"},
 		{name: "scalar-number", input: `42`, wantErr: "--format=json"},
-		{name: "with-meta", input: `{"text":"hi","meta":[["tag","ops"]]}`, wantLen: 1},
-		{name: "with-parent-and-time", input: `{"text":"hi","parent_id":3,"created_at":"2026-04-01T12:00:00Z"}`, wantLen: 1},
-		{name: "unknown-field-single", input: `{"text":"hi","txet":"typo"}`, wantErr: "unknown field"},
-		{name: "unknown-field-array", input: `[{"text":"hi","extra":1}]`, wantErr: "unknown field"},
-		{name: "leading-whitespace-array", input: "  \n[{\"text\":\"hi\"}]", wantLen: 1},
+		{name: "with-meta", input: `{"title":"hi","meta":[["tag","ops"]]}`, wantLen: 1},
+		{name: "with-parent-and-time", input: `{"title":"hi","parent_id":3,"created_at":"2026-04-01T12:00:00Z"}`, wantLen: 1},
+		{name: "unknown-field-single", input: `{"title":"hi","ttile":"typo"}`, wantErr: "unknown field"},
+		{name: "unknown-field-array", input: `[{"title":"hi","extra":1}]`, wantErr: "unknown field"},
+		{name: "leading-whitespace-array", input: "  \n[{\"title\":\"hi\"}]", wantLen: 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -59,65 +61,65 @@ func TestJSONInputToAddInput(t *testing.T) {
 		in         jsonAddInput
 		defaults   cliDefaults
 		author     string
-		wantText   string
+		wantTitle  string
 		wantErr    string
 		wantAuthor string // when set, asserts the merged meta has exactly this author value
 	}{
 		{
-			name:     "happy-single",
-			in:       jsonAddInput{Text: "hi"},
-			author:   "alice",
-			wantText: "hi",
+			name:      "happy-single",
+			in:        jsonAddInput{Title: "hi"},
+			author:    "alice",
+			wantTitle: "hi",
 		},
 		{
-			name:    "missing-text",
+			name:    "missing-title",
 			in:      jsonAddInput{},
 			author:  "alice",
-			wantErr: "text is required",
+			wantErr: "title is required",
 		},
 		{
-			name:    "whitespace-only-text",
-			in:      jsonAddInput{Text: "   "},
+			name:    "whitespace-only-title",
+			in:      jsonAddInput{Title: "   "},
 			author:  "alice",
-			wantErr: "text is required",
+			wantErr: "title is required",
 		},
 		{
-			name:     "json-meta-overrides-cli",
-			in:       jsonAddInput{Text: "x", Meta: [][2]string{{"env", "prod"}}},
-			defaults: cliDefaults{meta: []parse.Meta{{Key: "env", Value: "dev"}}},
-			author:   "alice",
-			wantText: "x",
+			name:      "json-meta-overrides-cli",
+			in:        jsonAddInput{Title: "x", Meta: [][2]string{{"env", "prod"}}},
+			defaults:  cliDefaults{meta: []parse.Meta{{Key: "env", Value: "dev"}}},
+			author:    "alice",
+			wantTitle: "x",
 		},
 		{
 			name:    "empty-meta-key",
-			in:      jsonAddInput{Text: "x", Meta: [][2]string{{"", "v"}}},
+			in:      jsonAddInput{Title: "x", Meta: [][2]string{{"", "v"}}},
 			author:  "alice",
 			wantErr: "meta[0]: empty key",
 		},
 		{
 			name:    "bad-created-at",
-			in:      jsonAddInput{Text: "x", CreatedAt: mkPtr("not-a-time")},
+			in:      jsonAddInput{Title: "x", CreatedAt: mkPtr("not-a-time")},
 			author:  "alice",
 			wantErr: "created_at",
 		},
 		{
-			name:     "json-parent-id-overrides-cli",
-			in:       jsonAddInput{Text: "x", ParentID: mkInt64(7)},
-			defaults: cliDefaults{parent: mkInt64(3)},
-			author:   "alice",
-			wantText: "x",
+			name:      "json-parent-id-overrides-cli",
+			in:        jsonAddInput{Title: "x", ParentID: mkInt64(7)},
+			defaults:  cliDefaults{parent: mkInt64(3)},
+			author:    "alice",
+			wantTitle: "x",
 		},
 		{
-			name:     "valid-created-at",
-			in:       jsonAddInput{Text: "x", CreatedAt: mkPtr("2026-04-01T12:00:00Z")},
-			author:   "alice",
-			wantText: "x",
+			name:      "valid-created-at",
+			in:        jsonAddInput{Title: "x", CreatedAt: mkPtr("2026-04-01T12:00:00Z")},
+			author:    "alice",
+			wantTitle: "x",
 		},
 		{
 			name:       "json-author-suppresses-default",
-			in:         jsonAddInput{Text: "x", Meta: [][2]string{{"author", "bob"}}},
+			in:         jsonAddInput{Title: "x", Meta: [][2]string{{"author", "bob"}}},
 			author:     "alice",
-			wantText:   "x",
+			wantTitle:  "x",
 			wantAuthor: "bob",
 		},
 	}
@@ -134,8 +136,8 @@ func TestJSONInputToAddInput(t *testing.T) {
 			if err != nil {
 				t.Fatalf("jsonInputToAddInput: %v", err)
 			}
-			if got.Title != tc.wantText {
-				t.Errorf("Text = %q, want %q", got.Title, tc.wantText)
+			if got.Title != tc.wantTitle {
+				t.Errorf("Title = %q, want %q", got.Title, tc.wantTitle)
 			}
 			if tc.wantAuthor != "" {
 				var authors []string
@@ -160,11 +162,65 @@ func TestParseJSONAddInput_BatchSizeLimit(t *testing.T) {
 		if i > 0 {
 			b.WriteByte(',')
 		}
-		b.WriteString(`{"text":"x"}`)
+		b.WriteString(`{"title":"x"}`)
 	}
 	b.WriteByte(']')
 	_, err := parseJSONAddInput(b.String())
 	if err == nil || !strings.Contains(err.Error(), "exceeds limit") {
 		t.Errorf("err = %v, want 'exceeds limit'", err)
+	}
+}
+
+func TestAddJSON_TitleBody(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, _ := newTestIO(`{"title":"deploy","body":"hotfix #ops"}`)
+
+	cmd := &AddCmd{Args: []string{`{"title":"deploy","body":"hotfix #ops"}`}, Author: "alice", Format: "json"}
+	if err := cmd.Run(s, io); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	events, err := s.List(context.Background(), event.ListOpts{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if events[0].Title != "deploy" || events[0].Body != "hotfix #ops" {
+		t.Errorf("got (title=%q, body=%q), want (deploy, hotfix #ops)", events[0].Title, events[0].Body)
+	}
+}
+
+func TestAddJSON_BodyOptional(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, _ := newTestIO("")
+
+	cmd := &AddCmd{Args: []string{`{"title":"hello"}`}, Author: "alice", Format: "json"}
+	if err := cmd.Run(s, io); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	events, _ := s.List(context.Background(), event.ListOpts{})
+	if events[0].Title != "hello" || events[0].Body != "" {
+		t.Errorf("got (title=%q, body=%q), want (hello, '')", events[0].Title, events[0].Body)
+	}
+}
+
+func TestAddJSON_RejectsEmptyTitle(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, _ := newTestIO("")
+	cmd := &AddCmd{Args: []string{`{"title":""}`}, Author: "alice", Format: "json"}
+	if err := cmd.Run(s, io); err == nil {
+		t.Error("expected empty-title error")
+	}
+}
+
+func TestAddJSON_RejectsTextField(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, _ := newTestIO("")
+	cmd := &AddCmd{Args: []string{`{"text":"old"}`}, Author: "alice", Format: "json"}
+	err := cmd.Run(s, io)
+	if err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Errorf("expected unknown-field error on `text`, got %v", err)
 	}
 }
