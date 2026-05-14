@@ -168,7 +168,8 @@ func Flat(w io.Writer, events []event.Event) error {
 type jsonEvent struct {
 	ID        int64       `json:"id"`
 	ParentID  *int64      `json:"parent_id,omitempty"`
-	Text      string      `json:"text"`
+	Title     string      `json:"title"`
+	Body      string      `json:"body"`
 	CreatedAt string      `json:"created_at"`
 	Meta      [][2]string `json:"meta,omitempty"`
 }
@@ -177,7 +178,8 @@ func toJSONEvent(ev event.Event) jsonEvent {
 	out := jsonEvent{
 		ID:        ev.ID,
 		ParentID:  ev.ParentID,
-		Text:      ev.Title,
+		Title:     ev.Title,
+		Body:      ev.Body,
 		CreatedAt: ev.CreatedAt.UTC().Format(time.RFC3339),
 	}
 	if len(ev.Meta) == 0 {
@@ -214,11 +216,11 @@ func JSON(w io.Writer, events []event.Event) error {
 }
 
 // CSV writes events as a CSV table with the columns
-// `id, parent_id, created_at, author, text`. Meta tuples beyond
+// `id, parent_id, created_at, author, title, body`. Meta tuples beyond
 // `author` are not represented; for full meta, use JSON or Markdown.
 func CSV(w io.Writer, events []event.Event) error {
 	cw := csv.NewWriter(w)
-	_ = cw.Write([]string{"id", "parent_id", "created_at", "author", "text"})
+	_ = cw.Write([]string{"id", "parent_id", "created_at", "author", "title", "body"})
 	for _, ev := range events {
 		parentID := ""
 		if ev.ParentID != nil {
@@ -230,6 +232,7 @@ func CSV(w io.Writer, events []event.Event) error {
 			ev.CreatedAt.UTC().Format(time.RFC3339),
 			eventAuthor(ev),
 			ev.Title,
+			ev.Body,
 		})
 	}
 	cw.Flush()
@@ -237,7 +240,9 @@ func CSV(w io.Writer, events []event.Event) error {
 }
 
 // Event writes a single event in the human-readable detail layout used
-// by `fngr event N` (ID / Parent / Date / Text / Meta).
+// by `fngr event N` (ID / Parent / Date / Title / [body block] / Meta).
+// When body is non-empty, a blank line and the raw body block follow
+// the Title line. When body is empty, Meta follows directly after Title.
 func Event(w io.Writer, ev *event.Event) error {
 	if _, err := fmt.Fprintf(w, "ID:     %d\n", ev.ID); err != nil {
 		return err
@@ -250,8 +255,13 @@ func Event(w io.Writer, ev *event.Event) error {
 	if _, err := fmt.Fprintf(w, "Date:   %s\n", formatLocalDateTime(ev.CreatedAt)); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(w, "Text:   %s\n", ev.Title); err != nil {
+	if _, err := fmt.Fprintf(w, "Title:  %s\n", ev.Title); err != nil {
 		return err
+	}
+	if ev.Body != "" {
+		if _, err := fmt.Fprintf(w, "\n%s\n", ev.Body); err != nil {
+			return err
+		}
 	}
 
 	if len(ev.Meta) > 0 {
@@ -288,7 +298,7 @@ func FlatStream(w io.Writer, seq iter.Seq2[event.Event, error]) error {
 // followed by one row per event from seq.
 func CSVStream(w io.Writer, seq iter.Seq2[event.Event, error]) error {
 	cw := csv.NewWriter(w)
-	if err := cw.Write([]string{"id", "parent_id", "created_at", "author", "text"}); err != nil {
+	if err := cw.Write([]string{"id", "parent_id", "created_at", "author", "title", "body"}); err != nil {
 		return err
 	}
 	for ev, err := range seq {
@@ -306,6 +316,7 @@ func CSVStream(w io.Writer, seq iter.Seq2[event.Event, error]) error {
 			ev.CreatedAt.UTC().Format(time.RFC3339),
 			eventAuthor(ev),
 			ev.Title,
+			ev.Body,
 		}); err != nil {
 			return err
 		}

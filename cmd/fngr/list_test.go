@@ -127,7 +127,7 @@ func TestListCmd_JSON(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &parsed); err != nil {
 		t.Fatalf("json output invalid: %v\n%s", err, out.String())
 	}
-	if len(parsed) != 1 || parsed[0]["text"] != "json me" {
+	if len(parsed) != 1 || parsed[0]["title"] != "json me" {
 		t.Errorf("parsed = %v", parsed)
 	}
 }

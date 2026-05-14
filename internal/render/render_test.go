@@ -190,7 +190,7 @@ func TestEvent_DetailIncludesParentAndMeta(t *testing.T) {
 		t.Fatalf("Event: %v", err)
 	}
 	got := b.String()
-	for _, want := range []string{"ID:     2", "Parent: 1", "Date:", "Text:   child entry", "Meta:", "author=alice"} {
+	for _, want := range []string{"ID:     2", "Parent: 1", "Date:", "Title:  child entry", "Meta:", "author=alice"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("Event output missing %q; got:\n%s", want, got)
 		}
@@ -382,7 +382,7 @@ func TestCSV(t *testing.T) {
 		t.Errorf("CSV produced %d lines, want 2; output:\n%s", len(lines), got)
 	}
 
-	wantHeader := "id,parent_id,created_at,author,text"
+	wantHeader := "id,parent_id,created_at,author,title,body"
 	if lines[0] != wantHeader {
 		t.Errorf("CSV header = %q, want %q", lines[0], wantHeader)
 	}
@@ -560,5 +560,115 @@ func TestEventsStream_RejectsTree(t *testing.T) {
 	t.Parallel()
 	if err := EventsStream(io.Discard, "tree", staticSeq(nil)); err == nil {
 		t.Error("EventsStream(tree, ...) expected an error")
+	}
+}
+
+func TestEvent_BodyEmpty(t *testing.T) {
+	t.Parallel()
+	ev := &event.Event{
+		ID:        1,
+		Title:     "headline",
+		Body:      "",
+		CreatedAt: time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC),
+		Meta:      []parse.Meta{{Key: "author", Value: "alice"}},
+	}
+	var b bytes.Buffer
+	if err := Event(&b, ev); err != nil {
+		t.Fatalf("Event: %v", err)
+	}
+	got := b.String()
+	if !strings.Contains(got, "Title:  headline") {
+		t.Errorf("missing title line: %q", got)
+	}
+	// Body block is omitted when empty; meta should still appear.
+	if !strings.Contains(got, "Meta:") || !strings.Contains(got, "author=alice") {
+		t.Errorf("expected Meta block: %q", got)
+	}
+}
+
+func TestEvent_BodyPresent(t *testing.T) {
+	t.Parallel()
+	ev := &event.Event{
+		ID:        1,
+		Title:     "headline",
+		Body:      "the full story\nspans two lines",
+		CreatedAt: time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC),
+		Meta:      []parse.Meta{{Key: "author", Value: "alice"}},
+	}
+	var b bytes.Buffer
+	if err := Event(&b, ev); err != nil {
+		t.Fatalf("Event: %v", err)
+	}
+	got := b.String()
+	if !strings.Contains(got, "Title:  headline") {
+		t.Errorf("missing title line: %q", got)
+	}
+	if !strings.Contains(got, "\n\nthe full story\nspans two lines\n") {
+		t.Errorf("body block missing or mislaid: %q", got)
+	}
+}
+
+func TestJSON_TitleBodyShape(t *testing.T) {
+	t.Parallel()
+	events := []event.Event{{
+		ID:        1,
+		Title:     "headline",
+		Body:      "the body",
+		CreatedAt: time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC),
+	}}
+	var b bytes.Buffer
+	if err := JSON(&b, events); err != nil {
+		t.Fatalf("JSON: %v", err)
+	}
+	got := b.String()
+	if !strings.Contains(got, `"title": "headline"`) || !strings.Contains(got, `"body": "the body"`) {
+		t.Errorf("missing title/body in JSON: %q", got)
+	}
+	if strings.Contains(got, `"text"`) {
+		t.Errorf("JSON should not have text field: %q", got)
+	}
+}
+
+func TestCSV_TitleBodyColumns(t *testing.T) {
+	t.Parallel()
+	events := []event.Event{{
+		ID:        1,
+		Title:     "headline",
+		Body:      "body line",
+		CreatedAt: time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC),
+		Meta:      []parse.Meta{{Key: "author", Value: "alice"}},
+	}}
+	var b bytes.Buffer
+	if err := CSV(&b, events); err != nil {
+		t.Fatalf("CSV: %v", err)
+	}
+	got := b.String()
+	if !strings.HasPrefix(got, "id,parent_id,created_at,author,title,body\n") {
+		t.Errorf("unexpected CSV header: %q", got)
+	}
+	if !strings.Contains(got, ",alice,headline,body line\n") {
+		t.Errorf("missing title/body in CSV row: %q", got)
+	}
+}
+
+func TestFlat_ShowsTitleNotBody(t *testing.T) {
+	t.Parallel()
+	events := []event.Event{{
+		ID:        1,
+		Title:     "headline",
+		Body:      "secret body",
+		CreatedAt: time.Date(2026, 4, 22, 9, 0, 0, 0, time.UTC),
+		Meta:      []parse.Meta{{Key: "author", Value: "alice"}},
+	}}
+	var b bytes.Buffer
+	if err := Flat(&b, events); err != nil {
+		t.Fatalf("Flat: %v", err)
+	}
+	got := b.String()
+	if !strings.Contains(got, "headline") {
+		t.Errorf("title not in flat: %q", got)
+	}
+	if strings.Contains(got, "secret body") {
+		t.Errorf("body leaked into flat: %q", got)
 	}
 }
