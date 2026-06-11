@@ -37,8 +37,9 @@ make ci             # codefix + format + lint + test
   in a TTY auto-launches `$VISUAL`/`$EDITOR`. With `--format=json` the body is parsed as a
   JSON event record (or array) by `cmd/fngr/add_json.go`; per-record defaults flow JSON value
   > CLI flag > built-in. `event` hosts a sub-command tree: `fngr event N`
-  reads (shorthand for `event show N`); `text`, `time`, `date`, `attach`, `detach`, `tag`,
-  `untag` mutate. Each verb owns its own `ID` arg, syntax `fngr event <verb> <id> [<args>]`.
+  reads (shorthand for `event show N`); `text` (re-splits into title+body), `title`, `body`,
+  `time`, `date`, `attach`, `detach`, `tag`, `untag` mutate. Each verb owns its own `ID` arg,
+  syntax `fngr event <verb> <id> [<args>]`.
   `meta` is a sub-command tree too: `fngr meta` lists with optional `-S` filter (bare key,
   key=value, @person, #tag), `meta rename` and `meta delete` mutate (both accept the same
   shorthand). None of the event verbs prompt; meta verbs prompt with the destructive-vs-additive
@@ -52,7 +53,7 @@ make ci             # codefix + format + lint + test
   temp file; `errCancel` signals empty-save (handled as exit-0 by `AddCmd.Run`). `readStdin`
   caps reads at `maxStdinBytes` (16 MiB) via `io.LimitReader` so a runaway pipe can't OOM.
 - `cmd/fngr/add_json.go` — `--format=json` import path. `jsonAddInput` is the wire shape
-  `{text, parent_id?, created_at?, meta?: [[k,v],...]}`; `parseJSONAddInput` dispatches on the
+  `{title, body?, parent_id?, created_at?, meta?: [[k,v],...]}`; `parseJSONAddInput` dispatches on the
   first non-whitespace char (`[` → array, else single object) and uses `json.Decoder` with
   `DisallowUnknownFields` so typos surface instead of being silently dropped. Batches are
   capped at `maxJSONBatchSize` (10 000 records). `jsonInputToAddInput` applies CLI defaults,
@@ -86,8 +87,9 @@ make ci             # codefix + format + lint + test
 - `internal/event/event.go` — Data access functions: `Add` (transactional event + meta + FTS),
   `AddMany` (batched same shape, atomic), `AddInput` value type. Both `Add` and `AddMany`
   delegate to a private `addInTx` that runs the per-record INSERT loop using a caller-owned
-  `*sql.Tx`. `Get`, `Update` (text and/or timestamp; on text change body-derived tags are *synced* —
-  `parse.BodyTags(oldText)` deleted then `parse.BodyTags(newText)` inserted via
+  `*sql.Tx`. `Get`, `Update` (title, body, and/or timestamp; on title or body change body-derived tags are
+  *synced* — `parse.BodyTags(oldTitle+" "+oldBody)` deleted then
+  `parse.BodyTags(newTitle+" "+newBody)` inserted via
   `ON CONFLICT DO NOTHING`; FTS rebuilt), `Reparent` (set/clear `parent_id`; rejects self and
   ancestry cycles via `ErrCycle`), `AddTags` / `RemoveTags` (event-scoped meta CRUD with FTS
   resync), `Delete`, `HasChildren`, `List` / `ListSeq` (FTS5 filter + date range + `Limit` +

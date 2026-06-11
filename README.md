@@ -148,8 +148,8 @@ fngr add "yesterday's standup" --time 2026-04-16
 fngr add "earlier this morning"  --time 09:30
 fngr add "after lunch sync"      --time 2:15PM
 
-# Bulk import a single event from JSON
-echo '{"text":"hi","meta":[["tag","ops"]]}' | fngr add --format=json
+# Bulk import a single event from JSON (title + optional body)
+echo '{"title":"hi","body":"","meta":[["tag","ops"]]}' | fngr add --format=json
 
 # Bulk import an array of events (atomic; any error rolls back the batch)
 fngr add --format=json < events.json
@@ -195,8 +195,15 @@ fngr event 1
 fngr event 1 --tree         # with children
 fngr event 1 --format json
 
-# Edit text (body @person/#tag tags are synced — old ones removed, new ones added)
-fngr event text 1 "fixed wording for @sarah #urgent"
+# Edit text — re-splits on '. ' into title + body
+# (@person/#tag tags are synced — old ones removed, new ones added)
+fngr event text 1 "fixed wording. for @sarah #urgent"
+
+# Or set just the title (body untouched)
+fngr event title 1 "fixed wording"
+
+# Or set just the body (title untouched; empty arg clears body)
+fngr event body 1 "for @sarah #urgent"
 
 # Edit clock time (date preserved) or full timestamp (replaces both)
 fngr event time 1 "09:30"
@@ -255,9 +262,9 @@ accepted:
 `!` binds to the immediately following term (`!#bugfix` excludes events tagged
 `bugfix`); parentheses for grouping are not supported.
 
-Metadata from `@person` and `#tag` in event text is extracted automatically and
-stored separately from body text, so `#deploy` only matches the tag, not the
-word "deploy" in the body.
+Metadata from `@person` and `#tag` in an event's title or body is extracted
+automatically and stored separately from the text, so `#deploy` only matches the
+tag, not the word "deploy" in the body.
 
 ## Database location
 

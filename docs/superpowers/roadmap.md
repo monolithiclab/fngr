@@ -42,23 +42,14 @@ cycle. Specs land under `docs/superpowers/specs/`, plans under
   help screen uses Kong's `HelpOptions{Compact: true}` layout (one line
   per command in the command list, with full per-command details on the
   `--help` of each command).
-
-## Data model
-
-- **Title + body split** — replace the single `text` column with `title`
-  - `body`. The split rule on input is "everything before the first `.`
-    is the title; the rest is the body" (whole input is the title when no
-    `.` is present). Migration is pure SQL via a new
-    `internal/db/migrations/3.sql`: `ALTER TABLE events RENAME COLUMN text
-TO title`, `ALTER TABLE events ADD COLUMN body TEXT NOT NULL DEFAULT
-''`, then a single `UPDATE events SET title = ..., body = ...` using
-    SQLite's `instr()` / `substr()` to perform the split — no Go pass over
-    rows. Rebuild `events_fts` content from the new columns. Open
-    brainstorm questions: how do renderers display the split (markdown
-    bullet shows title only, with body indented; tree shows title; event
-    detail shows both); what does `fngr add "no dot"` produce (title-only
-    event, empty body); does `event text` become `event title` + `event
-body` (or stay as `event text` and re-split each time)?
+- **Title + body data-model split** — `events.text` replaced by separate
+  `title` + `body` columns. Split rule on input is the literal `". "`
+  (dot+space): everything before is the title, after is the body, both
+  trimmed; no `". "` means title-only with empty body. JSON wire shape
+  carries `title` + `body` directly. Three event verbs: `event text`
+  (re-splits), `event title`, `event body`. Lists and tree show titles
+  only; `fngr event N` and `--format=md` show body too. Pure-SQL
+  migration 3 splits via `INSTR`/`SUBSTR` and rebuilds FTS.
 
 ## Publishing pipeline polish
 
