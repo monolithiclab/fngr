@@ -241,6 +241,65 @@ func TestMarkdown_LocalTimezoneBucketing(t *testing.T) {
 	}
 }
 
+func TestMarkdown_BodyContinuation(t *testing.T) {
+	t.Parallel()
+	events := []event.Event{{
+		ID:        1,
+		Title:     "deploy v1.2",
+		Body:      "needed a manual restart\nran into firewall issue first",
+		CreatedAt: time.Date(2026, 4, 22, 9, 0, 0, 0, time.Local),
+		Meta:      []parse.Meta{{Key: "tag", Value: "ops"}},
+	}}
+	var b bytes.Buffer
+	if err := Markdown(&b, events); err != nil {
+		t.Fatalf("Markdown: %v", err)
+	}
+	got := b.String()
+	if !strings.Contains(got, "- 9.00am — deploy v1.2\n") {
+		t.Errorf("missing title bullet: %q", got)
+	}
+	if !strings.Contains(got, "  needed a manual restart\n") {
+		t.Errorf("missing first body continuation line: %q", got)
+	}
+	if !strings.Contains(got, "  ran into firewall issue first\n") {
+		t.Errorf("missing second body continuation line: %q", got)
+	}
+	if !strings.Contains(got, "  tag=ops\n") {
+		t.Errorf("missing meta continuation line: %q", got)
+	}
+}
+
+func TestMarkdown_BodyEmpty(t *testing.T) {
+	t.Parallel()
+	events := []event.Event{{
+		ID:        1,
+		Title:     "title only",
+		CreatedAt: time.Date(2026, 4, 22, 9, 0, 0, 0, time.Local),
+		Meta:      []parse.Meta{{Key: "author", Value: "alice"}},
+	}}
+	var b bytes.Buffer
+	if err := Markdown(&b, events); err != nil {
+		t.Fatalf("Markdown: %v", err)
+	}
+	got := b.String()
+	if !strings.Contains(got, "- 9.00am — title only\n") {
+		t.Errorf("missing title bullet: %q", got)
+	}
+	if !strings.Contains(got, "  author=alice\n") {
+		t.Errorf("missing meta continuation line: %q", got)
+	}
+	// No body should mean the only continuation lines are the meta line.
+	bodyMarker := "9.00am — title only\n  "
+	pos := strings.Index(got, bodyMarker)
+	if pos < 0 {
+		t.Fatalf("could not locate marker: %q", got)
+	}
+	rest := got[pos+len(bodyMarker):]
+	if !strings.HasPrefix(rest, "author=alice\n") {
+		t.Errorf("expected meta line directly after bullet (no body); got %q", rest)
+	}
+}
+
 func TestMarkdownStream_Empty(t *testing.T) {
 	t.Parallel()
 	var b bytes.Buffer

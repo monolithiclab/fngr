@@ -25,10 +25,10 @@ func Markdown(w io.Writer, events []event.Event) error {
 	return nil
 }
 
-// renderMarkdownEvent writes one event's bullet (and optional continuation
-// lines and meta line). It updates *lastDate; when the local date of ev
-// differs, it first writes a date header (with a leading blank line if
-// *lastDate is non-empty).
+// renderMarkdownEvent writes one event's bullet (title) followed by body
+// lines and meta line as 2-space-indented continuation lines. It updates
+// *lastDate; when the local date of ev differs, it first writes a date
+// header (with a leading blank line if *lastDate is non-empty).
 func renderMarkdownEvent(w io.Writer, lastDate *string, ev event.Event) error {
 	local := ev.CreatedAt.Local()
 	date := local.Format(timefmt.DateFormat)
@@ -46,17 +46,26 @@ func renderMarkdownEvent(w io.Writer, lastDate *string, ev event.Event) error {
 
 	timeStr := local.Format(timefmt.LayoutToday)
 
-	lines := strings.Split(ev.Title, "\n")
-	for i, line := range lines {
-		lines[i] = strings.TrimSuffix(line, "\r")
+	titleLines := strings.Split(ev.Title, "\n")
+	for i, line := range titleLines {
+		titleLines[i] = strings.TrimSuffix(line, "\r")
 	}
 
-	if _, err := fmt.Fprintf(w, "- %s — %s\n", timeStr, lines[0]); err != nil {
+	if _, err := fmt.Fprintf(w, "- %s — %s\n", timeStr, titleLines[0]); err != nil {
 		return err
 	}
-	for _, line := range lines[1:] {
+	for _, line := range titleLines[1:] {
 		if _, err := fmt.Fprintf(w, "  %s\n", line); err != nil {
 			return err
+		}
+	}
+
+	if ev.Body != "" {
+		for line := range strings.SplitSeq(ev.Body, "\n") {
+			line = strings.TrimSuffix(line, "\r")
+			if _, err := fmt.Fprintf(w, "  %s\n", line); err != nil {
+				return err
+			}
 		}
 	}
 
