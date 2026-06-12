@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/monolithiclab/fngr/internal/event"
 )
@@ -535,6 +536,112 @@ func TestAddCmd_NoSeparator(t *testing.T) {
 	}
 	if events[0].Title != "v1.2.3 released" || events[0].Body != "" {
 		t.Errorf("got (title=%q, body=%q), want (v1.2.3 released, '')", events[0].Title, events[0].Body)
+	}
+}
+
+func TestAddCmd_TimePrefixSetsTimeAndStripsTitle(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, _ := newTestIO("")
+
+	cmd := &AddCmd{Args: []string{"9:30: had coffee"}, Author: "alice"}
+	if err := cmd.Run(s, io); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	ev, err := s.Get(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if ev.Title != "had coffee" {
+		t.Errorf("title = %q, want %q (time prefix stripped)", ev.Title, "had coffee")
+	}
+	got := ev.CreatedAt.Local()
+	now := time.Now()
+	if got.Hour() != 9 || got.Minute() != 30 {
+		t.Errorf("CreatedAt time = %02d:%02d, want 09:30", got.Hour(), got.Minute())
+	}
+	if got.Year() != now.Year() || got.Month() != now.Month() || got.Day() != now.Day() {
+		t.Errorf("CreatedAt date = %v, want today", got)
+	}
+}
+
+func TestAddCmd_TimePrefixSkippedWithTimeFlag(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, _ := newTestIO("")
+
+	// --time is the explicit override; the title keeps its literal prefix.
+	cmd := &AddCmd{Args: []string{"9:30: had coffee"}, Author: "alice", Time: "2026-04-01 08:00"}
+	if err := cmd.Run(s, io); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	ev, _ := s.Get(context.Background(), 1)
+	if ev.Title != "9:30: had coffee" {
+		t.Errorf("title = %q, want literal %q (--time skips prefix detection)", ev.Title, "9:30: had coffee")
+	}
+	got := ev.CreatedAt.Local()
+	if got.Year() != 2026 || got.Month() != 4 || got.Day() != 1 || got.Hour() != 8 {
+		t.Errorf("CreatedAt = %v, want 2026-04-01 08:00 from --time", got)
+	}
+}
+
+func TestAddCmd_RelativeTimePrefix(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, _ := newTestIO("")
+
+	cmd := &AddCmd{Args: []string{"yesterday at 9am: backfilled logs"}, Author: "alice"}
+	if err := cmd.Run(s, io); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	ev, _ := s.Get(context.Background(), 1)
+	if ev.Title != "backfilled logs" {
+		t.Errorf("title = %q, want %q", ev.Title, "backfilled logs")
+	}
+	got := ev.CreatedAt.Local()
+	want := time.Now().AddDate(0, 0, -1)
+	if got.Year() != want.Year() || got.Month() != want.Month() || got.Day() != want.Day() {
+		t.Errorf("date = %v, want yesterday %v", got, want)
+	}
+	if got.Hour() != 9 || got.Minute() != 0 {
+		t.Errorf("time = %02d:%02d, want 09:00", got.Hour(), got.Minute())
+	}
+}
+
+func TestAddCmd_RelativeTimeFlag(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, _ := newTestIO("")
+
+	cmd := &AddCmd{Args: []string{"retro note"}, Author: "alice", Time: "2 days ago"}
+	if err := cmd.Run(s, io); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	ev, _ := s.Get(context.Background(), 1)
+	got := ev.CreatedAt.Local()
+	want := time.Now().AddDate(0, 0, -2)
+	if got.Year() != want.Year() || got.Month() != want.Month() || got.Day() != want.Day() {
+		t.Errorf("date = %v, want 2 days ago %v", got, want)
+	}
+}
+
+func TestAddCmd_NonTimePrefixStoredVerbatim(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, _ := newTestIO("")
+
+	cmd := &AddCmd{Args: []string{"Meeting: discuss roadmap"}, Author: "alice"}
+	if err := cmd.Run(s, io); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	ev, _ := s.Get(context.Background(), 1)
+	if ev.Title != "Meeting: discuss roadmap" {
+		t.Errorf("title = %q, want verbatim (non-time prefix)", ev.Title)
 	}
 }
 

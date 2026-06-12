@@ -13,13 +13,13 @@ import (
 )
 
 type AddCmd struct {
-	Args   []string `arg:"" optional:"" help:"Event text (joined with spaces). Omit and pipe to stdin, or use -e."`
+	Args   []string `arg:"" optional:"" help:"Event text (joined with spaces). A leading \"<time>: \" prefix sets the timestamp (e.g. \"9:30: had coffee\"), unless --time is given. Omit and pipe to stdin, or use -e."`
 	Edit   bool     `short:"e" help:"Open $VISUAL or $EDITOR for the body."`
 	Format string   `short:"f" help:"Input format: text (default) or json. Under json, body is parsed as one event object or an array; per-record fields override the matching CLI flag, and absent fields fall back to it." enum:"${ADD_FORMATS}" default:"${ADD_FORMAT_DEFAULT}"`
 	Author string   `help:"Event author (used as default if JSON record omits meta.author)." env:"FNGR_AUTHOR" default:"${USER}"`
 	Parent *int64   `help:"Parent event ID (used as default if JSON record omits parent_id)."`
 	Meta   []string `help:"Metadata key=value pairs (used as defaults if JSON record omits meta)." short:"m"`
-	Time   string   `help:"Override event timestamp (used as default if JSON record omits created_at)." short:"t"`
+	Time   string   `help:"Override event timestamp; absolute (YYYY-MM-DD, 3:04PM) or relative (\"2 days ago\", \"yesterday at 9am\", \"now\"). Used as default if JSON record omits created_at." short:"t"`
 }
 
 func (c *AddCmd) Run(s eventStore, io ioStreams) error {
@@ -52,21 +52,31 @@ func (c *AddCmd) runText(s eventStore, io ioStreams, text string) error {
 		return fmt.Errorf("author is required: use --author, FNGR_AUTHOR, or ensure $USER is set")
 	}
 	title, body := parse.SplitTitleBody(text)
+
+	// Resolve the timestamp. --time is the explicit override; absent it, a
+	// leading time/date token in the title (e.g. "9:30: had coffee") is
+	// parsed and stripped so the title stores just the note.
+	var createdAt *time.Time
+	switch {
+	case c.Time != "":
+		t, err := timefmt.Parse(c.Time)
+		if err != nil {
+			return fmt.Errorf("invalid --time value: %w", err)
+		}
+		createdAt = &t
+	default:
+		if t, rest, ok := timefmt.SplitTimePrefix(title); ok {
+			createdAt = &t
+			title = rest
+		}
+	}
+
 	if title == "" {
 		return fmt.Errorf("event title cannot be empty")
 	}
 	meta, err := event.CollectMeta(title+" "+body, c.Meta, c.Author)
 	if err != nil {
 		return err
-	}
-
-	var createdAt *time.Time
-	if c.Time != "" {
-		t, err := timefmt.Parse(c.Time)
-		if err != nil {
-			return fmt.Errorf("invalid --time value: %w", err)
-		}
-		createdAt = &t
 	}
 
 	id, err := s.Add(context.Background(), event.AddInput{

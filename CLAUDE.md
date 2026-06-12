@@ -34,7 +34,11 @@ make ci             # codefix + format + lint + test
   every list-ish command uses `-S`). `add` accepts variadic positional `Args` (joined with
   spaces); body source resolved by `cmd/fngr/body.go::resolveBody` via the
   (args, `-e`, stdin TTY-ness) dispatch table; `-e/--edit` forces the editor; bare `fngr add`
-  in a TTY auto-launches `$VISUAL`/`$EDITOR`. With `--format=json` the body is parsed as a
+  in a TTY auto-launches `$VISUAL`/`$EDITOR`. In text mode, when `--time` is absent, a leading
+  time/date token in the title delimited by `": "` (colon+space, so times like `9:30` survive)
+  is parsed via `timefmt.SplitTimePrefix` and stripped — `fngr add "9:30: had coffee"` stores
+  title `had coffee` at 09:30 today; `--time` overrides and leaves the title verbatim. With
+  `--format=json` the body is parsed as a
   JSON event record (or array) by `cmd/fngr/add_json.go`; per-record defaults flow JSON value
   > CLI flag > built-in. `event` hosts a sub-command tree: `fngr event N`
   reads (shorthand for `event show N`); `text` (re-splits into title+body), `title`, `body`,
@@ -78,8 +82,15 @@ make ci             # codefix + format + lint + test
 - `internal/timefmt/timefmt.go` — Single source of truth for accepted time inputs. `Parse` returns
   just the parsed timestamp; `ParsePartial` also reports whether the input had a date and/or time
   component, so `event time` / `event date` can splice into an existing timestamp instead of
-  replacing it via `SpliceTime` / `SpliceDate` (mirror-image helpers that mix orig/new
-  date+time around the existing timezone). `FormatRelative(t, now)` returns the compact list-line
+  replacing it. `ParsePartial` first tries `parseRelative` (now/today/yesterday, `N
+  {minute|hour|day|week|month}s ago`, `<day> at <time>`; `a`/`an` count as 1) anchored on a passed-in
+  `now` for testability; sub-day offsets and `now` are date+time, bare relative days carry now's
+  time-of-day but report date-only so splicing still works. Then it falls back to the absolute
+  `fullFormats` / time-only layouts (`parseClock` shared with the relative path). Splice via
+  `SpliceTime` / `SpliceDate` (mirror-image helpers that mix orig/new
+  date+time around the existing timezone). `SplitTimePrefix(s)` extracts a leading timestamp from
+  free text delimited by `": "` (used by `fngr add` title parsing), delegating to `Parse`.
+  `FormatRelative(t, now)` returns the compact list-line
   stamp via the layout constants `LayoutToday` / `LayoutThisYear` / `LayoutOlder`. Canonical
   `DateFormat` / `DateTimeFormat` layouts used for storage and event-detail display.
 - `internal/event/meta.go` — Domain meta key constants (`MetaKeyAuthor`, etc.), `CollectMeta`

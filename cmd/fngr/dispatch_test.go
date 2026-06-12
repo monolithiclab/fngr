@@ -113,6 +113,49 @@ func TestKongDispatch_AllCommands(t *testing.T) {
 	}
 }
 
+// TestKongDispatch_AddTimePrefix proves the title time-prefix is parsed and
+// stripped through the full Kong Parse + Run path, not just direct cmd.Run.
+func TestKongDispatch_AddTimePrefix(t *testing.T) {
+	t.Parallel()
+
+	var cli CLI
+	parser, err := kong.New(&cli,
+		kong.Name("fngr"),
+		kongVars("test", "tester"),
+		kong.Exit(func(int) {}),
+	)
+	if err != nil {
+		t.Fatalf("kong.New: %v", err)
+	}
+
+	store := newTestStore(t)
+	run := func(argv []string) (string, error) {
+		kctx, err := parser.Parse(argv)
+		if err != nil {
+			return "", err
+		}
+		out := &bytes.Buffer{}
+		kctx.BindTo(store, (*eventStore)(nil))
+		kctx.Bind(ioStreams{In: strings.NewReader(""), Out: out, Err: io.Discard, IsTTY: true})
+		err = kctx.Run()
+		return out.String(), err
+	}
+
+	if _, err := run([]string{"add", "9:30: had coffee"}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	out, err := run([]string{"list", "--format", "flat"})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if !strings.Contains(out, "had coffee") {
+		t.Errorf("list output missing stripped title 'had coffee':\n%s", out)
+	}
+	if strings.Contains(out, "9:30: had coffee") {
+		t.Errorf("list output still has time prefix in title:\n%s", out)
+	}
+}
+
 // TestKongDispatch_AddThenListEndToEnd exercises the full happy path through
 // Kong twice against the same store, proving the dispatch + bindings handle
 // stateful flows correctly.

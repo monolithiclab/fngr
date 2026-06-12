@@ -148,6 +148,21 @@ fngr add "yesterday's standup" --time 2026-04-16
 fngr add "earlier this morning"  --time 09:30
 fngr add "after lunch sync"      --time 2:15PM
 
+# Relative times work everywhere a timestamp is accepted: now, today,
+# yesterday, "N {minutes,hours,days,weeks,months} ago", and "<day> at <time>".
+# A bare relative day keeps the current time of day.
+fngr add "deployed"  --time "2 days ago"
+fngr add "incident"  --time "yesterday at 9am"
+fngr add "quick fix" --time "15 minutes ago"
+
+# Or write the time inline as a "<time>: <note>" prefix — parsed and stripped
+# from the title (skipped when --time is given). The delimiter is colon+space,
+# so times like 9:30 are not mistaken for it.
+fngr add "9:30: had coffee"              # title "had coffee" at 09:30 today
+fngr add "3pm: lunch with @sam"          # title "lunch with @sam" at 15:00 today
+fngr add "2026-04-15: trip"              # title "trip" on that date
+fngr add "yesterday at 9am: backfill"    # title "backfill", yesterday 09:00
+
 # Bulk import a single event from JSON (title + optional body)
 echo '{"title":"hi","body":"","meta":[["tag","ops"]]}' | fngr add --format=json
 

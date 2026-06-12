@@ -42,6 +42,16 @@ cycle. Specs land under `docs/superpowers/specs/`, plans under
   help screen uses Kong's `HelpOptions{Compact: true}` layout (one line
   per command in the command list, with full per-command details on the
   `--help` of each command).
+- **`add` time-input UX** — two faster ways to timestamp a new event.
+  (1) Inline title prefix: `fngr add "9:30: had coffee"` parses a leading
+  time/date token delimited by `": "` (colon+space, so `9:30`-style times
+  survive), strips it from the title, and uses it as the timestamp; `--time`
+  overrides and leaves the title verbatim; text mode only (JSON keeps its
+  explicit `created_at`). (2) Relative timestamps accepted everywhere
+  `timefmt` parses (`--time`, the title prefix, `event time` / `event date`):
+  `now`, `today`, `yesterday`, `N {minute|hour|day|week|month}s ago`, and
+  `<day> at <time>` (`a`/`an` count as 1). A bare relative day carries the
+  current time of day but is treated as date-only so splicing still works.
 - **Title + body data-model split** — `events.text` replaced by separate
   `title` + `body` columns. Split rule on input is the literal `". "`
   (dot+space): everything before is the title, after is the body, both
@@ -95,9 +105,6 @@ only on real demand.
   parsing, and a third place to look for behavior.
 - **Multiple databases / workspaces** — `cd` plus `FNGR_DB` already
   implements this. No need for a separate workspace concept.
-- **Relative dates** (`today`, `yesterday`) — `timefmt` is the
-  natural place to add them later if requested. Shell handles it
-  fine: `--time "$(date -d yesterday +%F)"`.
 - **Auto-tag character expansion** — explore whether other shorthand
   symbols (e.g. `^location`, `+company`, `~mood`) are worth adding
   alongside the existing `@person` / `#tag` system, and which symbols
