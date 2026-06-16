@@ -109,6 +109,9 @@ func FlagMeta(flags []string) ([]Meta, error) {
 		if err != nil {
 			return nil, fmt.Errorf("invalid --meta flag: %w", err)
 		}
+		if key == "" {
+			return nil, fmt.Errorf("invalid --meta flag %q: empty key", f)
+		}
 		result = append(result, Meta{Key: key, Value: value})
 	}
 	return result, nil

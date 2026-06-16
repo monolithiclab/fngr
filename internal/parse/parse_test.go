@@ -164,6 +164,16 @@ func TestFlagMeta(t *testing.T) {
 			want:  []Meta{{Key: "note", Value: "a=b=c"}},
 		},
 		{
+			name:    "empty key rejected",
+			flags:   []string{"=value"},
+			wantErr: true,
+		},
+		{
+			name:  "empty value allowed",
+			flags: []string{"key="},
+			want:  []Meta{{Key: "key", Value: ""}},
+		},
+		{
 			name:  "empty flags",
 			flags: nil,
 			want:  nil,

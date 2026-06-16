@@ -93,6 +93,18 @@ func TestAddCmd_BadFlagMeta(t *testing.T) {
 	}
 }
 
+func TestAddCmd_EmptyMetaKeyRejected(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, _ := newTestIO("")
+
+	cmd := &AddCmd{Args: []string{"hi"}, Author: "alice", Meta: []string{"=value"}}
+	err := cmd.Run(s, io)
+	if err == nil || !strings.Contains(err.Error(), "empty key") {
+		t.Fatalf("err = %v, want 'empty key'", err)
+	}
+}
+
 func TestAddCmd_MultiArgJoinsWithSpace(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
