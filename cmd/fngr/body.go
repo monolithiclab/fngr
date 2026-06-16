@@ -46,7 +46,7 @@ func resolveBody(args []string, useEditor bool, io ioStreams) (string, error) {
 	case hasArgs:
 		body := strings.Join(args, " ")
 		if strings.TrimSpace(body) == "" {
-			return "", fmt.Errorf("event text cannot be empty")
+			return "", fmt.Errorf("event title cannot be empty")
 		}
 		return body, nil
 	case useEditor:
@@ -58,7 +58,7 @@ func resolveBody(args []string, useEditor bool, io ioStreams) (string, error) {
 		return launchEditor("")
 	default:
 		// Non-interactive with no args and nothing piped: no body source.
-		return "", fmt.Errorf("event text cannot be empty")
+		return "", fmt.Errorf("event title cannot be empty")
 	}
 }
 
@@ -89,7 +89,7 @@ func readStdin(in io.Reader) (string, error) {
 	}
 	body := strings.TrimSpace(string(raw))
 	if body == "" {
-		return "", fmt.Errorf("event text cannot be empty")
+		return "", fmt.Errorf("event title cannot be empty")
 	}
 	return body, nil
 }

@@ -71,12 +71,12 @@ source is always exactly one of {args, stdin, editor}; conflicts error.
 | present | present | piped | **Error** (same wording as above) |
 | absent | absent | TTY | Editor opened empty |
 | absent | absent | piped | Read stdin to EOF |
-| absent | absent | empty | **Error**: `event text cannot be empty` |
+| absent | absent | empty | **Error**: `event title cannot be empty` |
 | absent | present | TTY or empty | Editor opened empty |
 | absent | present | piped | **Error**: `--edit conflicts with piped stdin` |
 
 Empty *piped* stdin (zero bytes after trimming when data was promised)
-still errors with the existing `event text cannot be empty` message.
+still errors with the existing `event title cannot be empty` message.
 Empty editor save cancels (the user can `:q!` to indicate intent; an
 empty pipe has no equivalent).
 
@@ -139,7 +139,7 @@ func readStdin(in io.Reader) (string, error) {
     }
     body := strings.TrimSpace(string(raw))
     if body == "" {
-        return "", fmt.Errorf("event text cannot be empty")
+        return "", fmt.Errorf("event title cannot be empty")
     }
     return body, nil
 }

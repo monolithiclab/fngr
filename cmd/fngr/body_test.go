@@ -22,8 +22,8 @@ func TestReadStdin(t *testing.T) {
 		{name: "trim-trailing-newline", input: "hello\n", want: "hello"},
 		{name: "trim-leading-and-trailing-whitespace", input: "  \n hello world \n\n", want: "hello world"},
 		{name: "preserve-internal-newlines", input: "line one\nline two\n", want: "line one\nline two"},
-		{name: "empty-input", input: "", wantErr: "event text cannot be empty"},
-		{name: "whitespace-only", input: "   \n\t\n", wantErr: "event text cannot be empty"},
+		{name: "empty-input", input: "", wantErr: "event title cannot be empty"},
+		{name: "whitespace-only", input: "   \n\t\n", wantErr: "event title cannot be empty"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -218,14 +218,14 @@ func TestResolveBody(t *testing.T) {
 		{name: "edit-flag-piped-error", useEditor: true, isTTY: false, stdin: "y", wantErr: "--edit conflicts"},
 		// Editor cancel (empty save) propagates errCancel.
 		{name: "editor-cancel", useEditor: true, isTTY: true, stubErr: errCancel, wantInit: "", wantErr: "cancelled"},
-		{name: "empty-arg-rejected", args: []string{""}, isTTY: true, wantErr: "event text cannot be empty"},
-		{name: "whitespace-only-arg-rejected", args: []string{" ", "\t"}, isTTY: true, wantErr: "event text cannot be empty"},
+		{name: "empty-arg-rejected", args: []string{""}, isTTY: true, wantErr: "event title cannot be empty"},
+		{name: "whitespace-only-arg-rejected", args: []string{" ", "\t"}, isTTY: true, wantErr: "event title cannot be empty"},
 		// Non-TTY with EMPTY stdin (scripts, CI, cron): args must win, not
 		// trip the ambiguity guard. This is the dogfooding bug fix.
 		{name: "args-nontty-empty-stdin", args: []string{"foo", "bar"}, isTTY: false, stdin: "", wantBody: "foo bar"},
 		// Bare add, non-TTY, nothing piped: no body source at all → reject,
 		// don't fall through to launching an editor in a non-interactive context.
-		{name: "bare-nontty-empty-stdin", isTTY: false, stdin: "", wantErr: "event text cannot be empty"},
+		{name: "bare-nontty-empty-stdin", isTTY: false, stdin: "", wantErr: "event title cannot be empty"},
 		// -e with empty non-TTY stdin: no real conflict, so honour the editor
 		// request (the launch itself fails later if there's truly no terminal).
 		{name: "edit-flag-nontty-empty-stdin", useEditor: true, isTTY: false, stdin: "", stubBody: "from editor", wantInit: "", wantBody: "from editor"},

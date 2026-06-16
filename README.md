@@ -322,7 +322,7 @@ mv ~/.fngr.db.recovered ~/.fngr.db
 If recovery fails too, delete the file (`rm ~/.fngr.db`) and start
 fresh — `fngr add` will re-create the schema.
 
-**`event text cannot be empty`** — `fngr add` (no args, no piped
+**`event title cannot be empty`** — `fngr add` (no args, no piped
 stdin) launches `$VISUAL` / `$EDITOR`; saving an empty buffer is
 treated as a cancel. To force an empty event, that's not supported
 by design.

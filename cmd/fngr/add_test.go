@@ -261,8 +261,8 @@ func TestAddCmd_EmptyArgRejected(t *testing.T) {
 
 	cmd := &AddCmd{Args: []string{""}, Author: "alice"}
 	err := cmd.Run(s, io)
-	if err == nil || !strings.Contains(err.Error(), "event text cannot be empty") {
-		t.Errorf("err = %v, want 'event text cannot be empty'", err)
+	if err == nil || !strings.Contains(err.Error(), "event title cannot be empty") {
+		t.Errorf("err = %v, want 'event title cannot be empty'", err)
 	}
 
 	events, _ := s.List(context.Background(), event.ListOpts{})
