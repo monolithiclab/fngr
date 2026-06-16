@@ -49,24 +49,36 @@ because Kong sees a single positional arg either way.
 
 ### Body source resolution table
 
-The eight `(args, -e, stdin)` combinations resolve as follows. The body
+> **Amendment (v0.0.3 hardening).** "piped" originally meant "stdin is
+> not a TTY". That conflated non-interactive stdin with *piped body
+> data*: a script, cron job, or CI step runs with stdin bound to an empty
+> `/dev/null` (non-TTY, zero bytes), so `fngr add "note"` wrongly hit the
+> ambiguity error. "piped" now means **non-TTY AND carries ≥1 byte**,
+> detected by `peekHasData` (a `bufio.Reader` peek that replays the byte
+> for `readStdin`). A non-TTY with no data ("empty") is treated as no
+> stdin source. The rows and the empty-stdin paragraph below reflect the
+> corrected semantics.
+
+The `(args, -e, stdin)` combinations resolve as follows. The body
 source is always exactly one of {args, stdin, editor}; conflicts error.
+"piped" = non-TTY with data; "empty" = non-TTY with no data.
 
 | Args | `-e` | Stdin | Resolution |
 |------|------|-------|------------|
-| present | absent | TTY | Args joined with single space |
+| present | absent | TTY or empty | Args joined with single space |
 | present | absent | piped | **Error**: `ambiguous: body via both args and stdin; pick one` |
-| present | present | TTY | Editor pre-filled with joined args |
+| present | present | TTY or empty | Editor pre-filled with joined args |
 | present | present | piped | **Error** (same wording as above) |
 | absent | absent | TTY | Editor opened empty |
 | absent | absent | piped | Read stdin to EOF |
-| absent | present | TTY | Editor opened empty |
+| absent | absent | empty | **Error**: `event text cannot be empty` |
+| absent | present | TTY or empty | Editor opened empty |
 | absent | present | piped | **Error**: `--edit conflicts with piped stdin` |
 
-Empty stdin (zero bytes after trimming) errors with the existing
-`event text cannot be empty` message — empty pipe is almost always a
-script bug. Empty editor save cancels (the user can `:q!` to indicate
-intent; an empty pipe has no equivalent).
+Empty *piped* stdin (zero bytes after trimming when data was promised)
+still errors with the existing `event text cannot be empty` message.
+Empty editor save cancels (the user can `:q!` to indicate intent; an
+empty pipe has no equivalent).
 
 ### `cmd/fngr/body.go` — new file
 

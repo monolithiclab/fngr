@@ -220,6 +220,28 @@ func TestAddCmd_ArgsAndStdinError(t *testing.T) {
 	}
 }
 
+// Regression guard: `fngr add "note"` run non-interactively (script, CI,
+// cron) has stdin bound to an empty /dev/null. It must use the args, not
+// trip the args+stdin ambiguity guard. Exercised through the Run path.
+func TestAddCmd_ArgsNonTTYEmptyStdin(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, out, _ := newTestIOFull("", false) // isTTY=false, no piped data
+
+	cmd := &AddCmd{Args: []string{"deploy", "done"}, Author: "alice"}
+	if err := cmd.Run(s, io); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.Contains(out.String(), "Added event 1") {
+		t.Errorf("output = %q, want 'Added event 1'", out.String())
+	}
+
+	ev, _ := s.Get(context.Background(), 1)
+	if ev.Title != "deploy done" {
+		t.Errorf("title = %q, want %q", ev.Title, "deploy done")
+	}
+}
+
 func TestAddCmd_EmptyArgRejected(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)

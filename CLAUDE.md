@@ -33,7 +33,7 @@ make ci             # codefix + format + lint + test
   (Kong v1.x cannot mix positional args with branching subcommands on the same struct, so
   every list-ish command uses `-S`). `add` accepts variadic positional `Args` (joined with
   spaces); body source resolved by `cmd/fngr/body.go::resolveBody` via the
-  (args, `-e`, stdin TTY-ness) dispatch table; `-e/--edit` forces the editor; bare `fngr add`
+  (args, `-e`, stdin-carries-data) dispatch table; `-e/--edit` forces the editor; bare `fngr add`
   in a TTY auto-launches `$VISUAL`/`$EDITOR`. In text mode, when `--time` is absent, a leading
   time/date token in the title delimited by `": "` (colon+space, so times like `9:30` survive)
   is parsed via `timefmt.SplitTimePrefix` and stripped — `fngr add "9:30: had coffee"` stores
@@ -52,7 +52,12 @@ make ci             # codefix + format + lint + test
   injectable `ioStreams` (`In io.Reader`, `Out io.Writer`, `Err io.Writer`, `IsTTY bool`).
 - `cmd/fngr/prompt.go` — `confirm(in, out, prompt, defaultVal) (bool, error)` shared yes/no helper.
 - `cmd/fngr/body.go` — Body-source dispatch for `fngr add`. `resolveBody` returns the body string
-  from one of {joined args, stdin, editor} per the (args, `-e`, `IsTTY`) dispatch table.
+  from one of {joined args, stdin, editor} per the (args, `-e`, stdin-carries-data) dispatch table.
+  "Piped" means stdin is non-TTY **and** has ≥1 byte — detected via `peekHasData` (a `bufio.Reader`
+  peek that replays the byte), so `fngr add "note"` works in scripts/CI/cron where stdin is an empty
+  `/dev/null` (the old `!IsTTY` proxy mis-fired "ambiguous" there). The args+stdin and `--edit`+stdin
+  conflicts only trip when stdin actually has data; bare non-interactive `add` with no body source
+  errors `event text cannot be empty`.
   `launchEditor` is a `var` for test stubbing; `realLaunchEditor` execs `$VISUAL`/`$EDITOR` on a
   temp file; `errCancel` signals empty-save (handled as exit-0 by `AddCmd.Run`). `readStdin`
   caps reads at `maxStdinBytes` (16 MiB) via `io.LimitReader` so a runaway pipe can't OOM.

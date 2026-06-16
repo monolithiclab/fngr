@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -65,6 +66,38 @@ func TestReadStdin_ExceedsLimit(t *testing.T) {
 type errReader struct{}
 
 func (errReader) Read(_ []byte) (int, error) { return 0, errors.New("boom") }
+
+func TestPeekHasData(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		input string
+		want  bool
+	}{
+		{name: "empty", input: "", want: false},
+		{name: "single-byte", input: "x", want: true},
+		{name: "whitespace-counts-as-data", input: " ", want: true},
+		{name: "multi-line", input: "line one\nline two\n", want: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			has, r := peekHasData(strings.NewReader(tc.input))
+			if has != tc.want {
+				t.Fatalf("peekHasData(%q) = %v, want %v", tc.input, has, tc.want)
+			}
+			// The returned reader must replay the full input, including the
+			// peeked byte, so downstream readStdin sees everything.
+			got, err := io.ReadAll(r)
+			if err != nil {
+				t.Fatalf("ReadAll: %v", err)
+			}
+			if string(got) != tc.input {
+				t.Errorf("replayed = %q, want %q", got, tc.input)
+			}
+		})
+	}
+}
 
 func TestRealLaunchEditor_ExecAndReadback(t *testing.T) {
 	if runtime.GOOS == "windows" {
@@ -187,6 +220,15 @@ func TestResolveBody(t *testing.T) {
 		{name: "editor-cancel", useEditor: true, isTTY: true, stubErr: errCancel, wantInit: "", wantErr: "cancelled"},
 		{name: "empty-arg-rejected", args: []string{""}, isTTY: true, wantErr: "event text cannot be empty"},
 		{name: "whitespace-only-arg-rejected", args: []string{" ", "\t"}, isTTY: true, wantErr: "event text cannot be empty"},
+		// Non-TTY with EMPTY stdin (scripts, CI, cron): args must win, not
+		// trip the ambiguity guard. This is the dogfooding bug fix.
+		{name: "args-nontty-empty-stdin", args: []string{"foo", "bar"}, isTTY: false, stdin: "", wantBody: "foo bar"},
+		// Bare add, non-TTY, nothing piped: no body source at all → reject,
+		// don't fall through to launching an editor in a non-interactive context.
+		{name: "bare-nontty-empty-stdin", isTTY: false, stdin: "", wantErr: "event text cannot be empty"},
+		// -e with empty non-TTY stdin: no real conflict, so honour the editor
+		// request (the launch itself fails later if there's truly no terminal).
+		{name: "edit-flag-nontty-empty-stdin", useEditor: true, isTTY: false, stdin: "", stubBody: "from editor", wantInit: "", wantBody: "from editor"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

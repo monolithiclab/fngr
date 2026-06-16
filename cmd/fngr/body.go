@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -23,7 +24,17 @@ var launchEditor = realLaunchEditor
 // editor cancel.
 func resolveBody(args []string, useEditor bool, io ioStreams) (string, error) {
 	hasArgs := len(args) > 0
-	piped := !io.IsTTY
+
+	// "piped" means stdin actually carries a body, not merely that stdin is
+	// non-interactive. A script, cron job, or CI step runs with stdin bound to
+	// /dev/null (non-TTY, no data); treating that as a piped body broke plain
+	// `fngr add "note"`. Only peek when non-TTY — peeking a real terminal would
+	// block waiting for the user to type.
+	in := io.In
+	piped := false
+	if !io.IsTTY {
+		piped, in = peekHasData(io.In)
+	}
 
 	switch {
 	case hasArgs && piped:
@@ -41,10 +52,26 @@ func resolveBody(args []string, useEditor bool, io ioStreams) (string, error) {
 	case useEditor:
 		return launchEditor("")
 	case piped:
-		return readStdin(io.In)
-	default:
+		return readStdin(in)
+	case io.IsTTY:
+		// Bare interactive `fngr add` opens the editor on an empty buffer.
 		return launchEditor("")
+	default:
+		// Non-interactive with no args and nothing piped: no body source.
+		return "", fmt.Errorf("event text cannot be empty")
 	}
+}
+
+// peekHasData reports whether in carries at least one byte without consuming
+// it, returning a reader that replays the peeked byte. Callers must use the
+// returned reader for subsequent reads. Used to distinguish a genuinely piped
+// body from a merely non-interactive stdin (a script's empty /dev/null).
+func peekHasData(in io.Reader) (bool, io.Reader) {
+	br := bufio.NewReader(in)
+	if _, err := br.Peek(1); err != nil {
+		return false, br // EOF or read error: no body to read.
+	}
+	return true, br
 }
 
 // maxStdinBytes caps stdin reads to bound memory when something large

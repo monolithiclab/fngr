@@ -61,6 +61,19 @@ cycle. Specs land under `docs/superpowers/specs/`, plans under
   only; `fngr event N` and `--format=md` show body too. Pure-SQL
   migration 3 splits via `INSTR`/`SUBSTR` and rebuilds FTS.
 
+## Hardening (dogfooding-driven)
+
+Fixes for real friction surfaced by using the tool, not new features.
+
+- **`add` stdin detection in non-interactive contexts** — `resolveBody`
+  used `!IsTTY` as a proxy for "body was piped in", so `fngr add "note"`
+  run from a script, Makefile, cron job, or CI step (stdin = empty
+  `/dev/null`) wrongly failed with `ambiguous: body via both args and
+  stdin`. "Piped" now means non-TTY **with** data, via a `peekHasData`
+  `bufio.Reader` peek; args win when stdin is empty, while a genuine
+  `echo x | fngr add "y"` still errors. Spec amended in
+  `docs/superpowers/specs/2026-04-20-add-body-input-modes-design.md`.
+
 ## Publishing pipeline polish
 
 Follow-ups from the v0.0.1 release rollout (full context in
