@@ -440,6 +440,22 @@ func errorAtSeq(events []event.Event, errAt int, err error) iter.Seq2[event.Even
 	}
 }
 
+// failWriter fails the failOn-th Write call (1-based), letting tests target
+// a specific write in a multi-write renderer deterministically regardless of
+// payload size. Earlier writes succeed.
+type failWriter struct {
+	calls, failOn int
+	err           error
+}
+
+func (w *failWriter) Write(p []byte) (int, error) {
+	w.calls++
+	if w.calls >= w.failOn {
+		return 0, w.err
+	}
+	return len(p), nil
+}
+
 func TestFlatStream_MatchesFlat(t *testing.T) {
 	pinNow(t, time.Date(2030, 1, 1, 0, 0, 0, 0, time.Local))
 	events := []event.Event{
@@ -511,6 +527,84 @@ func TestJSONStream_EmptyProducesEmptyArray(t *testing.T) {
 	got := strings.TrimSpace(b.String())
 	if got != "[]" {
 		t.Errorf("empty stream produced %q, want %q", got, "[]")
+	}
+}
+
+func TestFlatStream_WriteError(t *testing.T) {
+	t.Parallel()
+	pinNow(t, time.Date(2030, 1, 1, 0, 0, 0, 0, time.Local))
+	events := []event.Event{makeEvent(1, nil, "x", "2026-04-10", "alice")}
+	wantErr := errors.New("boom")
+
+	err := FlatStream(&failWriter{failOn: 1, err: wantErr}, staticSeq(events))
+	if !errors.Is(err, wantErr) {
+		t.Errorf("err = %v, want boom", err)
+	}
+}
+
+func TestCSVStream_WriteError(t *testing.T) {
+	t.Parallel()
+	events := []event.Event{makeEvent(1, nil, "x", "2026-04-10", "alice")}
+	wantErr := errors.New("boom")
+
+	// csv.Writer buffers; the underlying failure surfaces on Flush and is
+	// returned via cw.Error().
+	err := CSVStream(&failWriter{failOn: 1, err: wantErr}, staticSeq(events))
+	if !errors.Is(err, wantErr) {
+		t.Errorf("err = %v, want boom", err)
+	}
+}
+
+func TestCSVStream_PropagatesError(t *testing.T) {
+	t.Parallel()
+	parent := int64(1)
+	events := []event.Event{makeEvent(2, &parent, "ok", "2026-04-10", "alice")}
+	wantErr := errors.New("boom")
+
+	var b bytes.Buffer
+	err := CSVStream(&b, errorAtSeq(events, 1, wantErr))
+	if !errors.Is(err, wantErr) {
+		t.Errorf("err = %v, want boom", err)
+	}
+	// The successfully-yielded row is flushed before the error returns.
+	if !strings.Contains(b.String(), "ok") {
+		t.Errorf("partial output not flushed:\n%s", b.String())
+	}
+}
+
+func TestJSONStream_WriteError(t *testing.T) {
+	t.Parallel()
+	events := []event.Event{
+		makeEvent(1, nil, "a", "2026-04-10", "alice"),
+		makeEvent(2, nil, "b", "2026-04-11", "alice"),
+	}
+	wantErr := errors.New("boom")
+
+	// Fail on successive writes (open bracket, separators, encodes) — every
+	// one must propagate. The two-event stream makes well over six writes.
+	for failOn := 1; failOn <= 6; failOn++ {
+		err := JSONStream(&failWriter{failOn: failOn, err: wantErr}, staticSeq(events))
+		if !errors.Is(err, wantErr) {
+			t.Errorf("failOn=%d: err = %v, want boom", failOn, err)
+		}
+	}
+}
+
+func TestEvent_WriteError(t *testing.T) {
+	t.Parallel()
+	parent := int64(1)
+	ev := makeEvent(2, &parent, "child entry", "2026-04-10", "alice")
+	ev.Body = "a body line"
+	wantErr := errors.New("boom")
+
+	// Event with parent + body + meta makes seven Fprintf writes; failing
+	// each in turn exercises every branch (id, parent, date, title, body,
+	// meta header, meta row).
+	for failOn := 1; failOn <= 7; failOn++ {
+		err := Event(&failWriter{failOn: failOn, err: wantErr}, &ev)
+		if !errors.Is(err, wantErr) {
+			t.Errorf("failOn=%d: err = %v, want boom", failOn, err)
+		}
 	}
 }
 
