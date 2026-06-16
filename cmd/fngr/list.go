@@ -18,7 +18,7 @@ type ListCmd struct {
 	Limit   int    `help:"Maximum events to return (0 = no limit)." short:"n" default:"0"`
 	Reverse bool   `help:"Sort oldest first (default is newest first)." short:"r"`
 	NoPager bool   `help:"Disable the pager even when stdout is a TTY."`
-	Search  string `help:"Filter expression (#tag, @person, key=value, bare words). Operators: & (AND), | (OR), ! (NOT)." short:"S"`
+	Search  string `help:"Filter expression (#tag, @person, key=value, bare words). Operators: & (AND), | (OR), ! (NOT); no grouping parentheses." short:"S"`
 }
 
 func (c *ListCmd) Run(s eventStore, io ioStreams) error {

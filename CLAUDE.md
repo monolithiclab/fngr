@@ -47,7 +47,7 @@ make ci             # codefix + format + lint + test
   `meta` is a sub-command tree too: `fngr meta` lists with optional `-S` filter (bare key,
   key=value, @person, #tag), `meta rename` and `meta delete` mutate (both accept the same
   shorthand). None of the event verbs prompt; meta verbs prompt with the destructive-vs-additive
-  defaults (rename `[Y/n]`, delete `[y/N]`).
+  defaults (rename `[Y/n]`, delete `[y/N]`); `-f`/`--force` skips the prompt on both.
 - `cmd/fngr/store.go` — Defines the narrow `eventStore` interface that commands depend on plus the
   injectable `ioStreams` (`In io.Reader`, `Out io.Writer`, `Err io.Writer`, `IsTTY bool`).
 - `cmd/fngr/prompt.go` — `confirm(in, out, prompt, defaultVal) (bool, error)` shared yes/no helper.
