@@ -475,6 +475,71 @@ func TestDeleteMeta_RejectsWellKnownKey(t *testing.T) {
 	}
 }
 
+func TestUpdateMeta_ResyncsFTS(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	for range 2 {
+		if _, err := Add(ctx, database, AddInput{Title: "deploy", Meta: []parse.Meta{
+			{Key: MetaKeyTag, Value: "ops"},
+		}}); err != nil {
+			t.Fatalf("Add: %v", err)
+		}
+	}
+
+	n, err := UpdateMeta(ctx, database, MetaKeyTag, "ops", MetaKeyTag, "infra")
+	if err != nil {
+		t.Fatalf("UpdateMeta: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("UpdateMeta rows = %d, want 2", n)
+	}
+
+	// FTS index must reflect the rename: #infra finds both, #ops finds none.
+	infra, err := List(ctx, database, ListOpts{Filter: "#infra"})
+	if err != nil {
+		t.Fatalf("List #infra: %v", err)
+	}
+	if len(infra) != 2 {
+		t.Errorf("search #infra = %d events, want 2 (FTS stale after rename)", len(infra))
+	}
+	ops, err := List(ctx, database, ListOpts{Filter: "#ops"})
+	if err != nil {
+		t.Fatalf("List #ops: %v", err)
+	}
+	if len(ops) != 0 {
+		t.Errorf("search #ops = %d events, want 0 (FTS stale after rename)", len(ops))
+	}
+}
+
+func TestDeleteMeta_ResyncsFTS(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	if _, err := Add(ctx, database, AddInput{Title: "deploy", Meta: []parse.Meta{
+		{Key: MetaKeyTag, Value: "ops"},
+	}}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	n, err := DeleteMeta(ctx, database, MetaKeyTag, "ops")
+	if err != nil {
+		t.Fatalf("DeleteMeta: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("DeleteMeta rows = %d, want 1", n)
+	}
+
+	// FTS index must reflect the deletion: #ops finds nothing.
+	ops, err := List(ctx, database, ListOpts{Filter: "#ops"})
+	if err != nil {
+		t.Fatalf("List #ops: %v", err)
+	}
+	if len(ops) != 0 {
+		t.Errorf("search #ops = %d events, want 0 (FTS stale after delete)", len(ops))
+	}
+}
+
 func TestHasChildren_False(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)

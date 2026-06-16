@@ -571,14 +571,41 @@ func UpdateMeta(ctx context.Context, db *sql.DB, oldKey, oldValue, newKey, newVa
 	if wellKnownMetaKeys[oldKey] {
 		return 0, fmt.Errorf("cannot rename well-known meta key %q", oldKey)
 	}
-	res, err := db.ExecContext(ctx,
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Capture affected events before the rename so we can resync their FTS
+	// content (the indexed string includes key=value meta tokens).
+	ids, err := metaEventIDs(ctx, tx, oldKey, oldValue)
+	if err != nil {
+		return 0, err
+	}
+
+	res, err := tx.ExecContext(ctx,
 		"UPDATE event_meta SET key = ?, value = ? WHERE key = ? AND value = ?",
 		newKey, newValue, oldKey, oldValue,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("update meta: %w", err)
 	}
-	return res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("rows affected: %w", err)
+	}
+
+	for _, id := range ids {
+		if err := rebuildEventFTS(ctx, tx, id); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit transaction: %w", err)
+	}
+	return n, nil
 }
 
 // DeleteMeta removes every (key, value) tuple across all events and
@@ -588,14 +615,68 @@ func DeleteMeta(ctx context.Context, db *sql.DB, key, value string) (int64, erro
 	if wellKnownMetaKeys[key] {
 		return 0, fmt.Errorf("cannot delete well-known meta key %q", key)
 	}
-	res, err := db.ExecContext(ctx,
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Capture affected events before the delete so we can resync their FTS
+	// content (the indexed string includes key=value meta tokens).
+	ids, err := metaEventIDs(ctx, tx, key, value)
+	if err != nil {
+		return 0, err
+	}
+
+	res, err := tx.ExecContext(ctx,
 		"DELETE FROM event_meta WHERE key = ? AND value = ?",
 		key, value,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("delete meta: %w", err)
 	}
-	return res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("rows affected: %w", err)
+	}
+
+	for _, id := range ids {
+		if err := rebuildEventFTS(ctx, tx, id); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit transaction: %w", err)
+	}
+	return n, nil
+}
+
+// metaEventIDs returns the distinct event IDs carrying the given (key, value)
+// meta tuple. Used by UpdateMeta/DeleteMeta to know which events' FTS content
+// needs rebuilding after the tuple is renamed or removed.
+func metaEventIDs(ctx context.Context, tx *sql.Tx, key, value string) ([]int64, error) {
+	rows, err := tx.QueryContext(ctx,
+		"SELECT DISTINCT event_id FROM event_meta WHERE key = ? AND value = ?",
+		key, value,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("query meta event ids: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan meta event id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate meta event ids: %w", err)
+	}
+	return ids, nil
 }
 
 // CountMeta returns the number of events carrying the given (key, value)
