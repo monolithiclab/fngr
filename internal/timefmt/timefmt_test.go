@@ -1,6 +1,7 @@
 package timefmt
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -317,6 +318,10 @@ func TestParseRelative(t *testing.T) {
 		{"negative count", "-2 days ago", false, false, false, time.Time{}},
 		{"day with bad time", "yesterday at noon", false, false, false, time.Time{}},
 		{"absolute date untouched", "2026-04-15", false, false, false, time.Time{}},
+		{"count above maxRelCount", "1000001 days ago", false, false, false, time.Time{}},
+		// Used to wrap int64 in `time.Duration(n) * time.Hour` and resolve one
+		// hour into the *future* from an "ago" expression.
+		{"int64 overflow", "9223372036854775807 hours ago", false, false, false, time.Time{}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -552,5 +557,153 @@ func TestSpliceDate(t *testing.T) {
 	}
 	if got.Location() != loc {
 		t.Errorf("location not preserved: %v", got.Location())
+	}
+}
+
+// TestAddMonths_ClampsToMonthEnd covers the Feb-31 rollover: time.AddDate
+// normalizes overflow, so subtracting a month from the 31st used to land back
+// in the *current* month (2026-03-31 -> 2026-03-03).
+func TestAddMonths_ClampsToMonthEnd(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		from   time.Time
+		months int
+		want   time.Time
+	}{
+		{"Mar 31 minus 1 month", time.Date(2026, 3, 31, 9, 15, 30, 0, time.Local), -1,
+			time.Date(2026, 2, 28, 9, 15, 30, 0, time.Local)},
+		{"Mar 31 minus 1 month in a leap year", time.Date(2024, 3, 31, 9, 15, 30, 0, time.Local), -1,
+			time.Date(2024, 2, 29, 9, 15, 30, 0, time.Local)},
+		{"May 31 minus 3 months", time.Date(2026, 5, 31, 0, 0, 0, 0, time.Local), -3,
+			time.Date(2026, 2, 28, 0, 0, 0, 0, time.Local)},
+		{"Jul 31 minus 1 month lands on a 30-day month", time.Date(2026, 7, 31, 0, 0, 0, 0, time.Local), -1,
+			time.Date(2026, 6, 30, 0, 0, 0, 0, time.Local)},
+		{"Jan 31 minus 1 month crosses the year", time.Date(2026, 1, 31, 0, 0, 0, 0, time.Local), -1,
+			time.Date(2025, 12, 31, 0, 0, 0, 0, time.Local)},
+		{"day that needs no clamp is untouched", time.Date(2026, 3, 15, 12, 0, 0, 0, time.Local), -1,
+			time.Date(2026, 2, 15, 12, 0, 0, 0, time.Local)},
+		{"12 months back is the same date a year earlier", time.Date(2026, 6, 10, 8, 0, 0, 0, time.Local), -12,
+			time.Date(2025, 6, 10, 8, 0, 0, 0, time.Local)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := addMonths(tt.from, tt.months); !got.Equal(tt.want) {
+				t.Errorf("addMonths(%v, %d) = %v, want %v", tt.from, tt.months, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestParsePartial_RejectsOutOfRangeYear guards the storage format: a year
+// outside 1-9999 formats to a string SQLite stores but the driver cannot read
+// back, which used to poison every read of the table.
+func TestParsePartial_RejectsOutOfRangeYear(t *testing.T) {
+	t.Parallel()
+	// Within maxRelCount, so the count bound does not catch these — only the
+	// year check does.
+	inputs := []string{
+		"999999 days ago",
+		"24313 months ago", // the smallest month count that goes negative
+	}
+	for _, in := range inputs {
+		t.Run(in, func(t *testing.T) {
+			t.Parallel()
+			got, _, _, err := ParsePartial(in)
+			if err == nil {
+				t.Fatalf("ParsePartial(%q) = %v, want an out-of-range error", in, got)
+			}
+			if !strings.Contains(err.Error(), "outside the supported range") {
+				t.Errorf("ParsePartial(%q) err = %v, want an out-of-range message", in, err)
+			}
+		})
+	}
+}
+
+// TestSplitTimePrefix_OutOfRangeIsNotATimestamp is the untrusted-content path:
+// piped text whose first ": "-delimited token is an absurd relative time must
+// be left alone as a title, not parsed into an unstorable timestamp.
+func TestSplitTimePrefix_OutOfRangeIsNotATimestamp(t *testing.T) {
+	t.Parallel()
+	const in = "2147483647 months ago: meeting notes from a scraped page"
+	got, rest, ok := SplitTimePrefix(in)
+	if ok {
+		t.Fatalf("SplitTimePrefix(%q) parsed a prefix (%v), want it left verbatim", in, got)
+	}
+	if rest != in {
+		t.Errorf("SplitTimePrefix(%q) rest = %q, want the input unchanged", in, rest)
+	}
+}
+
+// TestStorageRoundTrip pins the encoding shared by the write path and the
+// date-range bounds: UTC, fixed width, and readable back by ParseStorage.
+func TestStorageRoundTrip(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		in   time.Time
+		want string
+	}{
+		{"utc", time.Date(2026, 7, 27, 14, 7, 26, 0, time.UTC), "2026-07-27 14:07:26"},
+		{"converted to utc", time.Date(2026, 7, 27, 14, 7, 26, 0, time.FixedZone("x", 2*60*60)),
+			"2026-07-27 12:07:26"},
+		{"sub-second truncated", time.Date(2026, 7, 27, 14, 7, 26, 999_000_000, time.UTC),
+			"2026-07-27 14:07:26"},
+		{"first representable year", time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC), "0001-01-01 00:00:00"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := FormatStorage(tt.in)
+			if got != tt.want {
+				t.Fatalf("FormatStorage(%v) = %q, want %q", tt.in, got, tt.want)
+			}
+			back, ok := ParseStorage(got)
+			if !ok {
+				t.Fatalf("ParseStorage(%q) failed", got)
+			}
+			if want := tt.in.UTC().Truncate(time.Second); !back.Equal(want) {
+				t.Errorf("round trip = %v, want %v", back, want)
+			}
+		})
+	}
+}
+
+// TestParseStorage_Rejects covers what a pre-guard build could leave behind.
+func TestParseStorage_Rejects(t *testing.T) {
+	t.Parallel()
+	for _, in := range []string{"", "-0712-08-29 14:07:26", "2026-07-27T14:07:26Z", "2026-07-27"} {
+		t.Run(in, func(t *testing.T) {
+			t.Parallel()
+			if got, ok := ParseStorage(in); ok {
+				t.Errorf("ParseStorage(%q) = %v, true; want ok=false", in, got)
+			}
+		})
+	}
+}
+
+// TestInRange pins the bounds the storage layer re-checks.
+func TestInRange(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		t    time.Time
+		want bool
+	}{
+		{"typical", time.Date(2026, 7, 27, 0, 0, 0, 0, time.UTC), true},
+		{"first representable year", time.Date(1, 1, 1, 0, 0, 0, 0, time.UTC), true},
+		{"last representable year", time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC), true},
+		{"year zero", time.Date(0, 1, 1, 0, 0, 0, 0, time.UTC), false},
+		{"negative year", time.Date(-712, 8, 29, 0, 0, 0, 0, time.UTC), false},
+		{"five digit year", time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := InRange(tt.t); got != tt.want {
+				t.Errorf("InRange(%v) = %v, want %v", tt.t, got, tt.want)
+			}
+		})
 	}
 }

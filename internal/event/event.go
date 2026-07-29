@@ -21,6 +21,10 @@ var ErrNotFound = errors.New("not found")
 // the self-parent case).
 var ErrCycle = errors.New("would create a parent cycle")
 
+// ErrTimeRange is returned when a timestamp cannot be represented in the
+// storage format.
+var ErrTimeRange = errors.New("timestamp out of range")
+
 // Event is a single journal entry as stored, complete with its parsed
 // metadata. CreatedAt is in UTC at the SQL boundary; renderers convert
 // to local time for display.
@@ -137,9 +141,13 @@ func addInTx(ctx context.Context, tx *sql.Tx, inputs []AddInput) ([]int64, error
 
 		var res sql.Result
 		if in.CreatedAt != nil {
+			createdAt, ferr := formatTimestamp(*in.CreatedAt)
+			if ferr != nil {
+				return nil, ferr
+			}
 			res, err = tx.ExecContext(ctx,
 				"INSERT INTO events (parent_id, title, body, created_at) VALUES (?, ?, ?, ?)",
-				in.ParentID, in.Title, in.Body, in.CreatedAt.UTC().Format(timefmt.DateTimeFormat),
+				in.ParentID, in.Title, in.Body, createdAt,
 			)
 		} else {
 			res, err = tx.ExecContext(ctx,
@@ -228,6 +236,13 @@ func Update(ctx context.Context, db *sql.DB, id int64, title, body *string, crea
 	if title != nil && *title == "" {
 		return fmt.Errorf("title cannot be empty")
 	}
+	var stamp string
+	if createdAt != nil {
+		var err error
+		if stamp, err = formatTimestamp(*createdAt); err != nil {
+			return err
+		}
+	}
 
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -266,7 +281,7 @@ func Update(ctx context.Context, db *sql.DB, id int64, title, body *string, crea
 	}
 	if createdAt != nil {
 		sets = append(sets, "created_at = ?")
-		args = append(args, createdAt.UTC().Format(timefmt.DateTimeFormat))
+		args = append(args, stamp)
 	}
 	args = append(args, id)
 	if _, err := tx.ExecContext(ctx, "UPDATE events SET "+strings.Join(sets, ", ")+" WHERE id = ?", args...); err != nil { // #nosec G202 -- sets is built from a fixed allow-list
@@ -786,14 +801,10 @@ func ListSeq(ctx context.Context, db *sql.DB, opts ListOpts) iter.Seq2[Event, er
 		}
 
 		for rows.Next() {
-			var e Event
-			var parentID sql.NullInt64
-			if err := rows.Scan(&e.ID, &parentID, &e.Title, &e.Body, &e.CreatedAt); err != nil {
-				yield(Event{}, fmt.Errorf("scan event: %w", err))
+			e, err := scanEventRow(rows)
+			if err != nil {
+				yield(Event{}, err)
 				return
-			}
-			if parentID.Valid {
-				e.ParentID = &parentID.Int64
 			}
 			batch = append(batch, e)
 			if len(batch) >= metaBatchSize {
@@ -850,13 +861,17 @@ func buildListQuery(opts ListOpts) (string, []any) {
 			WHERE 1=1`
 	}
 
+	// Bounds are compared lexically against the stored TEXT, so they have to
+	// use the same encoder as the write path. No range check: an out-of-range
+	// bound only ever matches nothing or everything, which is what the user
+	// asked for.
 	if opts.From != nil {
 		query += " AND e.created_at >= ?"
-		args = append(args, opts.From.UTC().Format(timefmt.DateTimeFormat))
+		args = append(args, timefmt.FormatStorage(*opts.From))
 	}
 	if opts.To != nil {
 		query += " AND e.created_at < ?"
-		args = append(args, opts.To.UTC().Format(timefmt.DateTimeFormat))
+		args = append(args, timefmt.FormatStorage(*opts.To))
 	}
 
 	if opts.Ascending {
@@ -900,16 +915,81 @@ func GetSubtree(ctx context.Context, db *sql.DB, rootID int64) ([]Event, error) 
 	return events, nil
 }
 
+// formatTimestamp renders t for the created_at column.
+//
+// The range check is the last line of defence, not the first: timefmt rejects
+// out-of-range input at parse time. It is here because a timestamp can also
+// arrive from --format=json or from a caller setting AddInput.CreatedAt
+// directly — see timeScanner for what an unstorable year does to reads.
+func formatTimestamp(t time.Time) (string, error) {
+	u := t.UTC()
+	if !timefmt.InRange(u) {
+		return "", fmt.Errorf("%w: year %d", ErrTimeRange, u.Year())
+	}
+	return timefmt.FormatStorage(u), nil
+}
+
+// scanEventRow reads one (id, parent_id, title, body, created_at) row.
+func scanEventRow(rows *sql.Rows) (Event, error) {
+	var e Event
+	var parentID sql.NullInt64
+	if err := rows.Scan(&e.ID, &parentID, &e.Title, &e.Body, timeScanner{&e.CreatedAt}); err != nil {
+		return Event{}, fmt.Errorf("scan event: %w", err)
+	}
+	if parentID.Valid {
+		e.ParentID = &parentID.Int64
+	}
+	return e, nil
+}
+
+// timeScanner reads created_at without ever failing.
+//
+// Scanning straight into a *time.Time is what we want but cannot have: the
+// driver converts a well-formed TEXT timestamp itself and hands back the raw
+// string when it cannot, and the default conversion then errors with
+// "unsupported Scan, storing driver.Value type string into type *time.Time".
+// That error aborted the whole result set, so a single row written by an older
+// build with an out-of-range year made every read command fail — including the
+// Get that `delete` runs first, leaving no CLI path to remove it.
+//
+// Such a row now yields the zero time and stays listable and deletable. New
+// rows cannot reach that state: formatTimestamp rejects them on write.
+type timeScanner struct{ dst *time.Time }
+
+func (s timeScanner) Scan(v any) error {
+	*s.dst = timeFromDriverValue(v)
+	return nil
+}
+
+// timeFromDriverValue converts whatever the driver produced for created_at
+// into a time.Time, returning the zero time when the value is unusable.
+//
+// A value the driver could not parse arrives here as a string, and this cannot
+// parse it either — that is the recovery path, and it yields the zero time.
+// The parse is here for the other case: a driver that stops auto-converting
+// would otherwise silently zero every timestamp in the database.
+func timeFromDriverValue(v any) time.Time {
+	var s string
+	switch v := v.(type) {
+	case time.Time:
+		return v
+	case string:
+		s = v
+	case []byte:
+		s = string(v)
+	default:
+		return time.Time{}
+	}
+	t, _ := timefmt.ParseStorage(s)
+	return t
+}
+
 func scanEvents(ctx context.Context, db *sql.DB, rows *sql.Rows) ([]Event, error) {
 	var events []Event
 	for rows.Next() {
-		var e Event
-		var parentID sql.NullInt64
-		if err := rows.Scan(&e.ID, &parentID, &e.Title, &e.Body, &e.CreatedAt); err != nil {
-			return nil, fmt.Errorf("scan event: %w", err)
-		}
-		if parentID.Valid {
-			e.ParentID = &parentID.Int64
+		e, err := scanEventRow(rows)
+		if err != nil {
+			return nil, err
 		}
 		events = append(events, e)
 	}

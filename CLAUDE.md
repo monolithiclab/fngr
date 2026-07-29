@@ -108,6 +108,16 @@ make ci             # codefix + format + lint + test
   `FormatRelative(t, now)` returns the compact list-line
   stamp via the layout constants `LayoutToday` / `LayoutThisYear` / `LayoutOlder`. Canonical
   `DateFormat` / `DateTimeFormat` layouts used for storage and event-detail display.
+  `FormatStorage` / `ParseStorage` are the encode/decode pair for the `created_at` TEXT column —
+  the write path *and* the `--from`/`--to` bounds (compared lexically against stored text) must
+  both go through `FormatStorage` or they drift apart.
+  Two bounds keep the parser from producing an unstorable timestamp: `relCountUnit` rejects counts
+  above `maxRelCount` (1e6 — `time.Duration(n) * time.Hour` overflows int64 past ~2.56e6 and wraps
+  to a *future* offset), and `ParsePartial` rejects any result outside year `[1, 9999]`, exported
+  as the `InRange` predicate. Out-of-range matters because `DateTimeFormat` renders such a year
+  into a string SQLite stores but the driver cannot scan back — one such row broke every read of
+  the table. Month arithmetic goes through `addMonths`, which clamps the day to the target month's
+  last day; plain `AddDate` normalizes Feb 31 forward to Mar 3.
 - `internal/event/meta.go` — Domain meta key constants (`MetaKeyAuthor`, etc.), `CollectMeta`
   merges all meta sources (author, body tags, flags) with dedup.
 - `internal/event/event.go` — Data access functions: `Add` (transactional event + meta + FTS),
@@ -120,11 +130,19 @@ make ci             # codefix + format + lint + test
   ancestry cycles via `ErrCycle`), `AddTags` / `RemoveTags` (event-scoped meta CRUD with FTS
   resync), `Delete`, `HasChildren`, `List` / `ListSeq` (FTS5 filter + date range + `Limit` +
   `Ascending`), `GetSubtree` (recursive CTE), `ListMeta` (filtered via `ListMetaOpts{Key, Value}`),
-  `CountMeta`, `UpdateMeta`, `DeleteMeta`. All functions accept `context.Context`. `ErrNotFound` and `ErrCycle` sentinels.
+  `CountMeta`, `UpdateMeta`, `DeleteMeta`. All functions accept `context.Context`. `ErrNotFound`,
+  `ErrCycle` and `ErrTimeRange` sentinels.
   `loadMetaBatch` chunks the IN clause to stay under SQLite's parameter limit. Private helpers:
   `requireEventExists` (existence check used by every mutation function), `rebuildEventFTS`
   (used by Update/AddTags/RemoveTags to resync `events_fts`), `deleteMetaTuples` /
-  `insertMetaTuples` (used by Update's body-tag sync path).
+  `insertMetaTuples` (used by Update's body-tag sync path), `formatTimestamp` (the only writer of
+  `created_at`; re-checks `timefmt.InRange` because a timestamp can bypass the CLI parser via
+  `--format=json` or a directly-built `AddInput`), and `scanEventRow` (the only reader — shared by
+  `scanEvents` and `ListSeq`). `created_at` is read through a `timeScanner` rather than scanned
+  straight into a `time.Time`: the driver hands back a raw string for a value it cannot parse, and
+  the default conversion then failed the *entire* result set, so one bad row written by an older
+  build broke list, show and delete alike (delete calls `Get` first). `timeScanner` never errors —
+  such a row reads as the zero time and stays deletable.
 - `internal/event/store.go` — `Store` wrapper that exposes the package functions as methods on a
   single `*sql.DB`, satisfying `cmd/fngr.eventStore`.
 - `internal/event/filter.go` — Filter expression preprocessor: expands `#`/`@` shorthands and

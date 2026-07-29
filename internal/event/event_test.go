@@ -12,6 +12,7 @@ import (
 
 	"github.com/monolithiclab/fngr/internal/db"
 	"github.com/monolithiclab/fngr/internal/parse"
+	"github.com/monolithiclab/fngr/internal/timefmt"
 )
 
 var ctx = context.Background()
@@ -1621,5 +1622,152 @@ func TestUpdate_BodyTagSyncAcrossFields(t *testing.T) {
 	}
 	if len(wantSet) != 0 {
 		t.Errorf("missing meta after move: %v", wantSet)
+	}
+}
+
+// TestAdd_RejectsOutOfRangeTimestamp is the storage-layer backstop for C2.
+// timefmt rejects absurd relative offsets at parse time, but a CreatedAt can
+// also arrive from --format=json or from a caller building AddInput directly,
+// and a year outside 1-9999 formats to a string the driver cannot read back.
+// The bounds themselves are TestInRange's job; this only proves Add consults
+// them and writes nothing when they fail.
+func TestAdd_RejectsOutOfRangeTimestamp(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	bad := time.Date(-712, 8, 29, 14, 7, 26, 0, time.UTC)
+	if _, err := Add(ctx, database, AddInput{Title: "x", CreatedAt: &bad}); !errors.Is(err, ErrTimeRange) {
+		t.Fatalf("Add: err = %v, want ErrTimeRange", err)
+	}
+	events, err := List(ctx, database, ListOpts{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(events) != 0 {
+		t.Errorf("rejected Add left %d events behind", len(events))
+	}
+}
+
+// TestUpdate_RejectsOutOfRangeTimestamp mirrors the Add guard on the edit path.
+func TestUpdate_RejectsOutOfRangeTimestamp(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	id, err := Add(ctx, database, AddInput{Title: "ok"})
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	bad := time.Date(-1, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := Update(ctx, database, id, nil, nil, &bad); !errors.Is(err, ErrTimeRange) {
+		t.Fatalf("Update: err = %v, want ErrTimeRange", err)
+	}
+
+	// The rejected write must not have partially landed.
+	ev, err := Get(ctx, database, id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !timefmt.InRange(ev.CreatedAt) {
+		t.Errorf("CreatedAt = %v, want the original in-range timestamp", ev.CreatedAt)
+	}
+}
+
+// TestScan_PoisonedTimestampStaysUsable covers a database already damaged by
+// an older build. A created_at the driver cannot convert used to abort the
+// whole result set, so list, show and even delete failed — delete calls Get
+// first, leaving no CLI path to remove the row. The row must now read back
+// with a zero CreatedAt and stay deletable, and its neighbours must survive.
+func TestScan_PoisonedTimestampStaysUsable(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	if _, err := Add(ctx, database, AddInput{Title: "healthy before"}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	res, err := database.ExecContext(ctx,
+		`INSERT INTO events (parent_id, title, body, created_at) VALUES (NULL, ?, '', ?)`,
+		"poisoned", "-0712-08-29 14:07:26")
+	if err != nil {
+		t.Fatalf("insert poisoned row: %v", err)
+	}
+	badID, err := res.LastInsertId()
+	if err != nil {
+		t.Fatalf("LastInsertId: %v", err)
+	}
+	if _, err := Add(ctx, database, AddInput{Title: "healthy after"}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	events, err := List(ctx, database, ListOpts{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(events) != 3 {
+		t.Fatalf("List returned %d events, want 3", len(events))
+	}
+
+	// Streaming path too — it scans rows independently of List.
+	var streamed int
+	for _, err := range ListSeq(ctx, database, ListOpts{}) {
+		if err != nil {
+			t.Fatalf("ListSeq: %v", err)
+		}
+		streamed++
+	}
+	if streamed != 3 {
+		t.Errorf("ListSeq yielded %d events, want 3", streamed)
+	}
+
+	ev, err := Get(ctx, database, badID)
+	if err != nil {
+		t.Fatalf("Get(poisoned): %v", err)
+	}
+	if ev.Title != "poisoned" {
+		t.Errorf("Title = %q, want %q", ev.Title, "poisoned")
+	}
+	if !ev.CreatedAt.IsZero() {
+		t.Errorf("CreatedAt = %v, want the zero time for an unreadable stamp", ev.CreatedAt)
+	}
+
+	if err := Delete(ctx, database, badID); err != nil {
+		t.Fatalf("Delete(poisoned): %v", err)
+	}
+	remaining, err := List(ctx, database, ListOpts{})
+	if err != nil {
+		t.Fatalf("List after delete: %v", err)
+	}
+	if len(remaining) != 2 {
+		t.Errorf("after delete: %d events, want 2", len(remaining))
+	}
+}
+
+// TestTimeFromDriverValue covers the conversion directly. The string branch is
+// live — it is what a poisoned row takes — but its *successful* parse, and the
+// []byte branch, are unreachable through the current driver, which converts
+// the canonical layout itself. They exist so a driver upgrade that stops
+// auto-converting degrades instead of zeroing every timestamp.
+func TestTimeFromDriverValue(t *testing.T) {
+	t.Parallel()
+	want := time.Date(2026, 7, 27, 14, 7, 26, 0, time.UTC)
+	tests := []struct {
+		name string
+		in   any
+		want time.Time
+	}{
+		{"time.Time passes through", want, want},
+		{"canonical string", "2026-07-27 14:07:26", want},
+		{"canonical bytes", []byte("2026-07-27 14:07:26"), want},
+		{"unparseable string", "-0712-08-29 14:07:26", time.Time{}},
+		{"unparseable bytes", []byte("not a time"), time.Time{}},
+		{"nil", nil, time.Time{}},
+		{"unexpected type", int64(42), time.Time{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := timeFromDriverValue(tt.in); !got.Equal(tt.want) {
+				t.Errorf("timeFromDriverValue(%v) = %v, want %v", tt.in, got, tt.want)
+			}
+		})
 	}
 }

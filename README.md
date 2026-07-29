@@ -327,6 +327,15 @@ mv ~/.fngr.db.recovered ~/.fngr.db
 If recovery fails too, delete the file (`rm ~/.fngr.db`) and start
 fresh — `fngr add` will re-create the schema.
 
+**An event dated `Jan 01 0001`** — its stored timestamp is unreadable.
+Versions before v0.0.3 accepted absurd relative offsets (`fngr add x -t
+'1000000 days ago'`) and wrote a negative-year timestamp; such a row used
+to make *every* read command fail. It now shows as the zero date instead,
+so the row stays usable: repair it with `fngr event date <id> <date>`
+followed by `fngr event time <id> <time>` (the date verb keeps the old
+time-of-day, which is also meaningless here), or just delete it. New
+input is rejected at parse time.
+
 **`event title cannot be empty`** — `fngr add` (no args, no piped
 stdin) launches `$VISUAL` / `$EDITOR`; saving an empty buffer is
 treated as a cancel. To force an empty event, that's not supported
