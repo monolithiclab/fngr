@@ -1,12 +1,15 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -300,86 +303,6 @@ func TestOpen_CreateFalseNotExists(t *testing.T) {
 	}
 }
 
-func TestOpen_ForeignKeysEnabled(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "fk.db")
-
-	database, err := Open(dbPath, true)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer database.Close()
-
-	var fkEnabled int
-	if err := database.QueryRow("PRAGMA foreign_keys").Scan(&fkEnabled); err != nil {
-		t.Fatalf("PRAGMA foreign_keys: %v", err)
-	}
-	if fkEnabled != 1 {
-		t.Errorf("foreign_keys = %d, want 1", fkEnabled)
-	}
-}
-
-func TestOpen_WALMode(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "wal.db")
-
-	database, err := Open(dbPath, true)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer database.Close()
-
-	var journalMode string
-	if err := database.QueryRow("PRAGMA journal_mode").Scan(&journalMode); err != nil {
-		t.Fatalf("PRAGMA journal_mode: %v", err)
-	}
-	if journalMode != "wal" {
-		t.Errorf("journal_mode = %q, want %q", journalMode, "wal")
-	}
-}
-
-func TestOpen_BusyTimeout(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "busy.db")
-
-	database, err := Open(dbPath, true)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer database.Close()
-
-	var timeout int
-	if err := database.QueryRow("PRAGMA busy_timeout").Scan(&timeout); err != nil {
-		t.Fatalf("PRAGMA busy_timeout: %v", err)
-	}
-	if timeout != 5000 {
-		t.Errorf("busy_timeout = %d, want 5000", timeout)
-	}
-}
-
-func TestOpen_SynchronousNormal(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "sync.db")
-
-	database, err := Open(dbPath, true)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer database.Close()
-
-	var syncMode int
-	if err := database.QueryRow("PRAGMA synchronous").Scan(&syncMode); err != nil {
-		t.Fatalf("PRAGMA synchronous: %v", err)
-	}
-	if syncMode != 1 {
-		t.Errorf("synchronous = %d, want 1 (NORMAL)", syncMode)
-	}
-}
-
 func TestMigrate_V2DedupesAndAddsUnique(t *testing.T) {
 	t.Parallel()
 	db := testDB(t)
@@ -525,5 +448,120 @@ func TestMigrate_V3SplitsTitleBody(t *testing.T) {
 	}
 	if emptyFTS != "hello" {
 		t.Errorf("FTS content for row 1 = %q, want %q", emptyFTS, "hello")
+	}
+}
+
+// TestOpen_PragmasApplyToEveryPooledConnection is the regression test for the
+// pool-scope half of the DSN fix: a post-open db.Exec configures only the one
+// connection it lands on. Holding connections open forces the pool to
+// establish fresh ones. See dsn() in db.go.
+func TestOpen_PragmasApplyToEveryPooledConnection(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	database, err := Open(filepath.Join(t.TempDir(), "pool.db"), true)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer database.Close()
+
+	want := []struct{ pragma, value string }{
+		{"busy_timeout", "5000"},
+		{"foreign_keys", "1"},
+		{"journal_mode", "wal"},
+		{"synchronous", "1"},
+	}
+
+	// Each iteration keeps the previous connections open, so the pool cannot
+	// hand back the one Open already configured.
+	for i := range 4 {
+		c, err := database.Conn(ctx)
+		if err != nil {
+			t.Fatalf("Conn %d: %v", i, err)
+		}
+		defer c.Close()
+
+		for _, w := range want {
+			var got string
+			if err := c.QueryRowContext(ctx, "PRAGMA "+w.pragma).Scan(&got); err != nil {
+				t.Fatalf("conn %d: PRAGMA %s: %v", i, w.pragma, err)
+			}
+			if got != w.value {
+				t.Errorf("conn %d: %s = %q, want %q", i, w.pragma, got, w.value)
+			}
+		}
+	}
+}
+
+// TestOpen_ConcurrentWritersAllSucceed guards the user-visible symptom: with
+// busy_timeout missing on the pool's later connections, parallel writers fail
+// instantly with SQLITE_BUSY and their events are lost without a trace.
+func TestOpen_ConcurrentWritersAllSucceed(t *testing.T) {
+	t.Parallel()
+	dbPath := filepath.Join(t.TempDir(), "concurrent.db")
+
+	database, err := Open(dbPath, true)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer database.Close()
+
+	const writers = 10
+	var wg sync.WaitGroup
+	errs := make(chan error, writers)
+	for i := range writers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := database.Exec(
+				"INSERT INTO events (title, body, created_at) VALUES (?, '', '2026-01-01 00:00:00')",
+				fmt.Sprintf("event %d", i),
+			)
+			if err != nil {
+				errs <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		t.Errorf("concurrent insert: %v", err)
+	}
+
+	var count int
+	if err := database.QueryRow("SELECT COUNT(*) FROM events").Scan(&count); err != nil {
+		t.Fatalf("count events: %v", err)
+	}
+	if count != writers {
+		t.Errorf("stored %d events, want %d", count, writers)
+	}
+}
+
+// TestOpen_PathWithURISpecialChars covers the escaping half of dsn(): the
+// driver opens with SQLITE_OPEN_URI, so an unescaped '?' or '#' would
+// truncate the filename and '%' would start an escape sequence.
+func TestOpen_PathWithURISpecialChars(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	for _, name := range []string{"a?b.db", "c#d.db", "e%f.db", "g h.db"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			dbPath := filepath.Join(dir, name)
+
+			database, err := Open(dbPath, true)
+			if err != nil {
+				t.Fatalf("Open(%q): %v", dbPath, err)
+			}
+			defer database.Close()
+
+			if _, err := database.Exec("INSERT INTO events (title) VALUES ('x')"); err != nil {
+				t.Fatalf("insert: %v", err)
+			}
+			if _, err := os.Stat(dbPath); err != nil {
+				t.Errorf("expected database at %q: %v", dbPath, err)
+			}
+		})
 	}
 }
