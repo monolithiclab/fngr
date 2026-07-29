@@ -26,7 +26,7 @@ under concurrent writes, and the README states the opposite.**
 | ID | Severity | Area | One-line | Status |
 | --- | --- | --- | --- | --- |
 | [C1](#c1) | **Critical** | db | Pooled-connection PRAGMAs → concurrent `add` silently loses events; `foreign_keys=OFF` on most connections | ✅ fixed |
-| [C2](#c2) | **Critical** | timefmt | Unbounded relative offset writes a negative-year timestamp that bricks every read; reachable from piped content | open |
+| [C2](#c2) | **Critical** | timefmt | Unbounded relative offset writes a negative-year timestamp that bricks every read; reachable from piped content | ✅ fixed |
 | [C3](#c3) | **Critical** | json | Documented JSON round-trip silently corrupts the event tree | open |
 | [C4](#c4) | **Critical** | parse | `\w` is ASCII-only → `@josé` silently stored as `people=jos` | ✅ fixed |
 | [C5](#c5) | **Critical** | filter | Leading `!` discards the rest of the expression; bare `!` panics; hyphens error | open |
@@ -39,7 +39,7 @@ under concurrent writes, and the README states the opposite.**
 | [M2](#m2) | Medium | event | Parent cycle → two non-terminating loops + a silent total data blackout | open |
 | [M3](#m3) | Medium | event | Nothing enforces a single `author`; display picks whichever sorts first | open |
 | [M4](#m4) | Medium | parse | Email addresses mint bogus `people` tags | ✅ fixed |
-| [M5](#m5) | Medium | timefmt | `"1 month ago"` on the 31st lands in the wrong month; int64 overflow yields a *future* time | open |
+| [M5](#m5) | Medium | timefmt | `"1 month ago"` on the 31st lands in the wrong month; int64 overflow yields a *future* time | ✅ fixed |
 | [M6](#m6) | Medium | render | Newlines and ANSI/OSC escapes in titles forge output rows | open |
 | [M7](#m7) | Medium | event | FTS conflates content with metadata → body text forges tag matches | open |
 | [M8](#m8) | Medium | render | `--limit` on tree format promotes orphaned children to roots, unmarked | open |
@@ -189,6 +189,65 @@ year `[1, 9999]`, returning the normal "unrecognized time" error. Add a
 defensive year check in `addInTx`/`Update` before formatting. Independently,
 make `scanEvents` degrade — skip or flag the bad row — rather than abort the
 whole query, so a poisoned row remains deletable.
+
+**Resolved.** Fixed together with [M5](#m5) — both bound the same `n`. Three
+independent layers, because each one alone leaves a hole:
+
+1. **Parse time.** `relCountUnit` rejects counts above `maxRelCount` (1e6), and
+   `ParsePartial` rejects any result outside year `[1, 9999]`, both with the
+   normal "unrecognized time" error. The year check is a wrapper around the
+   former body (now private `parsePartial`), so every caller — `Parse`,
+   `SplitTimePrefix`, `event time`, `event date`, `--from`/`--to` — inherits it.
+   `SplitTimePrefix` consequently leaves an absurd prefix in the title verbatim
+   instead of parsing it, which closes the piped-content path.
+2. **Write time.** `formatTimestamp` re-checks `timefmt.InRange` in `addInTx`
+   and `Update` and returns `ErrTimeRange`. Not redundant: `--format=json` and
+   any direct `AddInput` bypass the CLI time parser entirely.
+3. **Read time.** `created_at` is read through a `timeScanner`, a `sql.Scanner`
+   that cannot fail. The driver returns a `time.Time` for a parseable value and
+   a raw `string` otherwise; the old direct scan turned that string into an
+   error that killed the *whole* result set. A poisoned row now reads as the
+   zero time, so an already-bricked database becomes listable, showable and
+   deletable again — no raw `sqlite3` needed, which the review noted was the
+   only recovery path. README's Troubleshooting section documents the
+   `Jan 01 0001` symptom and the `event date` / `event time` repair.
+
+The encoding itself moved into `timefmt` as `FormatStorage` / `ParseStorage`,
+because `buildListQuery` was rendering the `--from`/`--to` bounds with its own
+copy of `.UTC().Format(DateTimeFormat)`. Those bounds are compared lexically
+against the stored text, so a layout change had to be found in two places to
+avoid silently breaking date filtering.
+
+Regression tests, each verified to fail against the pre-fix code with exactly
+the symptom above: `TestParseRelative` rejection rows for `maxRelCount` and
+both int64 overflows, `TestParsePartial_RejectsOutOfRangeYear`,
+`TestSplitTimePrefix_OutOfRangeIsNotATimestamp`, `TestInRange`,
+`TestAdd_RejectsOutOfRangeTimestamp`, `TestUpdate_RejectsOutOfRangeTimestamp`,
+`TestScan_PoisonedTimestampStaysUsable` (writes a raw `-0712-08-29 14:07:26`
+row, then asserts List, ListSeq, Get and Delete all still work and the
+neighbouring rows survive), `TestTimeFromDriverValue`, `TestStorageRoundTrip`,
+and two Kong-level tests. `internal/timefmt` is now at 100% statement coverage.
+
+Four alternatives were considered and **not** taken:
+
+- *`SELECT CAST(created_at AS TEXT)` so the driver never auto-converts.* This
+  trades one undocumented driver behaviour (parses `DATETIME` decltypes) for
+  its inverse (won't parse an empty decltype), touches all five read queries,
+  and the type switch already tolerates both.
+- *Surface the corruption instead of degrading silently.* A poisoned row and a
+  legitimately stored year-1 row now render identically. Carrying the raw
+  string on `Event` and printing it in `event show` is the honest fix, but it
+  is new surface for a case the Troubleshooting note already covers.
+- *One consistent error for every out-of-range count.* `1000001 days ago`
+  reports "unrecognized time" while `999999 days ago` reports the year range.
+  Unifying them means threading an error out of `relCountUnit` /
+  `relOffset` / `parseRelative`, all three of which use `ok=false` to mean
+  "not a relative form, try the next layout". Both inputs are rejected; the
+  churn isn't worth the wording.
+- *Route `cmd/fngr/add_json.go`'s `time.Parse(time.RFC3339, …)` through
+  `timefmt.Parse`.* Correct — it is the one import path with its own timestamp
+  parser — but it widens the accepted JSON input set, so it belongs with
+  [C3](#c3), which is already rewriting that file.
 
 <a name="c3"></a>
 ### C3 — The documented JSON round-trip silently corrupts the event tree
@@ -733,6 +792,17 @@ $ sqlite3 t.db 'select created_at from events'
 **Fix:** clamp the day to the last valid day of the target month after
 `AddDate`; bound `n` (shared with [C2](#c2)) or check
 `n > math.MaxInt64/int64(time.Hour)`.
+
+**Resolved.** Shipped with [C2](#c2). Month arithmetic goes through a new
+`addMonths`, which asks `time.Date` for day 0 of the month *after* the target —
+that is the target's last day, and it normalizes the year rollover for free —
+then clamps: `min(originalDay, lastDay)`. So `2026-03-31` minus one month is
+`2026-02-28`, not `2026-03-03`, and `2026-01-31` minus one month is still
+`2025-12-31`. The overflow is handled by the `maxRelCount` bound rather than a
+per-unit `math.MaxInt64/int64(time.Hour)` check: one constant covers hours,
+minutes and days at once, and 1e6 of any unit is already far past anything a
+log entry means. `TestAddMonths_ClampsToMonthEnd` covers the eight interesting
+month-end cases, including leap and non-leap February.
 
 <a name="m6"></a>
 ### M6 — Newlines and escapes in titles forge output rows

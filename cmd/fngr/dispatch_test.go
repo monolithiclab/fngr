@@ -144,25 +144,55 @@ func newDispatcher(t *testing.T) func(argv []string) (string, error) {
 	}
 }
 
-// TestKongDispatch_AddTimePrefix proves the title time-prefix is parsed and
-// stripped through the full Kong Parse + Run path, not just direct cmd.Run.
+// TestKongDispatch_AddTimePrefix covers both outcomes of the title time-prefix
+// rule through the full Kong Parse + Run path, not just direct cmd.Run: a
+// usable prefix is parsed and stripped, an unstorable one is left verbatim.
+//
+// The second case is the untrusted-content route. `fngr add` parses a leading
+// ": "-delimited token out of piped text, so scraped text could previously
+// write a year like -178954945 — a value SQLite stores but the driver cannot
+// read back, making every later read of the database fail.
 func TestKongDispatch_AddTimePrefix(t *testing.T) {
 	t.Parallel()
 
-	run := newDispatcher(t)
+	const scraped = "2147483647 months ago: meeting notes from a scraped page"
+	tests := []struct {
+		name    string
+		title   string
+		want    string
+		notWant string
+	}{
+		{"usable prefix is stripped", "9:30: had coffee", "had coffee", "9:30: had coffee"},
+		{"unstorable prefix stays in the title", scraped, scraped, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			run := newDispatcher(t)
 
-	if _, err := run([]string{"add", "9:30: had coffee"}); err != nil {
-		t.Fatalf("add: %v", err)
-	}
-	out, err := run([]string{"list", "--format", "flat"})
-	if err != nil {
-		t.Fatalf("list: %v", err)
-	}
-	if !strings.Contains(out, "had coffee") {
-		t.Errorf("list output missing stripped title 'had coffee':\n%s", out)
-	}
-	if strings.Contains(out, "9:30: had coffee") {
-		t.Errorf("list output still has time prefix in title:\n%s", out)
+			if _, err := run([]string{"add", tt.title}); err != nil {
+				t.Fatalf("add: %v", err)
+			}
+			out, err := run([]string{"list", "--format", "flat"})
+			if err != nil {
+				t.Fatalf("list: %v", err)
+			}
+			if !strings.Contains(out, tt.want) {
+				t.Errorf("list output missing %q:\n%s", tt.want, out)
+			}
+			if tt.notWant != "" && strings.Contains(out, tt.notWant) {
+				t.Errorf("list output still has %q:\n%s", tt.notWant, out)
+			}
+
+			// An unreadable stamp used to abort the whole result set, and
+			// `delete` calls Get first — so there was no way to remove the row.
+			if _, err := run([]string{"event", "1"}); err != nil {
+				t.Fatalf("event 1: %v", err)
+			}
+			if _, err := run([]string{"delete", "1", "-f"}); err != nil {
+				t.Fatalf("delete 1: %v", err)
+			}
+		})
 	}
 }
 
@@ -220,5 +250,26 @@ func TestKongDispatch_UnicodeMetaNames(t *testing.T) {
 	}
 	if strings.Contains(out, "田中") {
 		t.Errorf("meta -S @josé should not list other people:\n%s", out)
+	}
+}
+
+// TestKongDispatch_OutOfRangeTimeFlagErrors proves --time rejects an offset
+// that cannot be stored, instead of writing an unreadable row.
+func TestKongDispatch_OutOfRangeTimeFlagErrors(t *testing.T) {
+	t.Parallel()
+	run := newDispatcher(t)
+
+	_, err := run([]string{"add", "x", "--time", "1000000 days ago"})
+	if err == nil {
+		t.Fatal("add --time '1000000 days ago' succeeded, want an out-of-range error")
+	}
+
+	// Nothing was written, and the database still reads.
+	out, listErr := run([]string{"list", "--format", "flat"})
+	if listErr != nil {
+		t.Fatalf("list: %v", listErr)
+	}
+	if strings.TrimSpace(out) != "" {
+		t.Errorf("expected no events, got:\n%s", out)
 	}
 }

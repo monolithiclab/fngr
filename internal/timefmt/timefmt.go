@@ -81,6 +81,37 @@ func sameDay(a, b time.Time) bool {
 	return ay == by && am == bm && ad == bd
 }
 
+// Year bounds for any timestamp fngr will accept. DateTimeFormat renders the
+// year with %04d, so a year outside this range produces a string SQLite stores
+// happily but the driver cannot scan back into a time.Time — which used to
+// poison every read of the whole table. Reject at the door instead.
+const (
+	minYear = 1
+	maxYear = 9999
+)
+
+// InRange reports whether t can be stored and read back. Exported so the
+// storage layer can re-check timestamps that never went through ParsePartial
+// (--format=json import, or a *time.Time set programmatically).
+func InRange(t time.Time) bool {
+	y := t.Year()
+	return y >= minYear && y <= maxYear
+}
+
+// FormatStorage renders t in the canonical SQLite TEXT encoding. Every value
+// compared against or written to events.created_at must go through here, so
+// writes and date-range bounds cannot drift apart. Callers that store the
+// result must check InRange first — see event.formatTimestamp.
+func FormatStorage(t time.Time) string { return t.UTC().Format(DateTimeFormat) }
+
+// ParseStorage is the inverse of FormatStorage. ok=false means s is not in the
+// canonical encoding, which in practice means it was written by a version
+// without the InRange guard.
+func ParseStorage(s string) (t time.Time, ok bool) {
+	t, err := time.ParseInLocation(DateTimeFormat, s, time.UTC)
+	return t, err == nil
+}
+
 // ParsePartial parses s using the same layouts as Parse but reports which
 // components were present in the input. Time-only inputs (e.g. "9:30",
 // "3:04PM") return hasDate=false; date-only inputs ("2026-04-15") return
@@ -89,6 +120,19 @@ func sameDay(a, b time.Time) bool {
 // When hasDate is false, the returned t carries today's local date so the
 // caller can either use it as-is or splice into another date.
 func ParsePartial(s string) (t time.Time, hasDate, hasTime bool, err error) {
+	t, hasDate, hasTime, err = parsePartial(s)
+	if err != nil {
+		return time.Time{}, false, false, err
+	}
+	if !InRange(t) {
+		return time.Time{}, false, false, fmt.Errorf(
+			"time %q resolves to year %d, outside the supported range %d-%d",
+			s, t.Year(), minYear, maxYear)
+	}
+	return t, hasDate, hasTime, nil
+}
+
+func parsePartial(s string) (t time.Time, hasDate, hasTime bool, err error) {
 	if t, hasDate, hasTime, ok := parseRelative(s, time.Now()); ok {
 		return t, hasDate, hasTime, nil
 	}
@@ -199,13 +243,41 @@ func relOffset(s string, now time.Time) (t time.Time, hasClock, ok bool) {
 	case "week":
 		return now.AddDate(0, 0, -7*n), false, true
 	case "month":
-		return now.AddDate(0, -n, 0), false, true
+		return addMonths(now, -n), false, true
 	}
 	return time.Time{}, false, false
 }
 
+// addMonths shifts t by months, clamping the day to the last valid day of the
+// target month instead of letting it spill into the next one.
+//
+// time.AddDate normalizes overflow, so on 2026-03-31 "1 month ago" went to
+// Feb 31 and rolled forward to 2026-03-03 — a backdate of 28 days that stayed
+// in the *current* month. Clamping gives 2026-02-28, which is what "a month
+// ago" means to a person.
+func addMonths(t time.Time, months int) time.Time {
+	// Day 0 of the month after the target is the target's last day, and it
+	// normalizes any year rollover for us.
+	y, m, d := t.Date()
+	last := time.Date(y, m+time.Month(months)+1, 0, 0, 0, 0, 0, t.Location())
+	hh, mm, ss := t.Clock()
+	return time.Date(last.Year(), last.Month(), min(d, last.Day()),
+		hh, mm, ss, t.Nanosecond(), t.Location())
+}
+
+// maxRelCount bounds the count in "N <unit> ago". Two things need the bound.
+// `time.Duration(n) * time.Hour` overflows int64 above ~2.56e6 hours and wraps
+// to a *positive* offset, so "9223372036854775807 hours ago" used to resolve
+// one hour into the future. And a large enough n pushes the year out of
+// [minYear, maxYear] (see ParsePartial).
+//
+// 1e6 is past any real-world entry — a million hours is 114 years — while
+// 1e6 * time.Hour stays under a third of math.MaxInt64.
+const maxRelCount = 1_000_000
+
 // relCountUnit parses "<count> <unit> ago" into a non-negative count and the
-// singularized unit (e.g. "days" -> "day"). "a"/"an" count as 1.
+// singularized unit (e.g. "days" -> "day"). "a"/"an" count as 1. Counts above
+// maxRelCount are rejected.
 func relCountUnit(s string) (n int, unit string, ok bool) {
 	fields := strings.Fields(s)
 	if len(fields) != 3 || fields[2] != "ago" {
@@ -216,7 +288,7 @@ func relCountUnit(s string) (n int, unit string, ok bool) {
 		n = 1
 	default:
 		parsed, err := strconv.Atoi(fields[0])
-		if err != nil || parsed < 0 {
+		if err != nil || parsed < 0 || parsed > maxRelCount {
 			return 0, "", false
 		}
 		n = parsed
