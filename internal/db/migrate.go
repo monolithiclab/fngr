@@ -11,10 +11,25 @@ import (
 	"strings"
 )
 
-// migration is a single forward step from version N-1 to N.
+// migration is a single forward step from version N-1 to N. Every version
+// has an embedded `<N>.sql`; fn is an optional Go step run against the same
+// transaction once that SQL has been applied.
 type migration struct {
 	version int
 	up      io.Reader
+	fn      func(*sql.Tx) error
+}
+
+// goMigrations holds the Go half of a migration, keyed by version. Reach for
+// one only when SQL genuinely cannot express the step: migration 4 needs
+// strings.TrimSpace (SQLite's TRIM strips U+0020 and nothing else) and the
+// real parse.BodyTags extractor. Transliterating Go rules into SQL is what
+// left migration 3 producing values the Go code never would.
+//
+// The SQL always runs first; the Go step sees the schema `<N>.sql` leaves
+// behind. A step needing the reverse order has to split across two versions.
+var goMigrations = map[int]func(*sql.Tx) error{
+	4: repairLegacyText,
 }
 
 // dbExec accepts either *sql.DB or *sql.Tx.
@@ -52,10 +67,21 @@ func loadMigrations() []migration {
 	}
 
 	sort.Slice(out, func(i, j int) bool { return out[i].version < out[j].version })
-	for i, m := range out {
-		if m.version != i+1 {
-			panic(fmt.Sprintf("migrations must be contiguous starting at 1; got version %d at index %d", m.version, i))
+	// Attach Go steps while walking the versions, and count them, so a
+	// goMigrations key that matches no `<N>.sql` — a typo, a zero, a version
+	// yet to be written — is caught rather than silently never running.
+	attached := 0
+	for i := range out {
+		if out[i].version != i+1 {
+			panic(fmt.Sprintf("migrations must be contiguous starting at 1; got version %d at index %d", out[i].version, i))
 		}
+		if fn, ok := goMigrations[out[i].version]; ok {
+			out[i].fn = fn
+			attached++
+		}
+	}
+	if attached != len(goMigrations) {
+		panic(fmt.Sprintf("goMigrations has %d entries but only %d match a migrations/<N>.sql", len(goMigrations), attached))
 	}
 	return out
 }
@@ -139,6 +165,11 @@ func applyMigration(db *sql.DB, m migration) error {
 	}
 	if _, err := tx.Exec(string(sql)); err != nil {
 		return fmt.Errorf("apply: %w", err)
+	}
+	if m.fn != nil {
+		if err := m.fn(tx); err != nil {
+			return fmt.Errorf("apply Go step: %w", err)
+		}
 	}
 	if err := setUserVersion(tx, m.version); err != nil {
 		return fmt.Errorf("bump user_version: %w", err)

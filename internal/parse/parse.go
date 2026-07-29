@@ -144,8 +144,9 @@ func FlagMeta(flags []string) ([]Meta, error) {
 // tokenizer treats '=' as a token char, so a -S '#ops' filter matches
 // the literal "tag=ops" emitted here.
 //
-// The SQL rebuild query in internal/db/migrations/3.sql must match
-// this formula. If you change one, change the other.
+// This is the only definition of the formula. migrations/3.sql once carried
+// a SQL transliteration of it, free to drift; migration 4 overwrites every
+// row that produced and rebuilds through this function instead.
 func FTSContent(title, body string, meta []Meta) string {
 	parts := make([]string, 0, 2+len(meta))
 	if title != "" {

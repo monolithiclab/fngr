@@ -90,6 +90,22 @@ make ci             # codefix + format + lint + test
   databases are detected via the legacy v1 `events` table and bumped to `user_version = 1`.
   Migration 2 deduplicates `event_meta` and adds a UNIQUE index on `(key, value, event_id)` so
   `INSERT ... ON CONFLICT DO NOTHING` works in `AddTags` and the body-tag sync inside `Update`.
+  A migration may carry an optional Go step alongside its SQL: `goMigrations[N]` runs against the
+  same transaction right after `N.sql`. Reach for one only when SQL genuinely cannot express the
+  step — transliterating Go rules into SQL is what left migration 3 writing values the Go code
+  would never produce.
+- `internal/db/migrate4.go` — The Go half of migration 4, repairing what migration 3's SQL split
+  got wrong. `repairLegacyText` re-derives every event's title and body via `repairTitleBody`
+  (`strings.TrimSpace`, which SQLite's U+0020-only `TRIM` cannot match; an empty title promotes
+  the body's first line, falling back to `untitledPlaceholder` when there is nothing to promote,
+  since no command can set an empty title back to something valid). `repairEventMeta` re-extracts
+  body tags through the real `parse.BodyTags` and drops the truncated stubs the pre-Unicode
+  extractor wrote — but only a value exactly equal to what the frozen `legacyMetaNameRe` would
+  have produced, so a hand-added `#work` beside a derived `#workflow` survives. `rebuildAllFTS`
+  then rewrites every `events_fts` row through `parse.FTSContent` unconditionally, because
+  migration 3's index rebuild was a second SQL transliteration of that same helper. The SQL half
+  (`4.sql`) is a single `ANALYZE event_meta`, refreshing statistics migration 2 left describing a
+  dropped index.
 - `internal/parse/parse.go` — `Meta` type, `BodyTags` for body-tag extraction (`@person` → people,
   `#tag` → tag), `KeyValue` helper for `key=value` strings, `FlagMeta` for `--meta` flag arrays
   (delegates to `KeyValue`), `MetaArg` for individual CLI tag args (`@person`, `#tag`, or

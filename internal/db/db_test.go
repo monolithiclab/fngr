@@ -15,12 +15,17 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// testDB opens an empty database with no migrations applied. It uses a temp
+// file rather than ":memory:" because every pooled connection to ":memory:"
+// gets its own blank database — migrate() reads user_version on one
+// connection and opens its transaction on another, so the in-memory form
+// only passed by the accident of the pool reusing a single connection.
 func testDB(t *testing.T) *sql.DB {
 	t.Helper()
 
-	db, err := sql.Open("sqlite", ":memory:")
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
-		t.Fatalf("open in-memory db: %v", err)
+		t.Fatalf("open db: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
 
@@ -307,18 +312,9 @@ func TestMigrate_V2DedupesAndAddsUnique(t *testing.T) {
 	t.Parallel()
 	db := testDB(t)
 
-	// Bring the schema up to v1 only.
-	if _, err := db.Exec(migrationSQL(t, 0)); err != nil {
-		t.Fatalf("seed v1 schema: %v", err)
-	}
-	if err := setUserVersion(db, 1); err != nil {
-		t.Fatalf("set v1: %v", err)
-	}
+	seedLegacy(t, db, "x")
 
-	// One event with three duplicate (event_id, key, value) rows in event_meta.
-	if _, err := db.Exec("INSERT INTO events (text) VALUES (?)", "x"); err != nil {
-		t.Fatalf("insert event: %v", err)
-	}
+	// Three duplicate (event_id, key, value) rows in event_meta.
 	for range 3 {
 		if _, err := db.Exec(
 			"INSERT INTO event_meta (event_id, key, value) VALUES (1, 'tag', 'ops')",
@@ -364,20 +360,12 @@ func TestMigrate_V2DedupesAndAddsUnique(t *testing.T) {
 	}
 }
 
-func TestMigrate_V3SplitsTitleBody(t *testing.T) {
+// TestMigrate_LegacyTextSplit asserts the end state of the whole chain, not
+// migration 3 alone: 3 does the split and 4 repairs what its SQL could not
+// express, and no database can be at one without the other.
+func TestMigrate_LegacyTextSplit(t *testing.T) {
 	t.Parallel()
 	db := testDB(t)
-
-	// Bring schema up to v2 (run migrations 1 and 2).
-	if _, err := db.Exec(migrationSQL(t, 0)); err != nil {
-		t.Fatalf("seed v1 schema: %v", err)
-	}
-	if _, err := db.Exec(migrationSQL(t, 1)); err != nil {
-		t.Fatalf("apply migration 2: %v", err)
-	}
-	if err := setUserVersion(db, 2); err != nil {
-		t.Fatalf("set v2: %v", err)
-	}
 
 	rows := []struct {
 		text      string
@@ -387,17 +375,18 @@ func TestMigrate_V3SplitsTitleBody(t *testing.T) {
 		{"hello", "hello", ""},
 		{"v1.2 done. Hotfix", "v1.2 done", "Hotfix"},
 		{"no separator here", "no separator here", ""},
-		{". body only", "", "body only"},
+		{". body only", "body only", ""}, // leading separator → migration 4 promotes the body
 		{"v1.2.3 released", "v1.2.3 released", ""},
-		{"   . body", "", "body"},           // leading whitespace + leading separator → empty title, trimmed body
+		{"   . body", "body", ""},           // leading whitespace + leading separator → same promotion
 		{"hello.  world", "hello", "world"}, // dot + double space → trimmed body (no leading space)
 		{"   hello   ", "hello", ""},        // no separator, surrounding whitespace → trimmed title, empty body
 	}
-	for _, r := range rows {
-		if _, err := db.Exec("INSERT INTO events (text) VALUES (?)", r.text); err != nil {
-			t.Fatalf("insert %q: %v", r.text, err)
-		}
+	texts := make([]string, len(rows))
+	for i, r := range rows {
+		texts[i] = r.text
 	}
+	seedLegacy(t, db, texts...)
+
 	if _, err := db.Exec(
 		"INSERT INTO event_meta (event_id, key, value) VALUES (2, 'tag', 'ops')",
 	); err != nil {
@@ -417,16 +406,13 @@ func TestMigrate_V3SplitsTitleBody(t *testing.T) {
 	if err != nil {
 		t.Fatalf("userVersion: %v", err)
 	}
-	if v != 3 {
-		t.Errorf("user_version = %d, want 3", v)
+	migrations := loadMigrations()
+	if want := migrations[len(migrations)-1].version; v != want {
+		t.Errorf("user_version = %d, want %d", v, want)
 	}
 
 	for i, r := range rows {
-		var title, body string
-		err := db.QueryRow("SELECT title, body FROM events WHERE id = ?", i+1).Scan(&title, &body)
-		if err != nil {
-			t.Fatalf("select id %d: %v", i+1, err)
-		}
+		title, body := titleBody(t, db, int64(i+1))
 		if title != r.wantTitle || body != r.wantBody {
 			t.Errorf("id %d: got (title=%q, body=%q), want (%q, %q)",
 				i+1, title, body, r.wantTitle, r.wantBody)
