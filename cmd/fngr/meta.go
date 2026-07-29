@@ -155,7 +155,7 @@ func parseMetaFilter(s string) (parse.Meta, error) {
 	}
 	if s[0] != '@' && s[0] != '#' && !strings.Contains(s, "=") {
 		if !parse.MetaNameRe.MatchString(s) {
-			return parse.Meta{}, fmt.Errorf("invalid filter %q: bare key must match [\\w][\\w/\\-]*", s)
+			return parse.Meta{}, fmt.Errorf("invalid filter %q: bare key must be %s", s, parse.MetaNameRule)
 		}
 		return parse.Meta{Key: s}, nil
 	}

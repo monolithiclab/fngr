@@ -86,9 +86,14 @@ make ci             # codefix + format + lint + test
 - `internal/parse/parse.go` — `Meta` type, `BodyTags` for body-tag extraction (`@person` → people,
   `#tag` → tag), `KeyValue` helper for `key=value` strings, `FlagMeta` for `--meta` flag arrays
   (delegates to `KeyValue`), `MetaArg` for individual CLI tag args (`@person`, `#tag`, or
-  `key=value`; used by `event tag` / `event untag`), `FTSContent` for FTS index content building.
+  `key=value`; used by `event tag` / `event untag`), `FTSContent` for FTS index content building,
+  `SplitTitleBody` for the `". "` title/body split.
   Tag and meta-name regexes share the private `metaNamePattern` constant; the anchored form is
-  exported as `MetaNameRe` for reuse by `cmd/fngr/meta.go::parseMetaFilter`.
+  exported as `MetaNameRe` for reuse by `cmd/fngr/meta.go::parseMetaFilter`. That pattern is
+  Unicode-class based (`\p{L}\p{N}_/-`), not `\w` — Go's `\w` is ASCII-only, so it truncated
+  `@josé` to `people=jos` and collided with `@josa`. The body-tag patterns additionally require
+  `metaNameBoundary` (start of text or a non-name rune) before the sigil, so `bob@example.com`
+  and `.../guide#installation` no longer mint metadata. Don't reintroduce `\w` in either.
 - `internal/timefmt/timefmt.go` — Single source of truth for accepted time inputs. `Parse` returns
   just the parsed timestamp; `ParsePartial` also reports whether the input had a date and/or time
   component, so `event time` / `event date` can splice into an existing timestamp instead of

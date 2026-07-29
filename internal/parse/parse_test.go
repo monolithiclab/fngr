@@ -56,6 +56,63 @@ func TestBodyTags(t *testing.T) {
 			},
 		},
 		{
+			name: "unicode person name is kept whole",
+			text: "coffee with @josé and @田中",
+			want: []Meta{
+				{Key: "people", Value: "josé"},
+				{Key: "people", Value: "田中"},
+			},
+		},
+		{
+			name: "unicode tag is kept whole",
+			text: "playing with the #niño and #zoë",
+			want: []Meta{
+				{Key: "tag", Value: "niño"},
+				{Key: "tag", Value: "zoë"},
+			},
+		},
+		{
+			name: "accented names that share an ASCII prefix stay distinct",
+			text: "@josé and @josa",
+			want: []Meta{
+				{Key: "people", Value: "josé"},
+				{Key: "people", Value: "josa"},
+			},
+		},
+		{
+			name: "email address does not mint a person",
+			text: "emailed bob@example.com about the thing",
+			want: nil,
+		},
+		{
+			name: "url fragment does not mint a tag",
+			text: "see https://docs.example.com/guide#installation",
+			want: nil,
+		},
+		{
+			name: "sigil after a non-name rune still counts",
+			text: "spoke to (@alice)\nabout [#ops]",
+			want: []Meta{
+				{Key: "people", Value: "alice"},
+				{Key: "tag", Value: "ops"},
+			},
+		},
+		{
+			name: "sigil at start of text still counts",
+			text: "@alice opened #ops",
+			want: []Meta{
+				{Key: "people", Value: "alice"},
+				{Key: "tag", Value: "ops"},
+			},
+		},
+		{
+			name: "adjacent sigils are not both tags",
+			text: "#a#b",
+			want: []Meta{
+				{Key: "tag", Value: "a"},
+			},
+		},
+		{
 			name: "no tags",
 			text: "Just a plain text entry",
 			want: nil,
@@ -250,6 +307,9 @@ func TestMetaArg(t *testing.T) {
 		{name: "value with =", input: "note=a=b", wantKey: "note", wantVal: "a=b"},
 		{name: "hierarchical tag", input: "#work/project-x", wantKey: "tag", wantVal: "work/project-x"},
 		{name: "empty value", input: "k=", wantKey: "k", wantVal: ""},
+		{name: "unicode person", input: "@josé", wantKey: "people", wantVal: "josé"},
+		{name: "unicode tag", input: "#déploiement", wantKey: "tag", wantVal: "déploiement"},
+		{name: "cjk person", input: "@田中", wantKey: "people", wantVal: "田中"},
 
 		{name: "bare word", input: "urgent", wantErr: true},
 		{name: "lone @", input: "@", wantErr: true},

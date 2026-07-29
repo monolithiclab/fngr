@@ -113,10 +113,12 @@ func TestKongDispatch_AllCommands(t *testing.T) {
 	}
 }
 
-// TestKongDispatch_AddTimePrefix proves the title time-prefix is parsed and
-// stripped through the full Kong Parse + Run path, not just direct cmd.Run.
-func TestKongDispatch_AddTimePrefix(t *testing.T) {
-	t.Parallel()
+// newDispatcher returns a run function that parses and executes argv against
+// one shared store, so multi-command flows (add, then mutate, then list) see
+// each other's writes. The plain `dispatch` helper builds a fresh store per
+// call and is only good for single-shot wiring checks.
+func newDispatcher(t *testing.T) func(argv []string) (string, error) {
+	t.Helper()
 
 	var cli CLI
 	parser, err := kong.New(&cli,
@@ -129,7 +131,7 @@ func TestKongDispatch_AddTimePrefix(t *testing.T) {
 	}
 
 	store := newTestStore(t)
-	run := func(argv []string) (string, error) {
+	return func(argv []string) (string, error) {
 		kctx, err := parser.Parse(argv)
 		if err != nil {
 			return "", err
@@ -140,6 +142,14 @@ func TestKongDispatch_AddTimePrefix(t *testing.T) {
 		err = kctx.Run()
 		return out.String(), err
 	}
+}
+
+// TestKongDispatch_AddTimePrefix proves the title time-prefix is parsed and
+// stripped through the full Kong Parse + Run path, not just direct cmd.Run.
+func TestKongDispatch_AddTimePrefix(t *testing.T) {
+	t.Parallel()
+
+	run := newDispatcher(t)
 
 	if _, err := run([]string{"add", "9:30: had coffee"}); err != nil {
 		t.Fatalf("add: %v", err)
@@ -162,33 +172,7 @@ func TestKongDispatch_AddTimePrefix(t *testing.T) {
 func TestKongDispatch_AddThenListEndToEnd(t *testing.T) {
 	t.Parallel()
 
-	var cli CLI
-	parser, err := kong.New(&cli,
-		kong.Name("fngr"),
-		kongVars("test", "tester"),
-		kong.Exit(func(int) {}),
-	)
-	if err != nil {
-		t.Fatalf("kong.New: %v", err)
-	}
-
-	store := newTestStore(t)
-	run := func(argv []string) (string, error) {
-		kctx, err := parser.Parse(argv)
-		if err != nil {
-			return "", err
-		}
-		out := &bytes.Buffer{}
-		kctx.BindTo(store, (*eventStore)(nil))
-		kctx.Bind(ioStreams{
-			In:    strings.NewReader(""),
-			Out:   out,
-			Err:   io.Discard,
-			IsTTY: true,
-		})
-		err = kctx.Run()
-		return out.String(), err
-	}
+	run := newDispatcher(t)
 
 	if _, err := run([]string{"add", "first"}); err != nil {
 		t.Fatalf("add: %v", err)
@@ -199,5 +183,42 @@ func TestKongDispatch_AddThenListEndToEnd(t *testing.T) {
 	}
 	if !strings.Contains(out, "first") {
 		t.Errorf("list output missing 'first':\n%s", out)
+	}
+}
+
+// TestKongDispatch_UnicodeMetaNames proves non-ASCII @person / #tag names
+// survive the whole CLI round trip: body extraction on add, the `event tag`
+// validator, and the `meta -S` filter all share one regex, and it used to be
+// ASCII-only.
+func TestKongDispatch_UnicodeMetaNames(t *testing.T) {
+	t.Parallel()
+	run := newDispatcher(t)
+
+	if _, err := run([]string{"add", "coffee with @josé about #déploiement"}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if _, err := run([]string{"event", "tag", "1", "@田中"}); err != nil {
+		t.Fatalf("event tag: %v", err)
+	}
+
+	out, err := run([]string{"meta"})
+	if err != nil {
+		t.Fatalf("meta: %v", err)
+	}
+	for _, want := range []string{"josé", "déploiement", "田中"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("meta output missing %q:\n%s", want, out)
+		}
+	}
+
+	out, err = run([]string{"meta", "-S", "@josé"})
+	if err != nil {
+		t.Fatalf("meta -S @josé: %v", err)
+	}
+	if !strings.Contains(out, "josé") {
+		t.Errorf("meta -S @josé missing the person:\n%s", out)
+	}
+	if strings.Contains(out, "田中") {
+		t.Errorf("meta -S @josé should not list other people:\n%s", out)
 	}
 }

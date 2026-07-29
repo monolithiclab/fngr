@@ -28,7 +28,7 @@ under concurrent writes, and the README states the opposite.**
 | [C1](#c1) | **Critical** | db | Pooled-connection PRAGMAs → concurrent `add` silently loses events; `foreign_keys=OFF` on most connections | ✅ fixed |
 | [C2](#c2) | **Critical** | timefmt | Unbounded relative offset writes a negative-year timestamp that bricks every read; reachable from piped content | open |
 | [C3](#c3) | **Critical** | json | Documented JSON round-trip silently corrupts the event tree | open |
-| [C4](#c4) | **Critical** | parse | `\w` is ASCII-only → `@josé` silently stored as `people=jos` | open |
+| [C4](#c4) | **Critical** | parse | `\w` is ASCII-only → `@josé` silently stored as `people=jos` | ✅ fixed |
 | [C5](#c5) | **Critical** | filter | Leading `!` discards the rest of the expression; bare `!` panics; hyphens error | open |
 | [H1](#h1) | High | migrate | Migration 3's SQL `TRIM()` ≠ `strings.TrimSpace` → corrupted legacy titles/bodies | open |
 | [H2](#h2) | High | render | O(n²) prefix concatenation in `Tree` — 50k-deep chain: 67.85 s / 7.0 GB | open |
@@ -38,7 +38,7 @@ under concurrent writes, and the README states the opposite.**
 | [M1](#m1) | Medium | event | Body-tag sync silently deletes operator-added meta | open |
 | [M2](#m2) | Medium | event | Parent cycle → two non-terminating loops + a silent total data blackout | open |
 | [M3](#m3) | Medium | event | Nothing enforces a single `author`; display picks whichever sorts first | open |
-| [M4](#m4) | Medium | parse | Email addresses mint bogus `people` tags | open |
+| [M4](#m4) | Medium | parse | Email addresses mint bogus `people` tags | ✅ fixed |
 | [M5](#m5) | Medium | timefmt | `"1 month ago"` on the 31st lands in the wrong month; int64 overflow yields a *future* time | open |
 | [M6](#m6) | Medium | render | Newlines and ANSI/OSC escapes in titles forge output rows | open |
 | [M7](#m7) | Medium | event | FTS conflates content with metadata → body text forges tag matches | open |
@@ -277,6 +277,31 @@ const metaNamePattern = `[\p{L}\p{N}_][\p{L}\p{N}_/\-]*`
 
 Already-truncated rows can be cleaned up with `meta rename`; worth a note in
 the release changelog rather than a migration.
+
+**Resolved.** Fixed together with [M4](#m4) — both edit `metaNamePattern`.
+The pattern is now `[\p{L}\p{N}_][\p{L}\p{N}_/\-]*`, with a comment saying
+why `\w` must not come back. The fix reaches `BodyTags`, `MetaArg` and
+`MetaNameRe` at once, so `event tag`, `--meta` and `meta -S` are all covered;
+`cmd/fngr/meta.go::parseMetaFilter`'s error text no longer quotes the old
+ASCII pattern either.
+
+Regression tests, verified against the pre-fix code: `TestBodyTags` gained
+Unicode person/tag cases and the `@josé` vs `@josa` collision (old code
+returned a single `people=jos`), `TestMetaArg` gained `@josé`, `#déploiement`
+and `@田中` (old code rejected all three outright — the CLI path errored where
+the body path silently truncated), and `TestKongDispatch_UnicodeMetaNames`
+walks `add` → `event tag` → `meta` → `meta -S` through Kong.
+
+Already-truncated rows still need `meta rename`; no migration ships for them.
+A repair migration was considered and deferred to [H1](#h1)'s migration 4 rather
+than rejected: the source text survives in `events.title`/`events.body`, so
+re-derivation is lossless *for body-derived tags*, but a blanket
+delete-and-re-derive would also destroy `people`/`tag` rows added by
+`fngr event tag`, which never appeared in any body. The safe form has to
+delete only rows whose value is a strict prefix of a freshly-derived value on
+the same event, and it needs Go-side migration machinery (the current
+migrations are pure embedded SQL and cannot call `parse.BodyTags`). That
+belongs with the migration H1 already schedules, not bolted onto a regex fix.
 
 <a name="c5"></a>
 ### C5 — Filter parser: silently wrong results, a panic, and unusable hyphens
@@ -665,6 +690,21 @@ These are permanent — they land in `event_meta`, in `events_fts`, and in
 **Fix:** require a word boundary before the sigil — e.g. skip `@` matches whose
 preceding rune is `\w` or `.`. Combine with [C4](#c4), since both edit the same
 pattern.
+
+**Resolved.** Shipped with [C4](#c4). The two body-tag patterns are now
+prefixed with `metaNameBoundary` = `(?:^|[^\p{L}\p{N}_])` — start of text, or
+any rune that cannot be part of a name. The group is non-capturing, so `m[1]`
+is still the name and no index shifts. `bob@example.com` and
+`.../guide#installation` mint nothing; `(@alice)`, a leading `@alice`, and
+`@alice` after a newline all still match.
+
+Two deliberate non-changes: `.` was **not** added to the disallowed preceding
+set, and `#ff8800` / `#1234` still mint tags. A hex colour is
+indistinguishable from a legitimate short tag without a heuristic that would
+also eat real tags, and the review already calls `#1234` arguably intended.
+
+One behaviour change worth knowing: `#a#b` now yields only `tag=a`, because the
+second `#` is preceded by a letter. Covered by a test so it stays deliberate.
 
 <a name="m5"></a>
 ### M5 — Two arithmetic defects in relative-time parsing

@@ -281,6 +281,11 @@ Metadata from `@person` and `#tag` in an event's title or body is extracted
 automatically and stored separately from the text, so `#deploy` only matches the
 tag, not the word "deploy" in the body.
 
+Names may contain any Unicode letter or digit plus `_`, `/` and `-`, so `@josé`,
+`@田中` and `#déploiement` are stored whole. A sigil only opens a tag at the
+start of the text or after a non-name character, so `bob@example.com` and
+`https://example.com/guide#installation` do not mint metadata.
+
 ## Database location
 
 Resolved in order:

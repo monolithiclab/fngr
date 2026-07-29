@@ -12,16 +12,32 @@ type Meta struct {
 }
 
 // metaNamePattern is the character class accepted for @person / #tag names
-// and for keys in `key=value` arguments. Word chars plus '/' and '-',
-// starting with a word char.
-const metaNamePattern = `[\w][\w/\-]*`
+// and for keys in `key=value` arguments: any Unicode letter or digit, plus
+// '_', '/' and '-', starting with a letter, digit or '_'.
+//
+// The Unicode classes are load-bearing, not decoration. Go's regexp reads
+// \w as ASCII-only, so it stopped at the first non-ASCII byte and silently
+// truncated names — `@josé` was stored as `people=jos`, colliding with
+// `@josa`. Don't reintroduce \w here.
+const metaNamePattern = `[\p{L}\p{N}_][\p{L}\p{N}_/\-]*`
+
+// metaNameBoundary must precede a @ or # for it to open a tag. Without it the
+// sigils fire mid-token, so `bob@example.com` minted `people=example` and
+// `.../guide#installation` minted `tag=installation`. Non-capturing, so the
+// name stays at submatch index 1.
+const metaNameBoundary = `(?:^|[^\p{L}\p{N}_])`
+
+// MetaNameRule states metaNamePattern in prose for error messages, so the
+// rule and its explanation can't drift apart. Exported because
+// `cmd/fngr/meta.go::parseMetaFilter` reports the same rule.
+const MetaNameRule = "letters, digits, '_', '/' or '-'"
 
 var tagPatterns = []struct {
 	re  *regexp.Regexp
 	key string
 }{
-	{regexp.MustCompile(`@(` + metaNamePattern + `)`), "people"},
-	{regexp.MustCompile(`#(` + metaNamePattern + `)`), "tag"},
+	{regexp.MustCompile(metaNameBoundary + `@(` + metaNamePattern + `)`), "people"},
+	{regexp.MustCompile(metaNameBoundary + `#(` + metaNamePattern + `)`), "tag"},
 }
 
 func BodyTags(text string) []Meta {
@@ -64,9 +80,8 @@ var MetaNameRe = regexp.MustCompile(`^` + metaNamePattern + `$`)
 //	"#name"      -> {tag, name}
 //	"key=value"  -> {key, value}      (delegates to KeyValue)
 //
-// Names following @ or # must match the body-tag regex [\w][\w/\-]*. Any
-// other shape is rejected with the message "expected @person, #tag, or
-// key=value".
+// Names following @ or # must match metaNamePattern. Any other shape is
+// rejected with the message "expected @person, #tag, or key=value".
 func MetaArg(s string) (Meta, error) {
 	if len(s) == 0 {
 		return Meta{}, fmt.Errorf("expected @person, #tag, or key=value, got empty arg")
@@ -75,13 +90,13 @@ func MetaArg(s string) (Meta, error) {
 	case '@':
 		name := s[1:]
 		if !MetaNameRe.MatchString(name) {
-			return Meta{}, fmt.Errorf("invalid @person arg %q: name must match [\\w][\\w/\\-]*", s)
+			return Meta{}, fmt.Errorf("invalid @person arg %q: name must be %s", s, MetaNameRule)
 		}
 		return Meta{Key: "people", Value: name}, nil
 	case '#':
 		name := s[1:]
 		if !MetaNameRe.MatchString(name) {
-			return Meta{}, fmt.Errorf("invalid #tag arg %q: name must match [\\w][\\w/\\-]*", s)
+			return Meta{}, fmt.Errorf("invalid #tag arg %q: name must be %s", s, MetaNameRule)
 		}
 		return Meta{Key: "tag", Value: name}, nil
 	}
