@@ -510,9 +510,7 @@ func TestOpen_ConcurrentWritersAllSucceed(t *testing.T) {
 	var wg sync.WaitGroup
 	errs := make(chan error, writers)
 	for i := range writers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_, err := database.Exec(
 				"INSERT INTO events (title, body, created_at) VALUES (?, '', '2026-01-01 00:00:00')",
 				fmt.Sprintf("event %d", i),
@@ -520,7 +518,7 @@ func TestOpen_ConcurrentWritersAllSucceed(t *testing.T) {
 			if err != nil {
 				errs <- err
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	close(errs)
