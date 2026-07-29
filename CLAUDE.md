@@ -62,7 +62,7 @@ make ci             # codefix + format + lint + test
   temp file; `errCancel` signals empty-save (handled as exit-0 by `AddCmd.Run`). `readStdin`
   caps reads at `maxStdinBytes` (16 MiB) via `io.LimitReader` so a runaway pipe can't OOM.
 - `cmd/fngr/add_json.go` — `--format=json` import path. `jsonAddInput` is the wire shape
-  `{title, body?, parent_id?, created_at?, meta?: [[k,v],...]}`; `parseJSONAddInput` dispatches on the
+  `{id?, title, body?, parent_id?, created_at?, meta?: [[k,v],...]}`; `parseJSONAddInput` dispatches on the
   first non-whitespace char (`[` → array, else single object) and uses `json.Decoder` with
   `DisallowUnknownFields` so typos surface instead of being silently dropped. Batches are
   capped at `maxJSONBatchSize` (10 000 records). `jsonInputToAddInput` applies CLI defaults,
@@ -70,6 +70,13 @@ make ci             # codefix + format + lint + test
   `event.CollectMeta` but suppresses default-author injection when explicit meta has an
   `author` key OR when defaultAuthor is empty), and validates that every record has an
   author from some source. `runJSON` calls `s.AddMany` for atomic batch insert.
+  `id` is read but never inserted: it exists so `fngr --format=json` output pipes straight
+  back in, and so `indexBySourceID` can build a source-id → batch-position map.
+  `jsonInputToAddInput` resolves each `parent_id` against that map first, emitting
+  `AddInput.ParentIndex` (batch-relative) when it hits and leaving `AddInput.ParentID`
+  (a target-database id) when it misses — the `--parent` CLI default is always the latter.
+  `created_at` goes through `timefmt.Parse`, a superset of the RFC 3339 that
+  `--format=json` emits, so import files accept the same stamps as `--time`.
 - `cmd/fngr/pager.go` — `withPager(io, disabled) (ioStreams, closer)` wraps `Out` in a pipe to
   `$PAGER` (fallback `less -FRX`) when stdout is a TTY. Used by `list`.
 - `internal/db/db.go` — DB path resolution (explicit > `.fngr.db` in cwd > `~/.fngr.db`) and
@@ -123,7 +130,14 @@ make ci             # codefix + format + lint + test
 - `internal/event/event.go` — Data access functions: `Add` (transactional event + meta + FTS),
   `AddMany` (batched same shape, atomic), `AddInput` value type. Both `Add` and `AddMany`
   delegate to a private `addInTx` that runs the per-record INSERT loop using a caller-owned
-  `*sql.Tx`. `Get`, `Update` (title, body, and/or timestamp; on title or body change body-derived tags are
+  `*sql.Tx`. `AddInput` names its parent either by database id (`ParentID`) or by position in
+  the same batch (`ParentIndex`, mutually exclusive with the former) — the latter is what lets
+  a JSON import re-create a tree whose ids don't exist in the target yet. Batch parents are
+  wired up by an UPDATE pass *after* the insert loop, since a child may be inserted before its
+  parent (`fngr --format=json` emits newest-first); `validateParentIndexes` rejects
+  out-of-range indexes and cycles up front, because SQLite's FK check only proves the parent
+  row exists and would happily commit a cycle unreachable from any root.
+  `Get`, `Update` (title, body, and/or timestamp; on title or body change body-derived tags are
   *synced* — `parse.BodyTags(oldTitle+" "+oldBody)` deleted then
   `parse.BodyTags(newTitle+" "+newBody)` inserted via
   `ON CONFLICT DO NOTHING`; FTS rebuilt), `Reparent` (set/clear `parent_id`; rejects self and

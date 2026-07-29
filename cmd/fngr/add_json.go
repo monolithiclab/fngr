@@ -16,6 +16,12 @@ import (
 // Pointer types distinguish "field omitted" (apply CLI/built-in default)
 // from "field present" (JSON value wins, even if zero/empty).
 type jsonAddInput struct {
+	// ID is the record's id in the database it came from. It is never
+	// inserted — the target database assigns its own — but it is accepted
+	// (rather than rejected by DisallowUnknownFields, as it used to be) so
+	// that `fngr --format=json` output can be piped straight back in, and
+	// so sibling records can refer to it through parent_id.
+	ID        *int64      `json:"id"`
 	Title     string      `json:"title"`
 	Body      string      `json:"body"`
 	ParentID  *int64      `json:"parent_id"`
@@ -77,9 +83,14 @@ func (c *AddCmd) runJSON(s eventStore, io ioStreams, raw string) error {
 		return err
 	}
 
+	byIndex, err := indexBySourceID(inputs)
+	if err != nil {
+		return err
+	}
+
 	addInputs := make([]event.AddInput, 0, len(inputs))
 	for i, in := range inputs {
-		ai, err := jsonInputToAddInput(in, defaults, c.Author, i)
+		ai, err := jsonInputToAddInput(in, defaults, c.Author, i, byIndex)
 		if err != nil {
 			return err
 		}
@@ -117,21 +128,62 @@ func buildCLIDefaults(c *AddCmd) (cliDefaults, error) {
 	return d, nil
 }
 
-func jsonInputToAddInput(in jsonAddInput, defaults cliDefaults, defaultAuthor string, index int) (event.AddInput, error) {
+// indexBySourceID maps each record's source `id` to its position in the batch,
+// so a `parent_id` naming another record in the same batch can be rewritten as
+// a batch-relative reference. Without this the id was carried across as a
+// literal integer into a database with its own autoincrement counter, which
+// either failed the parent-exists check or — worse — landed on an unrelated
+// event and imported a plausible but wrong tree.
+func indexBySourceID(inputs []jsonAddInput) (map[int64]int, error) {
+	var byIndex map[int64]int
+	for i, in := range inputs {
+		if in.ID == nil {
+			continue
+		}
+		if prev, dup := byIndex[*in.ID]; dup {
+			return nil, fmt.Errorf("--format=json: record %d: id %d already used by record %d",
+				i, *in.ID, prev)
+		}
+		if byIndex == nil {
+			byIndex = make(map[int64]int, len(inputs))
+		}
+		byIndex[*in.ID] = i
+	}
+	return byIndex, nil
+}
+
+func jsonInputToAddInput(
+	in jsonAddInput, defaults cliDefaults, defaultAuthor string, index int, byIndex map[int64]int,
+) (event.AddInput, error) {
 	title := strings.TrimSpace(in.Title)
 	if title == "" {
 		return event.AddInput{}, fmt.Errorf("--format=json: record %d: title is required", index)
 	}
 	body := strings.TrimSpace(in.Body)
 
-	parent := in.ParentID
-	if parent == nil {
+	// A parent_id pointing at another record in this batch is resolved by
+	// position; anything else is an id in the target database and is checked
+	// against it. The --parent CLI default is always a target-database id, so
+	// it is only consulted when the record itself says nothing.
+	var parent *int64
+	var parentIndex *int
+	switch {
+	case in.ParentID == nil:
 		parent = defaults.parent
+	default:
+		if i, ok := byIndex[*in.ParentID]; ok {
+			parentIndex = &i
+		} else {
+			parent = in.ParentID
+		}
 	}
 
 	var createdAt *time.Time
 	if in.CreatedAt != nil {
-		t, err := time.Parse(time.RFC3339, *in.CreatedAt)
+		// timefmt.Parse accepts RFC3339 — what `--format=json` emits — plus
+		// every layout --time takes, so hand-written import files can use the
+		// same stamps as the rest of the CLI.
+		t, err := timefmt.Parse(*in.CreatedAt)
 		if err != nil {
 			return event.AddInput{}, fmt.Errorf("--format=json: record %d: created_at: %w", index, err)
 		}
@@ -173,11 +225,12 @@ func jsonInputToAddInput(in jsonAddInput, defaults cliDefaults, defaultAuthor st
 	}
 
 	return event.AddInput{
-		Title:     title,
-		Body:      body,
-		ParentID:  parent,
-		Meta:      merged,
-		CreatedAt: createdAt,
+		Title:       title,
+		Body:        body,
+		ParentID:    parent,
+		ParentIndex: parentIndex,
+		Meta:        merged,
+		CreatedAt:   createdAt,
 	}, nil
 }
 
