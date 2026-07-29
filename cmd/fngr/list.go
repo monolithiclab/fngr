@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -18,11 +19,18 @@ type ListCmd struct {
 	Limit   int    `help:"Maximum events to return (0 = no limit)." short:"n" default:"0"`
 	Reverse bool   `help:"Sort oldest first (default is newest first)." short:"r"`
 	NoPager bool   `help:"Disable the pager even when stdout is a TTY."`
-	Search  string `help:"Filter expression (#tag, @person, key=value, bare words). Operators: & (AND), | (OR), ! (NOT); no grouping parentheses." short:"S"`
+	Search  string `help:"Filter expression (#tag, @person, key=value, word, word*). Operators by precedence: ! (NOT), & (AND, also implied between adjacent terms), | (OR); no grouping parentheses." short:"S"`
 }
 
 func (c *ListCmd) Run(s eventStore, io ioStreams) error {
 	ctx := context.Background()
+
+	// Validate before spawning a pager: nothing should start a $PAGER process
+	// only to tear it down again over a typo in -S or --from.
+	opts, err := c.toListOpts()
+	if err != nil {
+		return err
+	}
 
 	io, closePager := withPager(io, c.NoPager)
 	defer func() {
@@ -31,15 +39,10 @@ func (c *ListCmd) Run(s eventStore, io ioStreams) error {
 		}
 	}()
 
-	opts, err := c.toListOpts()
-	if err != nil {
-		return err
-	}
-
 	if c.Format == render.FormatTree {
 		events, err := s.List(ctx, opts)
 		if err != nil {
-			return wrapFilterErr(c.Search, err)
+			return withGrammarHint(err)
 		}
 		if len(events) == 0 {
 			fmt.Fprintln(io.Err, "No events found.")
@@ -47,36 +50,37 @@ func (c *ListCmd) Run(s eventStore, io ioStreams) error {
 		}
 		return render.Tree(io.Out, events)
 	}
-	return wrapFilterErr(c.Search, render.EventsStream(io.Out, c.Format, s.ListSeq(ctx, opts)))
+	return withGrammarHint(render.EventsStream(io.Out, c.Format, s.ListSeq(ctx, opts)))
 }
 
-// wrapFilterErr surfaces filter-grammar errors with a pointer to --help.
-// Only wraps when a filter was actually passed (no point steering empty-filter
-// failures into the filter-syntax bucket) AND when the error looks like a
-// parse failure — FTS5 sub-parser failures surface as "fts5:" prefixed
-// messages, but unmatched quotes break SQLite's tokenizer first and surface
-// as generic "SQL logic error: ... syntax error / unterminated string".
-func wrapFilterErr(filter string, err error) error {
-	if err == nil || filter == "" {
+// withGrammarHint points the user at the -S grammar when the filter itself is
+// what failed. The filter parser reports its own errors, so this is a typed
+// check — it used to sniff SQLite's message text for "fts5" and friends,
+// because malformed filters only failed once SQLite tried to run them.
+func withGrammarHint(err error) error {
+	if !errors.Is(err, event.ErrFilter) {
 		return err
 	}
-	msg := err.Error()
-	parseFailure := strings.Contains(msg, "fts5") ||
-		strings.Contains(msg, "FTS5") ||
-		strings.Contains(msg, "SQL logic error") ||
-		strings.Contains(msg, "syntax error") ||
-		strings.Contains(msg, "unterminated")
-	if !parseFailure {
-		return err
-	}
-	return fmt.Errorf("invalid filter syntax (%w); see --help for the -S grammar", err)
+	return fmt.Errorf("%w (see --help for the -S grammar)", err)
 }
 
 func (c *ListCmd) toListOpts() (event.ListOpts, error) {
+	// Trim once here so a blank -S means the same thing as an absent one:
+	// the store treats "" as no filter, but the parser treats "   " as an
+	// empty expression, and `fngr -S "$QUERY"` should not flip between the
+	// two on a stray space.
 	opts := event.ListOpts{
-		Filter:    c.Search,
+		Filter:    strings.TrimSpace(c.Search),
 		Limit:     c.Limit,
 		Ascending: c.Reverse,
+	}
+	// Validate up front: ListSeq compiles the filter lazily, so a syntax
+	// error would otherwise surface after the JSON/CSV renderer has already
+	// written its opening bytes.
+	if opts.Filter != "" {
+		if err := event.ValidateFilter(opts.Filter); err != nil {
+			return opts, withGrammarHint(err)
+		}
 	}
 	if c.From != "" {
 		from, err := timefmt.ParseDate(c.From)

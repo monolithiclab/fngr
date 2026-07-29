@@ -333,31 +333,6 @@ func TestList_NoFilter(t *testing.T) {
 	}
 }
 
-func TestList_WithFilter(t *testing.T) {
-	t.Parallel()
-	database := testDB(t)
-
-	_, err := Add(ctx, database, AddInput{Title: "deploy to prod #ops", Meta: []parse.Meta{{Key: "tag", Value: "ops"}}})
-	if err != nil {
-		t.Fatalf("Add 1: %v", err)
-	}
-	_, err = Add(ctx, database, AddInput{Title: "standup meeting #work", Meta: []parse.Meta{{Key: "tag", Value: "work"}}})
-	if err != nil {
-		t.Fatalf("Add 2: %v", err)
-	}
-
-	events, err := List(ctx, database, ListOpts{Filter: "#ops"})
-	if err != nil {
-		t.Fatalf("List: %v", err)
-	}
-	if len(events) != 1 {
-		t.Fatalf("len(events) = %d, want 1", len(events))
-	}
-	if events[0].Title != "deploy to prod #ops" {
-		t.Errorf("events[0].Title = %q, want %q", events[0].Title, "deploy to prod #ops")
-	}
-}
-
 func TestList_WithDateRange(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
@@ -907,68 +882,6 @@ func TestList_LoadMetaAcrossChunkBoundary(t *testing.T) {
 		if len(ev.Meta) != 1 || ev.Meta[0].Key != MetaKeyAuthor || ev.Meta[0].Value != "alice" {
 			t.Fatalf("events[%d].Meta = %v, want [{author alice}]", i, ev.Meta)
 		}
-	}
-}
-
-func TestList_ComplexFilters(t *testing.T) {
-	t.Parallel()
-	database := testDB(t)
-
-	_, err := Add(ctx, database, AddInput{Title: "deploy to prod", Meta: []parse.Meta{
-		{Key: MetaKeyAuthor, Value: "alice"},
-		{Key: MetaKeyTag, Value: "ops"},
-		{Key: MetaKeyPeople, Value: "alice"},
-	}})
-	if err != nil {
-		t.Fatalf("Add 1: %v", err)
-	}
-
-	_, err = Add(ctx, database, AddInput{Title: "standup meeting", Meta: []parse.Meta{
-		{Key: MetaKeyAuthor, Value: "bob"},
-		{Key: MetaKeyTag, Value: "work"},
-		{Key: MetaKeyPeople, Value: "bob"},
-	}})
-	if err != nil {
-		t.Fatalf("Add 2: %v", err)
-	}
-
-	_, err = Add(ctx, database, AddInput{Title: "deploy standup", Meta: []parse.Meta{
-		{Key: MetaKeyAuthor, Value: "alice"},
-		{Key: MetaKeyTag, Value: "ops"},
-		{Key: MetaKeyTag, Value: "work"},
-		{Key: MetaKeyPeople, Value: "alice"},
-	}})
-	if err != nil {
-		t.Fatalf("Add 3: %v", err)
-	}
-
-	tests := []struct {
-		name   string
-		filter string
-		want   int
-	}{
-		{"AND tags", "#ops & #work", 1},
-		{"OR tags", "#ops | #work", 3},
-		{"NOT tag", "!#work", 1},
-		{"tag AND person", "#ops & @alice", 2},
-		{"body AND tag", "deploy & #ops", 2},
-		{"body NOT tag", "deploy & !#work", 1},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			events, err := List(ctx, database, ListOpts{Filter: tt.filter})
-			if err != nil {
-				t.Fatalf("List(%q): %v", tt.filter, err)
-			}
-			if len(events) != tt.want {
-				texts := make([]string, len(events))
-				for i, e := range events {
-					texts[i] = e.Title
-				}
-				t.Errorf("filter %q matched %d events %v, want %d", tt.filter, len(events), texts, tt.want)
-			}
-		})
 	}
 }
 

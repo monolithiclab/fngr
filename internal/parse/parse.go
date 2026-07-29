@@ -11,6 +11,12 @@ type Meta struct {
 	Value string
 }
 
+// Token renders m the way it appears inside the FTS index. Both sides of
+// search have to agree on this: FTSContent writes it, and the -S filter
+// parser (internal/event/filter.go) emits the same form to match it. A drift
+// between the two would show up only as queries silently matching nothing.
+func (m Meta) Token() string { return m.Key + "=" + m.Value }
+
 // metaNamePattern is the character class accepted for @person / #tag names
 // and for keys in `key=value` arguments: any Unicode letter or digit, plus
 // '_', '/' and '-', starting with a letter, digit or '_'.
@@ -149,7 +155,7 @@ func FTSContent(title, body string, meta []Meta) string {
 		parts = append(parts, body)
 	}
 	for _, m := range meta {
-		parts = append(parts, m.Key+"="+m.Value)
+		parts = append(parts, m.Token())
 	}
 	return strings.Join(parts, " ")
 }

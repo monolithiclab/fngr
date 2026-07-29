@@ -145,8 +145,15 @@ make ci             # codefix + format + lint + test
   such a row reads as the zero time and stays deletable.
 - `internal/event/store.go` — `Store` wrapper that exposes the package functions as methods on a
   single `*sql.DB`, satisfying `cmd/fngr.eventStore`.
-- `internal/event/filter.go` — Filter expression preprocessor: expands `#`/`@` shorthands and
-  `&`/`|`/`!` operators into FTS5 MATCH syntax. Escapes embedded double quotes.
+- `internal/event/filter.go` — `-S` filter expressions: tokenizer → precedence-climbing parser
+  (`!` > `&` > `|`, adjacent terms are an implicit AND) → SQL emitter. `compileFilter` returns a
+  boolean condition over `e.id` plus its bind args; each leaf term becomes its own
+  `e.id IN (SELECT rowid FROM events_fts WHERE events_fts MATCH ?)`, so `&`/`|`/`!` are SQL
+  operators over id sets rather than FTS5 syntax — FTS5 has no unary NOT, which is why the
+  string-rewriting preprocessor this replaced could not express `!a & b`. Terms are always
+  quoted on emit, so punctuation (hyphens, stray quotes) is text, not syntax; a trailing `*`
+  stays outside the quotes as a prefix search. Malformed input fails at parse time with an
+  `ErrFilter`-wrapped message naming the rune position, never at SQLite.
 - `internal/render/render.go` — Output rendering to `io.Writer`. `Events(w, format, events)`,
   `SingleEvent(w, format, ev)`, and `EventsStream(w, format, seq)` are the dispatchers commands
   call; `Tree`, `Flat`/`FlatStream`, `JSON`/`JSONStream`, `CSV`/`CSVStream`,
