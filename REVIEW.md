@@ -29,7 +29,7 @@ under concurrent writes, and the README states the opposite.**
 | [C2](#c2) | **Critical** | timefmt | Unbounded relative offset writes a negative-year timestamp that bricks every read; reachable from piped content | ✅ fixed |
 | [C3](#c3) | **Critical** | json | Documented JSON round-trip silently corrupts the event tree | open |
 | [C4](#c4) | **Critical** | parse | `\w` is ASCII-only → `@josé` silently stored as `people=jos` | ✅ fixed |
-| [C5](#c5) | **Critical** | filter | Leading `!` discards the rest of the expression; bare `!` panics; hyphens error | open |
+| [C5](#c5) | **Critical** | filter | Leading `!` discards the rest of the expression; bare `!` panics; hyphens error | ✅ fixed |
 | [H1](#h1) | High | migrate | Migration 3's SQL `TRIM()` ≠ `strings.TrimSpace` → corrupted legacy titles/bodies | open |
 | [H2](#h2) | High | render | O(n²) prefix concatenation in `Tree` — 50k-deep chain: 67.85 s / 7.0 GB | open |
 | [H3](#h3) | High | event | `meta rename` fails with a raw UNIQUE error on its primary use case | open |
@@ -430,6 +430,59 @@ with a term-position message instead of letting SQLite fail. ~200 LoC plus
 table-driven tests, one file, no schema or CLI change. Grouping parens become
 nearly free afterward — currently documented as unsupported; leave them out
 unless wanted.
+
+**Resolved.** `internal/event/filter.go` is now tokenizer → precedence-climbing
+parser → SQL emitter, and the emit target changed: instead of one FTS5 MATCH
+string for the whole expression, every leaf term gets its own
+`e.id IN (SELECT rowid FROM events_fts WHERE events_fts MATCH ?)` and `&`/`|`/`!`
+become SQL operators over id sets. That is what makes (a) fixable at all —
+FTS5 has no unary NOT, so no amount of token rewriting can express `!a & b`
+inside a single MATCH. `buildListQuery` loses the `strings.CutPrefix(matchExpr,
+"NOT ")` special case and the FTS join along with it; it now returns an error,
+propagated through `ListSeq` and `List`.
+
+(b) is gone because `!` is a token, not a string prefix: `!`, `!!!` and `a & &`
+all report `invalid filter syntax: ... at position N` before any SQL runs, via
+the new `event.ErrFilter` sentinel. (c) is gone because every term is quoted on
+emit — `session-handler` and `v1.2` search for themselves, and a lone `"` now
+returns no results instead of `unterminated string` (FTS5's tokenizer drops
+punctuation, so there is nothing to match; "no results" is an answer).
+
+`cmd/fngr/list.go`'s `wrapFilterErr` — which sniffed SQLite's message text for
+`fts5` / `SQL logic error` / `unterminated` to guess whether a failure was the
+user's fault — is replaced by `withGrammarHint`, a one-line
+`errors.Is(err, event.ErrFilter)` check. Guessing is no longer necessary now
+that filter errors are typed and raised before the query.
+
+Two behaviours were preserved deliberately, both previously undocumented and
+both now in the README table: adjacent terms are an implicit AND (`-S 'walk
+dog'`), which fell out of FTS5 juxtaposition before, and a trailing `*` is a
+prefix search (`-S 'releas*'`), which needed explicit handling once terms
+became quoted. Grouping parens stay out per the note above — `unary` would
+need one `'(' expr ')'` case, but adding syntax is a feature, not a fix.
+
+Two smaller inconsistencies surfaced during the rewrite and were fixed with it.
+`-S '@bob@example.com'` used to compile to a phrase that could never match, so
+the search reported "no results" for input that `event tag` and `meta -S` both
+reject as invalid; `ftsTerm` now resolves shorthands through `parse.MetaArg`, so
+all three agree. And `list --format=json -S 'a &'` printed `[` to stdout before
+erroring (CSV printed its header row), because `ListSeq` compiles the filter
+lazily — after the renderer has begun. `ListCmd.toListOpts` now calls
+`event.ValidateFilter` up front, before the pager is even spawned.
+
+**Cost measured, accepted.** Per-term MATCH subqueries mean FTS5 no longer
+intersects posting lists internally: a 3-term AND over 200k events goes from
+89 µs to ~154 ms, and bind order now affects speed because SQLite has no size
+estimate for a virtual-table subquery. At this tool's scale — single-user
+journals, ~5k events — the same query costs 2-3 ms, and single-term queries are
+within 15%. Correct answers are worth 2 ms; folding the positive terms back into
+one MATCH would re-add exactly the coupling this rewrite removed. Revisit only
+if a real database gets large enough to notice.
+
+**Considered and skipped:** routing `meta -S` errors through `ErrFilter` too
+(its grammar is different and its errors are already specific — that is a
+unification, not a fix); an EOF sentinel token in the parser (line-neutral, and
+`len([]rune(expr))` already allocates nothing).
 
 ---
 
@@ -1220,11 +1273,10 @@ are local.
   semantics, and `main.go` is in `.covignore`, so nothing tests it. A
   `dbPolicy` method on the command structs (or a Kong tag) would make this
   declarative and testable.
-- **`wrapFilterErr` string-matches driver error text** from the cmd layer
-  (`list.go:64-68`, matching `"fts5"`, `"SQL logic error"`, `"unterminated"`).
-  This was the right call when shipped, but [C5](#c5)'s parser rewrite makes it
-  obsolete: a real parser returns a typed error and the cmd layer can
-  `errors.As` it. Delete `wrapFilterErr` as part of that change.
+- ~~**`wrapFilterErr` string-matches driver error text** from the cmd layer
+  (`list.go:64-68`, matching `"fts5"`, `"SQL logic error"`, `"unterminated"`).~~
+  Resolved with [C5](#c5): the parser returns `event.ErrFilter` and the cmd
+  layer is a one-line `errors.Is` (`withGrammarHint`).
 - **`list.go:30` writes the pager warning to `os.Stderr` directly**, bypassing
   the injected `io.Err` and defeating the `ioStreams` abstraction in tests.
 - **Inconsistent empty-result messaging in `list.go`** — the tree branch prints

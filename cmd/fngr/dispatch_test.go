@@ -253,6 +253,65 @@ func TestKongDispatch_UnicodeMetaNames(t *testing.T) {
 	}
 }
 
+// TestKongDispatch_SearchFilter drives -S through the full CLI. The operand
+// order in the negation cases is the point: `!#bugfix & #work` used to be
+// evaluated as `!(#bugfix & #work)` and returned every event, while the
+// equivalent `#work & !#bugfix` returned the right one.
+func TestKongDispatch_SearchFilter(t *testing.T) {
+	t.Parallel()
+	run := newDispatcher(t)
+
+	for _, title := range []string{
+		"fix the session-handler crash #bugfix #work",
+		"ship the release #work",
+		"walk the dog #home",
+	} {
+		if _, err := run([]string{"add", title}); err != nil {
+			t.Fatalf("add %q: %v", title, err)
+		}
+	}
+
+	tests := []struct {
+		name    string
+		filter  string
+		want    []string
+		notWant []string
+	}{
+		// Only the two negation orders here: the rest of the grammar is
+		// covered by TestList_FilterSemantics in internal/event, and this test
+		// exists to prove the fix survives the Kong dispatch path.
+		{"NOT first", "!#bugfix & #work", []string{"ship the release"}, []string{"session-handler", "walk the dog"}},
+		{"NOT last", "#work & !#bugfix", []string{"ship the release"}, []string{"session-handler", "walk the dog"}},
+	}
+	for _, tt := range tests {
+		// Not parallel: these subtests share one parser and store.
+		t.Run(tt.name, func(t *testing.T) {
+			out, err := run([]string{"list", "--format", "flat", "-S", tt.filter})
+			if err != nil {
+				t.Fatalf("list -S %q: %v", tt.filter, err)
+			}
+			for _, want := range tt.want {
+				if !strings.Contains(out, want) {
+					t.Errorf("-S %q output missing %q:\n%s", tt.filter, want, out)
+				}
+			}
+			for _, bad := range tt.notWant {
+				if strings.Contains(out, bad) {
+					t.Errorf("-S %q output should not contain %q:\n%s", tt.filter, bad, out)
+				}
+			}
+		})
+	}
+
+	// A bare "!" used to panic in the filter preprocessor, taking the CLI down
+	// with it instead of reporting a syntax error.
+	t.Run("bare NOT is a syntax error", func(t *testing.T) {
+		if _, err := run([]string{"list", "--format", "flat", "-S", "!"}); err == nil {
+			t.Fatal(`-S "!" succeeded, want a syntax error`)
+		}
+	})
+}
+
 // TestKongDispatch_OutOfRangeTimeFlagErrors proves --time rejects an offset
 // that cannot be stored, instead of writing an unreadable row.
 func TestKongDispatch_OutOfRangeTimeFlagErrors(t *testing.T) {

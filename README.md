@@ -260,9 +260,7 @@ fngr --version
 
 ## Filter syntax
 
-Filters are passed via the `-S` / `--search` flag (`fngr -S '#ops'`,
-`fngr meta -S tag=wip`). The same syntax applies wherever a `-S` flag is
-accepted:
+Event filters are passed via the `-S` / `--search` flag (`fngr -S '#ops'`):
 
 | Syntax      | Meaning                     |
 | ----------- | --------------------------- |
@@ -270,12 +268,23 @@ accepted:
 | `#tag`      | Events with `tag=tag`       |
 | `@person`   | Events with `people=person` |
 | `key=value` | Events with exact metadata  |
+| `word*`     | Prefix search               |
 | `a & b`     | Both conditions (AND)       |
+| `a b`       | Both conditions (AND)       |
 | `a \| b`    | Either condition (OR)       |
 | `!a`        | Exclude condition (NOT)     |
 
-`!` binds to the immediately following term (`!#bugfix` excludes events tagged
-`bugfix`); parentheses for grouping are not supported.
+`!` binds tightest, then `&`, then `|` — so `#home | #bugfix & #work` means
+`#home` or (`#bugfix` and `#work`). Parentheses for grouping are not supported.
+`!` applies to the one term that follows it, and operand order does not change
+the meaning: `!#bugfix & #work` and `#work & !#bugfix` are the same query.
+
+Terms are matched literally, so punctuation needs no escaping —
+`fngr -S session-handler` and `fngr -S 'v1.2'` search for themselves. `&`, `|`
+and a leading `!` are the only reserved characters; a `!` anywhere else is part
+of the term (`fngr -S 'wow!'`). There is no escape hatch, so a word that
+genuinely starts with `!` cannot be searched for: `-S '!important'` excludes
+"important" rather than looking for it.
 
 Metadata from `@person` and `#tag` in an event's title or body is extracted
 automatically and stored separately from the text, so `#deploy` only matches the
@@ -285,6 +294,10 @@ Names may contain any Unicode letter or digit plus `_`, `/` and `-`, so `@josé`
 `@田中` and `#déploiement` are stored whole. A sigil only opens a tag at the
 start of the text or after a non-name character, so `bob@example.com` and
 `https://example.com/guide#installation` do not mint metadata.
+
+`fngr meta -S` is a different, narrower filter: exactly one `#tag`, `@person`,
+`key=value` or bare key, with no operators and no full-text search. It selects
+which metadata rows to *list*, not which events to match.
 
 ## Database location
 
@@ -345,10 +358,12 @@ by design.
 needs an editor binary on `PATH`. `export EDITOR=vim` (or whichever)
 in your shell rc.
 
-**`invalid filter syntax (...); see --help for the -S grammar`** —
-your `-S` expression broke the parser. Common causes: unmatched
-quotes, unbalanced operators, or a stray special character. The full
-grammar is in the [Filter syntax](#filter-syntax) section above.
+**`invalid filter syntax: ... (see --help for the -S grammar)`** —
+your `-S` expression is malformed, and the message names the rune
+position. It is almost always a dangling operator: `-S '#ops &'` or
+`-S '!'`. Punctuation inside a term is not a cause — terms are
+matched literally. The full grammar is in the
+[Filter syntax](#filter-syntax) section above.
 
 **Pager misbehavior on `fngr list`** — pass `--no-pager` to bypass.
 The default pager is `$PAGER` (fallback `less -FRX`); `less -F`

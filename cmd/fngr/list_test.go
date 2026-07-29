@@ -3,12 +3,17 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/monolithiclab/fngr/internal/db"
 	"github.com/monolithiclab/fngr/internal/event"
 	"github.com/monolithiclab/fngr/internal/parse"
+	"github.com/monolithiclab/fngr/internal/timefmt"
 )
 
 func TestListCmd_DefaultTree(t *testing.T) {
@@ -32,59 +37,84 @@ func TestListCmd_DefaultTree(t *testing.T) {
 	}
 }
 
-func TestListCmd_FTSSyntaxErrorIsWrapped(t *testing.T) {
+// TestListCmd_FilterSyntaxError covers both output paths — tree buffers via
+// List, everything else streams via ListSeq — since each returns the error
+// from a different place.
+func TestListCmd_FilterSyntaxError(t *testing.T) {
 	t.Parallel()
-	s := newTestStore(t)
-	io, _ := newTestIO("")
+	for _, format := range []string{"tree", "flat"} {
+		t.Run(format, func(t *testing.T) {
+			t.Parallel()
+			s := newTestStore(t)
+			io, _ := newTestIO("")
 
-	// Force a write so the FTS index has at least one row to query against
-	// (otherwise FTS5 short-circuits before parsing the MATCH expression).
-	if _, err := s.Add(context.Background(), event.AddInput{Title: "any", Meta: []parse.Meta{
-		{Key: "author", Value: "alice"},
-	}}); err != nil {
-		t.Fatalf("seed: %v", err)
-	}
-
-	// Unmatched double-quote — FTS5 parser explodes.
-	cmd := &ListCmd{Format: "flat", Search: `"unmatched`}
-	err := cmd.Run(s, io)
-	if err == nil {
-		t.Fatal("expected an error for unmatched quote, got nil")
-	}
-	if !strings.Contains(err.Error(), "invalid filter syntax") || !strings.Contains(err.Error(), "--help") {
-		t.Errorf("err = %q, want wrapped 'invalid filter syntax (...); see --help' message", err)
+			cmd := &ListCmd{Format: format, Search: "#ops &"}
+			err := cmd.Run(s, io)
+			if err == nil {
+				t.Fatal("expected an error for a dangling operator, got nil")
+			}
+			if !errors.Is(err, event.ErrFilter) {
+				t.Errorf("err = %v, want it to wrap event.ErrFilter", err)
+			}
+			if !strings.Contains(err.Error(), "--help") {
+				t.Errorf("err = %q, want it to point at --help", err)
+			}
+		})
 	}
 }
 
-func TestWrapFilterErr(t *testing.T) {
+// TestListCmd_QueryErrorKeepsItsOwnMessage is the other half of the syntax-error
+// test: a genuine query failure must reach the user unchanged. The predecessor
+// of withGrammarHint matched SQLite's message text, so real database errors got
+// dressed up as the user's typo and sent them to read the -S grammar.
+func TestListCmd_QueryErrorKeepsItsOwnMessage(t *testing.T) {
+	t.Parallel()
+	database, err := db.Open(filepath.Join(t.TempDir(), "fngr.db"), true)
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	s := event.NewStore(database)
+	io, _ := newTestIO("")
+
+	cmd := &ListCmd{Format: "tree", Search: "#ops"}
+	err = cmd.Run(s, io)
+	if err == nil {
+		t.Fatal("expected an error from the closed database, got nil")
+	}
+	if errors.Is(err, event.ErrFilter) {
+		t.Errorf("err = %v, want it not to be reported as a filter error", err)
+	}
+	if strings.Contains(err.Error(), "--help") {
+		t.Errorf("err = %q, want no -S grammar hint", err)
+	}
+}
+
+func TestWithGrammarHint(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name        string
-		filter      string
-		in          error
-		wantWrapped bool
+		name     string
+		in       error
+		wantHint bool
 	}{
-		{"nil passes through", "#ops", nil, false},
-		{"empty filter passes through even on FTS error", "", fmt.Errorf("fts5: syntax error"), false},
-		{"non-parse error passes through", "#ops", fmt.Errorf("disk full"), false},
-		{"fts5 lower wraps", "#ops", fmt.Errorf("fts5: syntax error near \""), true},
-		{"FTS5 upper wraps", "#ops", fmt.Errorf("FTS5: syntax error near \""), true},
-		{"SQL logic error wraps", "#ops", fmt.Errorf("query events: SQL logic error: unterminated string"), true},
-		{"unterminated wraps", "#ops", fmt.Errorf("unterminated string (1)"), true},
+		{"nil passes through", nil, false},
+		{"unrelated error passes through", fmt.Errorf("disk full"), false},
+		{"filter error gets the hint", fmt.Errorf("%w: nope", event.ErrFilter), true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			out := wrapFilterErr(tc.filter, tc.in)
+			out := withGrammarHint(tc.in)
 			if tc.in == nil {
 				if out != nil {
 					t.Errorf("nil in, got %v", out)
 				}
 				return
 			}
-			wrapped := strings.Contains(out.Error(), "invalid filter syntax")
-			if wrapped != tc.wantWrapped {
-				t.Errorf("wrapped=%v, want %v (out=%q)", wrapped, tc.wantWrapped, out)
+			if got := strings.Contains(out.Error(), "--help"); got != tc.wantHint {
+				t.Errorf("hint=%v, want %v (out=%q)", got, tc.wantHint, out)
 			}
 		})
 	}
@@ -223,7 +253,10 @@ func TestListCmd_FilterAndDateRange(t *testing.T) {
 		t.Fatalf("Add: %v", err)
 	}
 
-	cmd := &ListCmd{Format: "flat", Search: "#ops"}
+	// A range spanning today, so both events fall inside it and the filter is
+	// what does the selecting. --to is inclusive of its whole day.
+	today := time.Now().Format(timefmt.DateFormat)
+	cmd := &ListCmd{Format: "flat", Search: "#ops", From: today, To: today}
 	if err := cmd.Run(s, io); err != nil {
 		t.Fatalf("Run: %v", err)
 	}

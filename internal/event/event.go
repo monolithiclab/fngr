@@ -774,7 +774,11 @@ type ListOpts struct {
 // after an error is yielded.
 func ListSeq(ctx context.Context, db *sql.DB, opts ListOpts) iter.Seq2[Event, error] {
 	return func(yield func(Event, error) bool) {
-		query, args := buildListQuery(opts)
+		query, args, err := buildListQuery(opts)
+		if err != nil {
+			yield(Event{}, err)
+			return
+		}
 		rows, err := db.QueryContext(ctx, query, args...)
 		if err != nil {
 			yield(Event{}, fmt.Errorf("query events: %w", err))
@@ -835,30 +839,19 @@ func List(ctx context.Context, db *sql.DB, opts ListOpts) ([]Event, error) {
 	return out, nil
 }
 
-func buildListQuery(opts ListOpts) (string, []any) {
-	var query string
+func buildListQuery(opts ListOpts) (string, []any, error) {
+	query := `SELECT e.id, e.parent_id, e.title, e.body, e.created_at
+		FROM events e
+		WHERE 1=1`
 	var args []any
 
 	if opts.Filter != "" {
-		matchExpr := preprocessFilter(opts.Filter)
-		if positiveExpr, ok := strings.CutPrefix(matchExpr, "NOT "); ok {
-			query = `SELECT e.id, e.parent_id, e.title, e.body, e.created_at
-				FROM events e
-				WHERE e.id NOT IN (
-					SELECT rowid FROM events_fts WHERE events_fts MATCH ?
-				)`
-			args = append(args, positiveExpr)
-		} else {
-			query = `SELECT e.id, e.parent_id, e.title, e.body, e.created_at
-				FROM events e
-				JOIN events_fts f ON f.rowid = e.id
-				WHERE events_fts MATCH ?`
-			args = append(args, matchExpr)
+		cond, filterArgs, err := compileFilter(opts.Filter)
+		if err != nil {
+			return "", nil, err
 		}
-	} else {
-		query = `SELECT e.id, e.parent_id, e.title, e.body, e.created_at
-			FROM events e
-			WHERE 1=1`
+		query += " AND " + cond
+		args = append(args, filterArgs...)
 	}
 
 	// Bounds are compared lexically against the stored TEXT, so they have to
@@ -884,7 +877,7 @@ func buildListQuery(opts ListOpts) (string, []any) {
 		args = append(args, opts.Limit)
 	}
 
-	return query, args
+	return query, args, nil
 }
 
 // GetSubtree returns the event with id == rootID plus every transitive
