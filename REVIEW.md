@@ -23,34 +23,34 @@ under concurrent writes, and the README states the opposite.**
 
 ## Severity summary
 
-| ID | Severity | Area | One-line |
-| --- | --- | --- | --- |
-| [C1](#c1) | **Critical** | db | Pooled-connection PRAGMAs → concurrent `add` silently loses events; `foreign_keys=OFF` on most connections |
-| [C2](#c2) | **Critical** | timefmt | Unbounded relative offset writes a negative-year timestamp that bricks every read; reachable from piped content |
-| [C3](#c3) | **Critical** | json | Documented JSON round-trip silently corrupts the event tree |
-| [C4](#c4) | **Critical** | parse | `\w` is ASCII-only → `@josé` silently stored as `people=jos` |
-| [C5](#c5) | **Critical** | filter | Leading `!` discards the rest of the expression; bare `!` panics; hyphens error |
-| [H1](#h1) | High | migrate | Migration 3's SQL `TRIM()` ≠ `strings.TrimSpace` → corrupted legacy titles/bodies |
-| [H2](#h2) | High | render | O(n²) prefix concatenation in `Tree` — 50k-deep chain: 67.85 s / 7.0 GB |
-| [H3](#h3) | High | event | `meta rename` fails with a raw UNIQUE error on its primary use case |
-| [H4](#h4) | High | cmd | `fngr add` hangs forever when stdin is an open, idle pipe |
-| [H5](#h5) | High | cmd | `confirm` treats EOF as consent → non-interactive `meta rename` acts without `-f` |
-| [M1](#m1) | Medium | event | Body-tag sync silently deletes operator-added meta |
-| [M2](#m2) | Medium | event | Parent cycle → two non-terminating loops + a silent total data blackout |
-| [M3](#m3) | Medium | event | Nothing enforces a single `author`; display picks whichever sorts first |
-| [M4](#m4) | Medium | parse | Email addresses mint bogus `people` tags |
-| [M5](#m5) | Medium | timefmt | `"1 month ago"` on the 31st lands in the wrong month; int64 overflow yields a *future* time |
-| [M6](#m6) | Medium | render | Newlines and ANSI/OSC escapes in titles forge output rows |
-| [M7](#m7) | Medium | event | FTS conflates content with metadata → body text forges tag matches |
-| [M8](#m8) | Medium | render | `--limit` on tree format promotes orphaned children to roots, unmarked |
-| [M9](#m9) | Medium | cmd | `fngr meta` output amplification: 1 MB stored → 202 MB printed |
-| [M10](#m10) | Medium | parse | `". "` split eats abbreviations — `Dr. Smith` → title `Dr` |
-| [M11](#m11) | Medium | db | `fngr add` never creates a project-local `.fngr.db`; first add lands in `~/.fngr.db` |
-| [M12](#m12) | Medium | timefmt | `--from`/`--to` reject both relative forms and fngr's own emitted timestamps |
-| [M13](#m13) | Medium | timefmt | DST spring-forward silently shifts `event time` to the prior hour |
-| [M14](#m14) | Medium | event | `-n N -r` returns the N **oldest** events |
-| [M15](#m15) | Medium | perf | Unbuffered stdout — one `write(2)` per event; 11-19% on large lists |
-| [M16](#m16) | Medium | supply-chain | Release workflow: broad privileges on seven mutable-tag actions |
+| ID | Severity | Area | One-line | Status |
+| --- | --- | --- | --- | --- |
+| [C1](#c1) | **Critical** | db | Pooled-connection PRAGMAs → concurrent `add` silently loses events; `foreign_keys=OFF` on most connections | ✅ fixed |
+| [C2](#c2) | **Critical** | timefmt | Unbounded relative offset writes a negative-year timestamp that bricks every read; reachable from piped content | open |
+| [C3](#c3) | **Critical** | json | Documented JSON round-trip silently corrupts the event tree | open |
+| [C4](#c4) | **Critical** | parse | `\w` is ASCII-only → `@josé` silently stored as `people=jos` | open |
+| [C5](#c5) | **Critical** | filter | Leading `!` discards the rest of the expression; bare `!` panics; hyphens error | open |
+| [H1](#h1) | High | migrate | Migration 3's SQL `TRIM()` ≠ `strings.TrimSpace` → corrupted legacy titles/bodies | open |
+| [H2](#h2) | High | render | O(n²) prefix concatenation in `Tree` — 50k-deep chain: 67.85 s / 7.0 GB | open |
+| [H3](#h3) | High | event | `meta rename` fails with a raw UNIQUE error on its primary use case | open |
+| [H4](#h4) | High | cmd | `fngr add` hangs forever when stdin is an open, idle pipe | open |
+| [H5](#h5) | High | cmd | `confirm` treats EOF as consent → non-interactive `meta rename` acts without `-f` | open |
+| [M1](#m1) | Medium | event | Body-tag sync silently deletes operator-added meta | open |
+| [M2](#m2) | Medium | event | Parent cycle → two non-terminating loops + a silent total data blackout | open |
+| [M3](#m3) | Medium | event | Nothing enforces a single `author`; display picks whichever sorts first | open |
+| [M4](#m4) | Medium | parse | Email addresses mint bogus `people` tags | open |
+| [M5](#m5) | Medium | timefmt | `"1 month ago"` on the 31st lands in the wrong month; int64 overflow yields a *future* time | open |
+| [M6](#m6) | Medium | render | Newlines and ANSI/OSC escapes in titles forge output rows | open |
+| [M7](#m7) | Medium | event | FTS conflates content with metadata → body text forges tag matches | open |
+| [M8](#m8) | Medium | render | `--limit` on tree format promotes orphaned children to roots, unmarked | open |
+| [M9](#m9) | Medium | cmd | `fngr meta` output amplification: 1 MB stored → 202 MB printed | open |
+| [M10](#m10) | Medium | parse | `". "` split eats abbreviations — `Dr. Smith` → title `Dr` | open |
+| [M11](#m11) | Medium | db | `fngr add` never creates a project-local `.fngr.db`; first add lands in `~/.fngr.db` | open |
+| [M12](#m12) | Medium | timefmt | `--from`/`--to` reject both relative forms and fngr's own emitted timestamps | open |
+| [M13](#m13) | Medium | timefmt | DST spring-forward silently shifts `event time` to the prior hour | open |
+| [M14](#m14) | Medium | event | `-n N -r` returns the N **oldest** events | open |
+| [M15](#m15) | Medium | perf | Unbuffered stdout — one `write(2)` per event; 11-19% on large lists | open |
+| [M16](#m16) | Medium | supply-chain | Release workflow: broad privileges on seven mutable-tag actions | open |
 
 Plus 18 low-severity items, an architecture section, and a measured
 performance section — all below.
@@ -127,8 +127,16 @@ dsn := "file:" + path +
 db, err := sql.Open("sqlite", dsn)
 ```
 
-Verified working across three connections in a scratch module. ~5 lines, no
-schema impact. **This should be the first thing fixed.**
+**Resolved.** `internal/db/db.go` now builds the DSN with `_pragma=`
+parameters (busy_timeout first), and `Open` pings once so an unusable path
+reports at open time rather than from an arbitrary later query. Two regression
+tests were added and both were confirmed to fail against the old code with
+exactly the predicted symptoms: `TestOpen_PragmasApplyToEveryPooledConnection`
+(conns 1-3 reported `foreign_keys=0 busy_timeout=0 synchronous=2`) and
+`TestOpen_ConcurrentWritersAllSucceed` (4 of 10 events lost to instant
+`SQLITE_BUSY`). The pool test is the important one — the four pre-existing
+single-connection pragma tests pass either way, because the pool hands back
+the one connection `Open` configured.
 
 <a name="c2"></a>
 ### C2 — Unbounded relative offset writes a timestamp that bricks the database

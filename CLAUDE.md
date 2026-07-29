@@ -72,8 +72,13 @@ make ci             # codefix + format + lint + test
   author from some source. `runJSON` calls `s.AddMany` for atomic batch insert.
 - `cmd/fngr/pager.go` — `withPager(io, disabled) (ioStreams, closer)` wraps `Out` in a pipe to
   `$PAGER` (fallback `less -FRX`) when stdout is a TTY. Used by `list`.
-- `internal/db/db.go` — DB path resolution (explicit > `.fngr.db` in cwd > `~/.fngr.db`), connection
-  setup (FK + WAL + busy_timeout + synchronous=NORMAL).
+- `internal/db/db.go` — DB path resolution (explicit > `.fngr.db` in cwd > `~/.fngr.db`) and
+  connection setup. The FK + WAL + busy_timeout + synchronous=NORMAL pragmas ride in the DSN
+  (`file:<path>?_pragma=...`, built with `net/url`) rather than post-open `db.Exec` calls —
+  `*sql.DB` is a pool, so an Exec configures one connection and leaves the rest at SQLite
+  defaults (`foreign_keys=OFF`, `busy_timeout=0`), which silently loses events under concurrent
+  writes. Don't move them back. `Open` pings once so an unusable path fails there rather than
+  from an arbitrary later query.
 - `internal/db/migrate.go` — Ordered list of migrations gated by `PRAGMA user_version`. Pre-migration
   databases are detected via the legacy v1 `events` table and bumped to `user_version = 1`.
   Migration 2 deduplicates `event_meta` and adds a UNIQUE index on `(key, value, event_id)` so
