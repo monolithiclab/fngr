@@ -30,7 +30,7 @@ under concurrent writes, and the README states the opposite.**
 | [C3](#c3) | **Critical** | json | Documented JSON round-trip silently corrupts the event tree | ✅ fixed |
 | [C4](#c4) | **Critical** | parse | `\w` is ASCII-only → `@josé` silently stored as `people=jos` | ✅ fixed |
 | [C5](#c5) | **Critical** | filter | Leading `!` discards the rest of the expression; bare `!` panics; hyphens error | ✅ fixed |
-| [H1](#h1) | High | migrate | Migration 3's SQL `TRIM()` ≠ `strings.TrimSpace` → corrupted legacy titles/bodies | open |
+| [H1](#h1) | High | migrate | Migration 3's SQL `TRIM()` ≠ `strings.TrimSpace` → corrupted legacy titles/bodies | ✅ fixed |
 | [H2](#h2) | High | render | O(n²) prefix concatenation in `Tree` — 50k-deep chain: 67.85 s / 7.0 GB | open |
 | [H3](#h3) | High | event | `meta rename` fails with a raw UNIQUE error on its primary use case | open |
 | [H4](#h4) | High | cmd | `fngr add` hangs forever when stdin is an open, idle pipe | open |
@@ -417,6 +417,10 @@ delete only rows whose value is a strict prefix of a freshly-derived value on
 the same event, and it needs Go-side migration machinery (the current
 migrations are pure embedded SQL and cannot call `parse.BodyTags`). That
 belongs with the migration H1 already schedules, not bolted onto a regex fix.
+*(Shipped there — see [H1](#h1). The deletion rule ended up stricter than
+"strict prefix": only a value exactly equal to what the frozen legacy pattern
+would have produced, which spares a hand-added `#work` next to a derived
+`#workflow`.)*
 
 <a name="c5"></a>
 ### C5 — Filter parser: silently wrong results, a panic, and unusable hyphens
@@ -588,6 +592,58 @@ recoverable concatenation, using
 doing the split in Go during migration, which is the only way to match
 `strings.TrimSpace` exactly (it also strips NBSP and U+2000-200A). Per
 CLAUDE.md, never edit the published `3.sql`.
+
+**Resolved.** Migration 4 does the repair in Go
+(`internal/db/migrate4.go::repairLegacyText`), run against the same transaction
+as `4.sql` via a new optional `goMigrations[N]` hook in `migrate.go`. The SQL
+alternative above was rejected: an explicit character list still misses NBSP and
+U+2000–200A, and the meta repair below needs the real extractor, not a third
+transliteration of it.
+
+*Recoverability.* The original `text` is gone, but nothing was lost that
+matters: SQLite's space-only trim removes a strict subset of what
+`strings.TrimSpace` removes, so `TrimSpace(TRIM_sp(x)) == TrimSpace(x)`.
+Re-trimming migration 3's output in Go reproduces `SplitTitleBody` exactly.
+`TestMigrate4_MatchesSplitTitleBody` asserts that against `SplitTitleBody`
+itself as the oracle — including real NBSP and em-space rows — so the two
+cannot drift.
+
+*Empty titles.* An empty title is promoted from the body's first line, which is
+what the split would have produced had the text not opened with the separator;
+`(untitled)` when there is nothing to promote. Justified by the report's own
+observation that the row is otherwise unfixable — `add ". body"` errors and
+`event title N ''` refuses.
+
+*Truncated meta (the data half of [C4](#c4)).* C4 fixed the extractor going
+forward; migration 4 repairs the rows already written. It re-inserts the full
+name and deletes the stub only when the stub is **exactly** what the frozen
+`legacyMetaNameRe` would have produced from a name the current extractor reads
+in full. A blanket prefix rule would destroy a hand-added `#work` sitting beside
+a derived `#workflow`; this one provably cannot, since the old ASCII pattern
+would have captured `workflow` whole.
+
+*Deliberately not repaired:* the rows [M4](#m4) describes, where the old sigil
+boundary minted `people=example` from `bob@example.com`. Those are
+indistinguishable from tags someone added on purpose — additive noise, not
+corruption.
+
+*FTS.* Rebuilt unconditionally rather than for touched rows only. Migration 3's
+rebuild was itself a SQL transliteration of `parse.FTSContent`, so every row it
+wrote is suspect; one pass restores the guarantee that the index says exactly
+what the Go helper would write, and drops the change-tracking bookkeeping.
+
+*Rider:* `4.sql` is a single `ANALYZE event_meta` — the long-deferred statistics
+refresh the closing notes ask to ride along with migration 4, since migration 2
+swapped the index without rebuilding `sqlite_stat1`. Verified experimentally
+that `ANALYZE` is transaction-safe and writes nothing for an empty table, so a
+freshly created database is not saddled with zero-row statistics.
+
+Also fixed here because writing migration tests on top of it would have been
+unsound: `internal/db`'s `testDB` helper used bare `:memory:`, where every
+pooled connection sees its own empty database — `migrate()` reads
+`user_version` on one connection and opens its transaction on another, so it
+only ever passed by the accident of the pool reusing a single connection. Now a
+temp file, as CLAUDE.md's conventions already required everywhere else.
 
 <a name="h2"></a>
 ### H2 — O(n²) prefix concatenation in tree rendering
@@ -1716,6 +1772,8 @@ below the table). Each entry states why so we don't re-propose it.
   [H1](#h1), so ride the long-deferred **`ANALYZE event_meta;`** along with it
   — migration 2 rebuilt the index without refreshing planner stats. Use
   `IF NOT EXISTS` / `IF EXISTS` clauses. Never edit `3.sql`.
+  *(Done in [H1](#h1); a migration can now also carry a Go step via
+  `goMigrations[N]`, run in the same transaction as its SQL.)*
 - **`internal/parse/parse.go:17`** — `metaNamePattern` is load-bearing for the
   body-tag extractor, `MetaArg`, and the exported `MetaNameRe`. [C4](#c4) and
   [M4](#m4) both edit it; do them together and test the boundary cases as one
