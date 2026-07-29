@@ -27,7 +27,7 @@ under concurrent writes, and the README states the opposite.**
 | --- | --- | --- | --- | --- |
 | [C1](#c1) | **Critical** | db | Pooled-connection PRAGMAs → concurrent `add` silently loses events; `foreign_keys=OFF` on most connections | ✅ fixed |
 | [C2](#c2) | **Critical** | timefmt | Unbounded relative offset writes a negative-year timestamp that bricks every read; reachable from piped content | ✅ fixed |
-| [C3](#c3) | **Critical** | json | Documented JSON round-trip silently corrupts the event tree | open |
+| [C3](#c3) | **Critical** | json | Documented JSON round-trip silently corrupts the event tree | ✅ fixed |
 | [C4](#c4) | **Critical** | parse | `\w` is ASCII-only → `@josé` silently stored as `people=jos` | ✅ fixed |
 | [C5](#c5) | **Critical** | filter | Leading `!` discards the rest of the expression; bare `!` panics; hyphens error | ✅ fixed |
 | [H1](#h1) | High | migrate | Migration 3's SQL `TRIM()` ≠ `strings.TrimSpace` → corrupted legacy titles/bodies | open |
@@ -247,7 +247,7 @@ Four alternatives were considered and **not** taken:
 - *Route `cmd/fngr/add_json.go`'s `time.Parse(time.RFC3339, …)` through
   `timefmt.Parse`.* Correct — it is the one import path with its own timestamp
   parser — but it widens the accepted JSON input set, so it belongs with
-  [C3](#c3), which is already rewriting that file.
+  [C3](#c3), which is already rewriting that file. *(Done there.)*
 
 <a name="c3"></a>
 ### C3 — The documented JSON round-trip silently corrupts the event tree
@@ -295,6 +295,62 @@ order need a second pass — cheap, since `AddMany` already owns the
 transaction: insert all rows with `parent_id` NULL, then a single `UPDATE`
 loop from the map before commit. ~60 LoC, fully contained inside an existing
 tx.
+
+**Resolved.** All three failure modes are gone: `id` is accepted and ignored
+for insertion, batch-internal `parent_id`s are remapped, and the round trip
+reproduces the source tree exactly.
+
+The fix is not quite the one proposed above. Putting a source-id map inside
+`addInTx` would make `AddInput.ParentID` mean "an id in the target database"
+for `fngr add --parent N` and "an id in whatever database this JSON came
+from" for the import path — the same field reinterpreted by context, which is
+how the bug got in. Instead `AddInput` gained a second, mutually exclusive
+field, `ParentIndex *int`, meaning "the parent is record N of *this batch*".
+The domain layer never learns that source ids exist; all of that bookkeeping
+lives in `cmd/fngr/add_json.go`, where `indexBySourceID` builds the source-id
+→ batch-position map and `jsonInputToAddInput` picks `ParentIndex` when the
+`parent_id` names a sibling and `ParentID` when it doesn't. A `parent_id`
+pointing outside the batch is still validated against the target database, so
+importing a subtree under an existing event keeps working.
+
+Mechanically it is the two-pass insert the review describes — every row is
+inserted first, then one `UPDATE` loop wires the batch-relative parents —
+because `fngr --format=json` emits newest-first, so on a re-import the child
+almost always precedes its parent. What the two-pass shape does *not* give
+you is cycle rejection: SQLite's foreign key only checks that the parent row
+exists, and in a cycle every row does, so a self-parenting record would
+commit silently and become invisible to every root-anchored query.
+`validateParentIndexes` runs before the first INSERT and rejects out-of-range
+indexes, `ParentID`+`ParentIndex` together, and cycles — the last via a
+three-colour walk that stays linear because each record has at most one
+parent.
+
+Two things rode along, both blocking the round trip in practice:
+
+- Duplicate source ids in one batch are now an error
+  (`record 1: id 1 already used by record 0`) rather than a last-one-wins
+  remap.
+- `created_at` is parsed with `timefmt.Parse` instead of
+  `time.Parse(time.RFC3339, …)`, so hand-written import files can use every
+  layout `--time` accepts (this also closes the [Documentation](#documentation)
+  note about RFC3339-only stamps).
+
+Verified end-to-end on scratch databases with deliberately divergent id
+counters: export → import → export produces a byte-identical normalisation
+(title, body, `created_at`, meta, and parent-by-title) for a three-level tree,
+in both `-r` and default order, and survives a second round trip. Failure
+paths (`parent_id` naming a nonexistent target event, duplicate ids, self- and
+two-record cycles) each exit 1 and leave the target database empty. The
+remapping is mutation-tested — reverting the `byIndex` lookup fails five
+subtests of `TestAddJSON_ParentIDResolution` plus the Kong-level
+`TestKongDispatch_JSONRoundTrip`.
+
+**Known limit, deliberate:** piping a full export into a database while also
+passing `--parent N` re-roots the records that have no `parent_id`, because
+`encoding/json` cannot distinguish an omitted field from an explicit `null`.
+Combining a whole-tree import with `--parent` is not a documented workflow;
+the alternative is a `json.RawMessage` dance that costs more clarity than the
+case is worth.
 
 <a name="c4"></a>
 ### C4 — Non-ASCII `@person` / `#tag` names are silently truncated
@@ -1038,7 +1094,8 @@ warning.
 
 Same class, `cmd/fngr/add_json.go:151`: JSON `created_at` is parsed with strict
 `time.Parse(time.RFC3339)`, so `{"created_at":"2026-01-02"}` errors even though
-`--time` accepts it.
+`--time` accepts it. *(This half is fixed — see [C3](#c3); `--from`/`--to`
+remain.)*
 
 **Fix:** route both through `timefmt.ParsePartial`, flooring `--from` to 00:00
 and ceilinging `--to` to 23:59:59 when the input is date-only. Add an

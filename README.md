@@ -169,7 +169,9 @@ echo '{"title":"hi","body":"","meta":[["tag","ops"]]}' | fngr add --format=json
 # Bulk import an array of events (atomic; any error rolls back the batch)
 fngr add --format=json < events.json
 
-# Round-trip via stdout pipe (e.g. copy events between databases)
+# Round-trip via stdout pipe (e.g. copy events between databases). The target
+# assigns its own ids; parent/child links are rewritten to match, so the tree
+# survives even though the numbers change.
 fngr --db src.db --format=json | fngr --db dst.db add --format=json
 
 # Default command — list everything (newest first, tree view, paginated on TTY)
@@ -298,6 +300,40 @@ start of the text or after a non-name character, so `bob@example.com` and
 `fngr meta -S` is a different, narrower filter: exactly one `#tag`, `@person`,
 `key=value` or bare key, with no operators and no full-text search. It selects
 which metadata rows to *list*, not which events to match.
+
+## JSON import format
+
+`fngr add --format=json` reads a single object or an array of them. Only
+`title` is required; unknown fields are an error, so a typo surfaces instead of
+being silently dropped.
+
+```json
+{
+  "id": 3,
+  "parent_id": 2,
+  "title": "rollback needed",
+  "body": "reverted the deploy",
+  "created_at": "2026-04-01T12:00:00Z",
+  "meta": [["author", "nico"], ["tag", "ops"]]
+}
+```
+
+`id` is never inserted — the target database assigns its own. It exists so that
+`fngr --format=json` output pipes back in unchanged, and so `parent_id` can
+point at another record in the same batch. **A `parent_id` matching an `id` in
+the batch is resolved to that record's new id**, in either direction: the
+default newest-first export lists children before their parents. A `parent_id`
+matching nothing in the batch is an id in the *target* database, which is how
+you graft an import onto an existing tree; if no such event exists, the whole
+batch is rejected.
+
+`created_at` accepts everything `--time` does, not just the RFC 3339 stamps
+that `--format=json` emits. Omitted fields fall back to the corresponding CLI
+flag (`--parent`, `--time`, `--meta`, `--author`) and then to the built-in
+default. An explicit `meta` array replaces the `--meta` flags rather than
+adding to them, and an `author` entry there overrides `--author` for that
+record. Every record must end up with an author from some source. Batches are
+capped at 10 000 records and are atomic — any error rolls back the whole thing.
 
 ## Database location
 

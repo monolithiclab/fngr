@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
+	"maps"
 	"strings"
 	"testing"
 
@@ -331,4 +333,102 @@ func TestKongDispatch_OutOfRangeTimeFlagErrors(t *testing.T) {
 	if strings.TrimSpace(out) != "" {
 		t.Errorf("expected no events, got:\n%s", out)
 	}
+}
+
+// TestKongDispatch_JSONRoundTrip exercises the recipe the README promises —
+// `fngr --format=json | fngr add --format=json` — end to end through Kong,
+// against two separate databases whose id counters have nothing in common.
+//
+// It used to fail three ways: the `id` field tripped DisallowUnknownFields;
+// stripping `id` then failed the parent-exists check and rolled the batch
+// back; and working around both produced exit 0 with a silently different
+// tree, because parent_id was carried over as a literal integer.
+func TestKongDispatch_JSONRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	source := newDispatcher(t)
+	// Seed a two-level tree plus unrelated roots. The destination store is
+	// pre-seeded with a different number of events so the id ranges diverge —
+	// with matching counters a broken import can still look correct.
+	for _, argv := range [][]string{
+		{"add", "standup with @alice #work"},
+		{"add", "deployed v1.2 #ops"},
+		{"add", "rollback needed", "--parent", "2"},
+		{"add", "postmortem scheduled", "--parent", "3"},
+		{"add", "lunch", "--author", "sarah"},
+	} {
+		if _, err := source(argv); err != nil {
+			t.Fatalf("seed %v: %v", argv, err)
+		}
+	}
+
+	exported, err := source([]string{"list", "--format", "json", "--no-pager"})
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+
+	dest := newDispatcher(t)
+	for _, title := range []string{"pre-existing a", "pre-existing b", "pre-existing c"} {
+		if _, err := dest([]string{"add", title}); err != nil {
+			t.Fatalf("pre-seed %q: %v", title, err)
+		}
+	}
+
+	out, err := dest([]string{"add", "--format", "json", exported})
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if !strings.Contains(out, "Imported 5 events") {
+		t.Errorf("import output = %q, want 'Imported 5 events'", out)
+	}
+
+	// Compare the two trees by title, since the ids necessarily differ.
+	srcTree, err := source([]string{"list", "--format", "json", "--no-pager"})
+	if err != nil {
+		t.Fatalf("re-export source: %v", err)
+	}
+	dstTree, err := dest([]string{"list", "--format", "json", "--no-pager"})
+	if err != nil {
+		t.Fatalf("export dest: %v", err)
+	}
+
+	want := parentsByTitle(t, srcTree)
+	got := parentsByTitle(t, dstTree)
+	for _, title := range []string{"pre-existing a", "pre-existing b", "pre-existing c"} {
+		if got[title] != "" {
+			t.Errorf("%q gained parent %q", title, got[title])
+		}
+		delete(got, title)
+	}
+	if !maps.Equal(got, want) {
+		t.Errorf("imported tree = %v, want %v", got, want)
+	}
+}
+
+// parentsByTitle decodes `list --format=json` output into a title -> parent
+// title map, with "" for roots. Titles stand in for ids, which differ between
+// any two databases.
+func parentsByTitle(t *testing.T, jsonOut string) map[string]string {
+	t.Helper()
+	var events []struct {
+		ID       int64  `json:"id"`
+		ParentID *int64 `json:"parent_id"`
+		Title    string `json:"title"`
+	}
+	if err := json.Unmarshal([]byte(jsonOut), &events); err != nil {
+		t.Fatalf("decode %q: %v", jsonOut, err)
+	}
+	byID := make(map[int64]string, len(events))
+	for _, ev := range events {
+		byID[ev.ID] = ev.Title
+	}
+	out := make(map[string]string, len(events))
+	for _, ev := range events {
+		if ev.ParentID != nil {
+			out[ev.Title] = byID[*ev.ParentID]
+		} else {
+			out[ev.Title] = ""
+		}
+	}
+	return out
 }

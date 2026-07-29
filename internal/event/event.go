@@ -48,11 +48,18 @@ type MetaCount struct {
 // AddInput holds the fields needed to insert one event. Used by both
 // AddMany and the single-event Add.
 type AddInput struct {
-	Title     string
-	Body      string
-	ParentID  *int64
-	Meta      []parse.Meta
-	CreatedAt *time.Time
+	Title string
+	Body  string
+	// ParentID names the parent by its id in this database.
+	ParentID *int64
+	// ParentIndex names the parent by its position in the same AddMany
+	// batch, for callers importing a tree whose ids don't exist here yet
+	// (see cmd/fngr/add_json.go). The two are mutually exclusive, and the
+	// referenced record may appear later in the batch — `fngr --format=json`
+	// emits newest-first, so children routinely precede their parents.
+	ParentIndex *int
+	Meta        []parse.Meta
+	CreatedAt   *time.Time
 }
 
 // Add inserts a single event with its meta tuples and FTS row inside one
@@ -106,6 +113,10 @@ func AddMany(ctx context.Context, db *sql.DB, inputs []AddInput) ([]int64, error
 // event_meta, and one INSERT into events_fts. Per-record errors abort
 // the loop with a wrapped error; the caller's deferred Rollback fires.
 func addInTx(ctx context.Context, tx *sql.Tx, inputs []AddInput) ([]int64, error) {
+	if err := validateParentIndexes(inputs); err != nil {
+		return nil, err
+	}
+
 	insertMeta, err := tx.PrepareContext(ctx,
 		"INSERT INTO event_meta (event_id, key, value) VALUES (?, ?, ?)",
 	)
@@ -176,7 +187,67 @@ func addInTx(ctx context.Context, tx *sql.Tx, inputs []AddInput) ([]int64, error
 
 		ids = append(ids, id)
 	}
+
+	// Batch-relative parents are wired up only now that every row exists,
+	// because a child may be inserted before its parent.
+	for i, in := range inputs {
+		if in.ParentIndex == nil {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx,
+			"UPDATE events SET parent_id = ? WHERE id = ?", ids[*in.ParentIndex], ids[i],
+		); err != nil {
+			return nil, fmt.Errorf("link event %d to its batch parent: %w", ids[i], err)
+		}
+	}
 	return ids, nil
+}
+
+// validateParentIndexes rejects batch-relative parents that are out of range,
+// combined with an explicit ParentID, or part of a cycle. It runs before any
+// INSERT because the UPDATE pass that applies them cannot fail on a cycle the
+// way an INSERT would — SQLite's foreign key only checks that the parent row
+// exists, and in a cycle every row does. An unchecked cycle would commit a
+// clump of events unreachable from any root.
+func validateParentIndexes(inputs []AddInput) error {
+	for i, in := range inputs {
+		switch {
+		case in.ParentIndex == nil:
+		case in.ParentID != nil:
+			return fmt.Errorf("record %d: ParentID and ParentIndex are mutually exclusive", i)
+		case *in.ParentIndex < 0 || *in.ParentIndex >= len(inputs):
+			return fmt.Errorf("record %d: parent index %d out of range", i, *in.ParentIndex)
+		}
+	}
+
+	// Each record has at most one parent, so the graph is a forest plus
+	// possible cycles. Walk from every node, marking nodes already known to
+	// terminate, which keeps the whole scan linear.
+	const (
+		unvisited = iota
+		onPath
+		safe
+	)
+	state := make([]int8, len(inputs))
+	var path []int
+	for start := range inputs {
+		path = path[:0]
+		for i := start; state[i] == unvisited; {
+			state[i] = onPath
+			path = append(path, i)
+			if inputs[i].ParentIndex == nil {
+				break
+			}
+			i = *inputs[i].ParentIndex
+			if state[i] == onPath {
+				return fmt.Errorf("record %d: parent index cycle (the record is its own ancestor)", i)
+			}
+		}
+		for _, i := range path {
+			state[i] = safe
+		}
+	}
+	return nil
 }
 
 // Get returns the event with the given id, including its meta tuples.

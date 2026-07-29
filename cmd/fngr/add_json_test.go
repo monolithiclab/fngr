@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"fmt"
+	"maps"
 	"strings"
 	"testing"
 
 	"github.com/monolithiclab/fngr/internal/event"
 	"github.com/monolithiclab/fngr/internal/parse"
+	"github.com/monolithiclab/fngr/internal/timefmt"
 )
 
 func TestParseJSONAddInput(t *testing.T) {
@@ -26,6 +29,9 @@ func TestParseJSONAddInput(t *testing.T) {
 		{name: "scalar-number", input: `42`, wantErr: "--format=json"},
 		{name: "with-meta", input: `{"title":"hi","meta":[["tag","ops"]]}`, wantLen: 1},
 		{name: "with-parent-and-time", input: `{"title":"hi","parent_id":3,"created_at":"2026-04-01T12:00:00Z"}`, wantLen: 1},
+		// `id` is what `fngr --format=json` emits, so it must survive a
+		// straight pipe back in; it used to trip DisallowUnknownFields.
+		{name: "id-is-accepted", input: `{"id":7,"title":"hi"}`, wantLen: 1},
 		{name: "unknown-field-single", input: `{"title":"hi","ttile":"typo"}`, wantErr: "unknown field"},
 		{name: "unknown-field-array", input: `[{"title":"hi","extra":1}]`, wantErr: "unknown field"},
 		{name: "leading-whitespace-array", input: "  \n[{\"title\":\"hi\"}]", wantLen: 1},
@@ -126,7 +132,7 @@ func TestJSONInputToAddInput(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := jsonInputToAddInput(tc.in, tc.defaults, tc.author, 0)
+			got, err := jsonInputToAddInput(tc.in, tc.defaults, tc.author, 0, nil)
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 					t.Fatalf("err = %v, want substring %q", err, tc.wantErr)
@@ -222,5 +228,232 @@ func TestAddJSON_RejectsTextField(t *testing.T) {
 	err := cmd.Run(s, io)
 	if err == nil || !strings.Contains(err.Error(), "unknown field") {
 		t.Errorf("expected unknown-field error on `text`, got %v", err)
+	}
+}
+
+func TestIndexBySourceID(t *testing.T) {
+	t.Parallel()
+	id := func(n int64) *int64 { return &n }
+
+	t.Run("maps ids to positions and skips records without one", func(t *testing.T) {
+		t.Parallel()
+		got, err := indexBySourceID([]jsonAddInput{
+			{ID: id(9), Title: "a"},
+			{Title: "no id"},
+			{ID: id(4), Title: "c"},
+		})
+		if err != nil {
+			t.Fatalf("indexBySourceID: %v", err)
+		}
+		if want := (map[int64]int{9: 0, 4: 2}); !maps.Equal(got, want) {
+			t.Errorf("got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("nil when no record carries an id", func(t *testing.T) {
+		t.Parallel()
+		got, err := indexBySourceID([]jsonAddInput{{Title: "a"}, {Title: "b"}})
+		if err != nil || got != nil {
+			t.Errorf("got (%v, %v), want (nil, nil)", got, err)
+		}
+	})
+
+	t.Run("duplicate ids are ambiguous", func(t *testing.T) {
+		t.Parallel()
+		_, err := indexBySourceID([]jsonAddInput{{ID: id(1), Title: "a"}, {ID: id(1), Title: "b"}})
+		if err == nil || !strings.Contains(err.Error(), "already used by record 0") {
+			t.Errorf("err = %v, want a duplicate-id error naming record 0", err)
+		}
+	})
+}
+
+// TestAddJSON_ParentIDResolution is the C3 regression. A parent_id naming
+// another record in the same batch used to be inserted as a literal integer
+// into a database with its own autoincrement counter — so it either failed
+// the parent-exists check or, worse, landed on an unrelated event and built a
+// plausible but wrong tree.
+func TestAddJSON_ParentIDResolution(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		// seed is added first, so the target database already has ids in use.
+		seed  []string
+		batch string
+		// want maps a title to its expected parent's title ("" = root).
+		want    map[string]string
+		wantErr string
+	}{
+		{
+			// Newest-first, the default `fngr --format=json` order: every
+			// child is listed before the parent it points at.
+			name:  "forward reference within the batch",
+			batch: `[{"id":3,"title":"child","parent_id":2},{"id":2,"title":"root"}]`,
+			want:  map[string]string{"child": "root", "root": ""},
+		},
+		{
+			name:  "backward reference within the batch",
+			batch: `[{"id":2,"title":"root"},{"id":3,"title":"child","parent_id":2}]`,
+			want:  map[string]string{"child": "root", "root": ""},
+		},
+		{
+			// The source ids collide with rows that already exist here. Before
+			// the fix this silently reparented onto the seeded events.
+			name:  "source ids collide with existing rows",
+			seed:  []string{"seeded one", "seeded two"},
+			batch: `[{"id":1,"title":"imported root"},{"id":2,"title":"imported child","parent_id":1}]`,
+			want: map[string]string{
+				"seeded one": "", "seeded two": "",
+				"imported root": "", "imported child": "imported root",
+			},
+		},
+		{
+			// A parent_id that names no record in the batch still means "an id
+			// in this database", which is how `add --parent` grafts onto an
+			// existing tree.
+			name:  "parent outside the batch is a target-database id",
+			seed:  []string{"seeded one"},
+			batch: `[{"title":"grafted","parent_id":1}]`,
+			want:  map[string]string{"seeded one": "", "grafted": "seeded one"},
+		},
+		{
+			name:    "parent outside the batch that does not exist",
+			batch:   `[{"title":"orphan","parent_id":999}]`,
+			wantErr: "parent event 999",
+		},
+		{
+			name:    "cycle within the batch",
+			batch:   `[{"id":1,"title":"a","parent_id":2},{"id":2,"title":"b","parent_id":1}]`,
+			wantErr: "cycle",
+		},
+		{
+			name:    "record parented to itself",
+			batch:   `[{"id":1,"title":"a","parent_id":1}]`,
+			wantErr: "cycle",
+		},
+		{
+			// Two records claiming the same source id make every parent_id
+			// naming it ambiguous, so the batch is rejected rather than
+			// resolved last-one-wins.
+			name:    "duplicate source ids",
+			batch:   `[{"id":1,"title":"a"},{"id":1,"title":"b"}]`,
+			wantErr: "id 1 already used by record 0",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			s := newTestStore(t)
+			for _, title := range tt.seed {
+				if _, err := s.Add(context.Background(), event.AddInput{
+					Title: title, Meta: []parse.Meta{{Key: "author", Value: "alice"}},
+				}); err != nil {
+					t.Fatalf("seed %q: %v", title, err)
+				}
+			}
+
+			io, _ := newTestIO("")
+			cmd := &AddCmd{Args: []string{tt.batch}, Author: "alice", Format: "json"}
+			err := cmd.Run(s, io)
+
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("err = %v, want substring %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+
+			events, err := s.List(context.Background(), event.ListOpts{})
+			if err != nil {
+				t.Fatalf("List: %v", err)
+			}
+			titleByID := make(map[int64]string, len(events))
+			for _, ev := range events {
+				titleByID[ev.ID] = ev.Title
+			}
+			got := make(map[string]string, len(events))
+			for _, ev := range events {
+				if ev.ParentID != nil {
+					got[ev.Title] = titleByID[*ev.ParentID]
+				} else {
+					got[ev.Title] = ""
+				}
+			}
+			if !maps.Equal(got, tt.want) {
+				t.Errorf("parents = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestAddJSON_FailedBatchWritesNothing pairs with the cases above: the
+// parent-index check runs before the first INSERT, so a bad batch must not
+// leave the earlier records behind.
+func TestAddJSON_FailedBatchWritesNothing(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, _ := newTestIO("")
+
+	cmd := &AddCmd{
+		Args:   []string{`[{"title":"good"},{"id":1,"title":"a","parent_id":2},{"id":2,"title":"b","parent_id":1}]`},
+		Author: "alice", Format: "json",
+	}
+	if err := cmd.Run(s, io); err == nil {
+		t.Fatal("Run succeeded, want a cycle error")
+	}
+
+	events, err := s.List(context.Background(), event.ListOpts{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(events) != 0 {
+		t.Errorf("wrote %d events, want 0", len(events))
+	}
+}
+
+// TestAddJSON_CreatedAtAcceptsCLILayouts pins created_at to timefmt.Parse
+// rather than a bare RFC3339 parse, so an import file can use the same stamps
+// as --time.
+func TestAddJSON_CreatedAtAcceptsCLILayouts(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		stamp string
+		want  string // in UTC, or "" to only require that it parses
+	}{
+		{"RFC3339 as emitted by --format=json", "2026-04-01T12:00:00Z", "2026-04-01 12:00:00"},
+		{"space-separated", "2026-04-01 12:00:00", ""},
+		{"date only", "2026-04-01", ""},
+		{"no minutes", "2026-04-01T12:00", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			s := newTestStore(t)
+			io, _ := newTestIO("")
+			cmd := &AddCmd{
+				Args:   []string{fmt.Sprintf(`{"title":"x","created_at":%q}`, tt.stamp)},
+				Author: "alice", Format: "json",
+			}
+			if err := cmd.Run(s, io); err != nil {
+				t.Fatalf("Run with created_at %q: %v", tt.stamp, err)
+			}
+			events, err := s.List(context.Background(), event.ListOpts{})
+			if err != nil {
+				t.Fatalf("List: %v", err)
+			}
+			if tt.want == "" {
+				return
+			}
+			if got := events[0].CreatedAt.UTC().Format(timefmt.DateTimeFormat); got != tt.want {
+				t.Errorf("created_at = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }

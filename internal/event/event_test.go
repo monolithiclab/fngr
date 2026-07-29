@@ -1419,6 +1419,149 @@ func TestAddMany_FTSPopulatedPerRecord(t *testing.T) {
 	}
 }
 
+// TestAddMany_ParentIndex covers batch-relative parents in both directions.
+// The forward reference is the interesting one: `fngr --format=json` emits
+// newest-first, so on a re-import a child is almost always inserted before the
+// parent it points at.
+func TestAddMany_ParentIndex(t *testing.T) {
+	t.Parallel()
+
+	idx := func(i int) *int { return &i }
+	tests := []struct {
+		name   string
+		inputs []AddInput
+		// want maps a title to its expected parent's title ("" = root).
+		want map[string]string
+	}{
+		{
+			name: "parent precedes child",
+			inputs: []AddInput{
+				{Title: "root"},
+				{Title: "child", ParentIndex: idx(0)},
+			},
+			want: map[string]string{"root": "", "child": "root"},
+		},
+		{
+			name: "child precedes parent",
+			inputs: []AddInput{
+				{Title: "child", ParentIndex: idx(1)},
+				{Title: "root"},
+			},
+			want: map[string]string{"root": "", "child": "root"},
+		},
+		{
+			name: "chain in reverse order",
+			inputs: []AddInput{
+				{Title: "grandchild", ParentIndex: idx(1)},
+				{Title: "child", ParentIndex: idx(2)},
+				{Title: "root"},
+			},
+			want: map[string]string{"root": "", "child": "root", "grandchild": "child"},
+		},
+		{
+			name: "two children share one parent",
+			inputs: []AddInput{
+				{Title: "a", ParentIndex: idx(2)},
+				{Title: "b", ParentIndex: idx(2)},
+				{Title: "root"},
+			},
+			want: map[string]string{"root": "", "a": "root", "b": "root"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			database := testDB(t)
+			ids, err := AddMany(ctx, database, tt.inputs)
+			if err != nil {
+				t.Fatalf("AddMany: %v", err)
+			}
+
+			titleByID := make(map[int64]string, len(ids))
+			for i, id := range ids {
+				titleByID[id] = tt.inputs[i].Title
+			}
+			for i, id := range ids {
+				ev, err := Get(ctx, database, id)
+				if err != nil {
+					t.Fatalf("Get(%d): %v", id, err)
+				}
+				gotParent := ""
+				if ev.ParentID != nil {
+					gotParent = titleByID[*ev.ParentID]
+				}
+				if want := tt.want[tt.inputs[i].Title]; gotParent != want {
+					t.Errorf("%q parent = %q, want %q", tt.inputs[i].Title, gotParent, want)
+				}
+			}
+		})
+	}
+}
+
+func TestAddMany_ParentIndexRejected(t *testing.T) {
+	t.Parallel()
+
+	idx := func(i int) *int { return &i }
+	id := int64(1)
+	tests := []struct {
+		name    string
+		inputs  []AddInput
+		wantMsg string
+	}{
+		{"negative", []AddInput{{Title: "a", ParentIndex: idx(-1)}}, "out of range"},
+		{"past the end", []AddInput{{Title: "a", ParentIndex: idx(1)}}, "out of range"},
+		{"self reference", []AddInput{{Title: "a", ParentIndex: idx(0)}}, "cycle"},
+		{
+			"two-record cycle",
+			[]AddInput{
+				{Title: "a", ParentIndex: idx(1)},
+				{Title: "b", ParentIndex: idx(0)},
+			},
+			"cycle",
+		},
+		{
+			// A cycle reachable only from a record that is itself fine, to
+			// prove the scan does not stop at the first terminating walk.
+			"cycle behind a valid record",
+			[]AddInput{
+				{Title: "ok"},
+				{Title: "a", ParentIndex: idx(2)},
+				{Title: "b", ParentIndex: idx(1)},
+			},
+			"cycle",
+		},
+		{
+			"both parent forms set",
+			[]AddInput{{Title: "root"}, {Title: "a", ParentID: &id, ParentIndex: idx(0)}},
+			"mutually exclusive",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			database := testDB(t)
+			_, err := AddMany(ctx, database, tt.inputs)
+			if err == nil {
+				t.Fatal("AddMany succeeded, want an error")
+			}
+			if !strings.Contains(err.Error(), tt.wantMsg) {
+				t.Errorf("err = %q, want it to contain %q", err, tt.wantMsg)
+			}
+
+			// Validation runs before the first INSERT, so nothing is written.
+			var count int
+			if err := database.QueryRow("SELECT COUNT(*) FROM events").Scan(&count); err != nil {
+				t.Fatalf("count: %v", err)
+			}
+			if count != 0 {
+				t.Errorf("created %d rows, want 0", count)
+			}
+		})
+	}
+}
+
 func TestAdd_RejectsEmptyTitle(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
