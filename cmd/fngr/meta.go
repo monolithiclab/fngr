@@ -7,6 +7,7 @@ import (
 
 	"github.com/monolithiclab/fngr/internal/event"
 	"github.com/monolithiclab/fngr/internal/parse"
+	"github.com/monolithiclab/fngr/internal/render"
 )
 
 type MetaCmd struct {
@@ -42,14 +43,15 @@ func (c *MetaListCmd) Run(s eventStore, io ioStreams) error {
 		return nil
 	}
 
+	// Escape in place before measuring. Meta values come from event bodies,
+	// so `@josé\x1b[2J` is a name someone can type; measuring the raw string
+	// and padding the escaped one would misalign every column below it.
 	maxKey, maxVal := 0, 0
-	for _, mc := range counts {
-		if len(mc.Key) > maxKey {
-			maxKey = len(mc.Key)
-		}
-		if len(mc.Value) > maxVal {
-			maxVal = len(mc.Value)
-		}
+	for i := range counts {
+		counts[i].Key = render.SanitizeLine(counts[i].Key)
+		counts[i].Value = render.SanitizeLine(counts[i].Value)
+		maxKey = max(maxKey, len(counts[i].Key))
+		maxVal = max(maxVal, len(counts[i].Value))
 	}
 	for _, mc := range counts {
 		fmt.Fprintf(io.Out, "%-*s=%-*s  (%d)\n", maxKey, mc.Key, maxVal, mc.Value, mc.Count)

@@ -193,6 +193,30 @@ make ci             # codefix + format + lint + test
   Meta in JSON output is `[[key, value], ...]`, sorted by `(key, value)`. Each `event_meta`
   row maps to one tuple — multiple values for the same key produce multiple tuples.
   Markdown output groups events by local date as `## YYYY-MM-DD` sections; bullets are `- <time> — <body>` with multi-line bodies indented two spaces and meta on a separate continuation line of space-separated `key=value` tokens.
+  `Tree` drives a `treeWriter` whose `prefix []byte` is appended to on the way down and truncated
+  on the way back up, and whose `line []byte` assembles prefix+connector+event so each node
+  costs the writer exactly one `Write`. It used to concatenate two fresh strings per node, each
+  pinned by every ancestor frame — O(depth²) live bytes, 7.0 GB on a 50k chain. Don't go back to
+  strings. `node(id, connector, continuation)` is the only entry point: roots go through it too,
+  passing an empty connector, so there is no separate root-drawing path. An event whose parent is
+  absent from the result set (`--limit`, or a filter that matched only the child) still renders
+  at top level but carries the `⋯└─ ` `orphanConnector` rather than passing as a true root; it
+  and `orphanBlank` are four columns wide so orphan subtrees stay aligned.
+- `internal/render/sanitize.go` — `SanitizeLine` / `sanitizeBlock` escape control characters
+  (C0, DEL, and C1 — a bare U+009B is a CSI introducer) as `\n`, `\r`, `\xNN`. Tab always
+  survives; newline survives only in `sanitizeBlock`, used for the body block of `fngr event N`.
+  Applied in `formatEventLine` (so tree/flat/their streams cannot forget), `Event`, per-line in
+  `Markdown`, and — via the exported name — in `cmd/fngr/meta.go`, which lays out its own
+  columns and must escape *before* measuring them. Escaped, not dropped: fngr is a journal and
+  silently rewriting stored text is worse than showing `\x1b`. Not TTY-gated — a forged row is
+  just as misleading piped into a script. The walk is byte-oriented, not `for _, r := range s`:
+  rune iteration turns a raw 0x9b (the 8-bit CSI, which a pipe can store and Kong cannot) into
+  `utf8.RuneError` and passes it through, and silently rewrites every other malformed byte to
+  U+FFFD. Don't go back to ranging. JSON and CSV are excluded for different reasons — JSON
+  escapes control bytes itself and losslessly, so sanitizing would break the `--format=json`
+  round trip; CSV does *not* escape them (`csv.Writer` quotes for structural safety only) and
+  that is an accepted trade, since escaping a data export would leave a reader unable to tell a
+  stored `\x1b` from an escaped one.
 
 ## Conventions
 

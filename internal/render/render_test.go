@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"iter"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -139,6 +141,10 @@ func TestTree_MixedRootsAndChildren(t *testing.T) {
 	}
 }
 
+// TestTree_OrphanedChildren pins the marker on events whose parent exists
+// but is not in the result set — `fngr -n 2` where the parent fell outside
+// the window. Rendering them flush left claimed they were roots, which the
+// CSV of the same query contradicted.
 func TestTree_OrphanedChildren(t *testing.T) {
 	pinNow(t, time.Date(2030, 1, 1, 0, 0, 0, 0, time.Local))
 	missingParent := int64(99)
@@ -149,12 +155,147 @@ func TestTree_OrphanedChildren(t *testing.T) {
 	}
 
 	want := "" +
-		"1   Apr 10 2026 12.00am  nicolas  Filtered child\n" +
-		"2   Apr 11 2026 12.00am  nicolas  Another orphan\n"
+		"⋯└─ 1   Apr 10 2026 12.00am  nicolas  Filtered child\n" +
+		"⋯└─ 2   Apr 11 2026 12.00am  nicolas  Another orphan\n"
 
 	got := renderTreeString(t, events)
 	if got != want {
 		t.Errorf("Tree orphaned children:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestTree_OrphanSubtreeAligns checks that an orphan's own descendants
+// indent under the marker rather than under column zero: orphanConnector is
+// four display columns, so orphanBlank must be four spaces.
+func TestTree_OrphanSubtreeAligns(t *testing.T) {
+	pinNow(t, time.Date(2030, 1, 1, 0, 0, 0, 0, time.Local))
+	missingParent := int64(99)
+	id1 := int64(1)
+	id2 := int64(2)
+	events := []event.Event{
+		makeEvent(1, &missingParent, "Orphan root", "2026-04-10", "nicolas"),
+		makeEvent(2, &id1, "Child of orphan", "2026-04-10", "nicolas"),
+		makeEvent(3, &id2, "Grandchild", "2026-04-10", "nicolas"),
+		makeEvent(4, &id1, "Second child", "2026-04-10", "nicolas"),
+	}
+
+	want := "" +
+		"⋯└─ 1   Apr 10 2026 12.00am  nicolas  Orphan root\n" +
+		"    ├─ 2   Apr 10 2026 12.00am  nicolas  Child of orphan\n" +
+		"    │  └─ 3   Apr 10 2026 12.00am  nicolas  Grandchild\n" +
+		"    └─ 4   Apr 10 2026 12.00am  nicolas  Second child\n"
+
+	got := renderTreeString(t, events)
+	if got != want {
+		t.Errorf("Tree orphan subtree:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestTree_RootAfterOrphanResetsPrefix guards the buffer reuse in
+// treeWriter: the prefix is truncated between roots, so a real root
+// following an orphan must not inherit the orphan's indent.
+func TestTree_RootAfterOrphanResetsPrefix(t *testing.T) {
+	pinNow(t, time.Date(2030, 1, 1, 0, 0, 0, 0, time.Local))
+	missingParent := int64(99)
+	id2 := int64(2)
+	events := []event.Event{
+		makeEvent(1, &missingParent, "Orphan", "2026-04-10", "nicolas"),
+		makeEvent(2, nil, "True root", "2026-04-11", "nicolas"),
+		makeEvent(3, &id2, "Its child", "2026-04-11", "nicolas"),
+	}
+
+	want := "" +
+		"⋯└─ 1   Apr 10 2026 12.00am  nicolas  Orphan\n" +
+		"2   Apr 11 2026 12.00am  nicolas  True root\n" +
+		"└─ 3   Apr 11 2026 12.00am  nicolas  Its child\n"
+
+	got := renderTreeString(t, events)
+	if got != want {
+		t.Errorf("Tree root after orphan:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestTree_WriteError covers the failure paths of the recursion. Each node is
+// exactly one Write, so failOn selects which line breaks: 1 is a root, 2 a
+// child (the error must climb back out of the recursion), 3 the last root
+// (reached only after a subtree completes).
+func TestTree_WriteError(t *testing.T) {
+	t.Parallel()
+	id1 := int64(1)
+	events := []event.Event{
+		makeEvent(1, nil, "Root", "2026-04-10", "nicolas"),
+		makeEvent(2, &id1, "Child", "2026-04-10", "nicolas"),
+		makeEvent(3, nil, "Second root", "2026-04-10", "nicolas"),
+	}
+	wantErr := errors.New("write failed")
+
+	for failOn := 1; failOn <= 3; failOn++ {
+		t.Run(fmt.Sprintf("line %d", failOn), func(t *testing.T) {
+			t.Parallel()
+			err := Tree(&failWriter{failOn: failOn, err: wantErr}, events)
+			if !errors.Is(err, wantErr) {
+				t.Errorf("Tree with a failing write %d = %v, want %v", failOn, err, wantErr)
+			}
+		})
+	}
+}
+
+// chain builds a single-file parent→child chain n events deep, the shape
+// that made Tree quadratic.
+func chain(n int) []event.Event {
+	events := make([]event.Event, n)
+	for i := range events {
+		var parent *int64
+		if i > 0 {
+			p := int64(i)
+			parent = &p
+		}
+		events[i] = makeEvent(int64(i+1), parent, "e", "2026-04-10", "nicolas")
+	}
+	return events
+}
+
+// TestTree_DeepChainAllocationIsLinear is the H2 regression guard (see
+// REVIEW.md#h2). The depths are 8× apart so the two regimes are far apart:
+// linear predicts ~8×, quadratic ~60×. The 16× ceiling sits between them,
+// clear of allocator noise in either direction — reverting to per-node string
+// concatenation measures 45.9×.
+//
+// Not parallel: it measures process-wide allocation.
+func TestTree_DeepChainAllocationIsLinear(t *testing.T) {
+	pinNow(t, time.Date(2030, 1, 1, 0, 0, 0, 0, time.Local))
+
+	// TotalAlloc is cumulative, so no GC is needed to make the delta
+	// meaningful; ReadMemStats already flushes the per-P caches.
+	measure := func(depth int) uint64 {
+		events := chain(depth)
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		if err := Tree(io.Discard, events); err != nil {
+			t.Fatalf("Tree(depth=%d): %v", depth, err)
+		}
+		runtime.ReadMemStats(&after)
+		return after.TotalAlloc - before.TotalAlloc
+	}
+
+	const shallow, deep = 500, 4000
+	small := measure(shallow)
+	large := measure(deep)
+
+	if large > 16*small {
+		t.Errorf("depth %d allocated %d bytes vs %d at depth %d (%.1f× for an 8× "+
+			"depth increase); Tree looks quadratic again",
+			deep, large, small, shallow, float64(large)/float64(small))
+	}
+}
+
+func BenchmarkTree_DeepChain(b *testing.B) {
+	events := chain(5000)
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := Tree(io.Discard, events); err != nil {
+			b.Fatalf("Tree: %v", err)
+		}
 	}
 }
 
@@ -530,9 +671,11 @@ func TestJSONStream_EmptyProducesEmptyArray(t *testing.T) {
 	}
 }
 
+// No pinNow: this asserts the error, not the stamp. Pinning from a parallel
+// test writes the package-global nowFunc while other parallel tests are
+// reading it — a real data race, and the only one in the package.
 func TestFlatStream_WriteError(t *testing.T) {
 	t.Parallel()
-	pinNow(t, time.Date(2030, 1, 1, 0, 0, 0, 0, time.Local))
 	events := []event.Event{makeEvent(1, nil, "x", "2026-04-10", "alice")}
 	wantErr := errors.New("boom")
 

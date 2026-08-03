@@ -54,8 +54,13 @@ func eventAuthor(ev event.Event) string {
 	return ""
 }
 
+// formatEventLine renders the one-line form shared by tree, flat and their
+// streaming variants. author and text are sanitized here rather than at each
+// call site, so no caller of this helper can forget. Formats that lay out
+// their own lines sanitize for themselves: Markdown here, and the `meta`
+// listing over in cmd/fngr.
 func formatEventLine(id int64, date, author, text string) string {
-	return fmt.Sprintf("%-4d%s  %s  %s", id, date, author, text)
+	return fmt.Sprintf("%-4d%s  %s  %s", id, date, SanitizeLine(author), SanitizeLine(text))
 }
 
 // Events writes a list of events in the requested format. Supported formats
@@ -90,9 +95,29 @@ func SingleEvent(w io.Writer, format string, ev *event.Event) error {
 	}
 }
 
+// Tree branch drawing. connector prefixes a node's own line; continuation is
+// what sits under it while later siblings are still to come. The ordinary
+// pair is three display columns wide and the orphan pair is four; what
+// matters is that each pair agrees with itself, so a subtree stays aligned
+// under either kind of root.
+const (
+	treeConnector    = "\u251c\u2500 "
+	treeContinuation = "\u2502  "
+	treeCorner       = "\u2514\u2500 "
+	treeBlank        = "   "
+
+	// orphanConnector marks an event whose parent exists but fell outside
+	// the result set — under `--limit`, or a filter that matched the child
+	// and not the parent. Rendering it flush left would state, falsely,
+	// that it has no parent. The ellipsis stands for the elided ancestry.
+	orphanConnector = "\u22ef\u2514\u2500 "
+	orphanBlank     = "    "
+)
+
 // Tree writes events as an indented parent/child tree. Events whose
-// parent_id is not present in the input slice render as roots, so a
-// `--limit`-truncated query still produces well-formed output.
+// parent_id is not present in the input slice still render at top level, so
+// a `--limit`-truncated query produces well-formed output, but they carry
+// the orphanConnector marker rather than passing as true roots.
 func Tree(w io.Writer, events []event.Event) error {
 	if len(events) == 0 {
 		return nil
@@ -117,39 +142,72 @@ func Tree(w io.Writer, events []event.Event) error {
 		}
 	}
 
+	t := &treeWriter{w: w, events: events, byID: byID, children: children}
 	for _, id := range roots {
-		if err := renderNode(w, events, byID, children, id, "", ""); err != nil {
+		// A root that still names a parent is one whose parent fell outside
+		// the result set; nothing else can put it in this slice.
+		connector, continuation := "", ""
+		if events[byID[id]].ParentID != nil {
+			connector, continuation = orphanConnector, orphanBlank
+		}
+		if err := t.node(id, connector, continuation); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func renderNode(w io.Writer, events []event.Event, byID map[int64]int, children map[int64][]int64, id int64, linePrefix, childPrefix string) error {
-	idx := byID[id]
-	ev := events[idx]
-	line := formatEventLine(ev.ID, formatLocalStamp(ev.CreatedAt), eventAuthor(ev), ev.Title)
+// treeWriter carries the recursion state for Tree. prefix is the indent
+// standing to the left of the current node's children, held as one reusable
+// buffer that is appended to on the way down and truncated on the way back
+// up.
+//
+// It used to be two freshly concatenated strings per node, which every
+// ancestor frame then held live on the stack: Σd = O(depth²) bytes that GC
+// could not reclaim. A 50k-deep chain took 67.85 s and 7.0 GB. The output
+// is inherently O(depth²) characters — a tree prints depth indent columns
+// per line — but nothing has to be *allocated* to produce it.
+type treeWriter struct {
+	w        io.Writer
+	events   []event.Event
+	byID     map[int64]int
+	children map[int64][]int64
+	prefix   []byte
+	line     []byte // scratch, so each node costs the writer one Write
+}
 
-	if _, err := fmt.Fprintf(w, "%s%s\n", linePrefix, line); err != nil {
+// node writes one line for id — the running prefix, this node's own
+// connector, then the event — and recurses into its children under an
+// extended prefix. Roots come in through the same door: an ordinary root
+// just passes an empty connector.
+func (t *treeWriter) node(id int64, connector, continuation string) error {
+	ev := t.events[t.byID[id]]
+
+	t.line = append(t.line[:0], t.prefix...)
+	t.line = append(t.line, connector...)
+	t.line = append(t.line,
+		formatEventLine(ev.ID, formatLocalStamp(ev.CreatedAt), eventAuthor(ev), ev.Title)...)
+	t.line = append(t.line, '\n')
+	if _, err := t.w.Write(t.line); err != nil {
 		return err
 	}
 
-	kids := children[id]
+	kids := t.children[id]
+	base := len(t.prefix)
+	t.prefix = append(t.prefix, continuation...)
+
 	for i, kidID := range kids {
-		isLast := i == len(kids)-1
-		var connector string
-		var continuation string
-		if isLast {
-			connector = "\u2514\u2500 "
-			continuation = "   "
-		} else {
-			connector = "\u251c\u2500 "
-			continuation = "\u2502  "
+		kidConnector, kidContinuation := treeConnector, treeContinuation
+		if i == len(kids)-1 {
+			kidConnector, kidContinuation = treeCorner, treeBlank
 		}
-		if err := renderNode(w, events, byID, children, kidID, childPrefix+connector, childPrefix+continuation); err != nil {
+		if err := t.node(kidID, kidConnector, kidContinuation); err != nil {
+			t.prefix = t.prefix[:base]
 			return err
 		}
 	}
+
+	t.prefix = t.prefix[:base]
 	return nil
 }
 
@@ -255,11 +313,14 @@ func Event(w io.Writer, ev *event.Event) error {
 	if _, err := fmt.Fprintf(w, "Date:   %s\n", formatLocalDateTime(ev.CreatedAt)); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(w, "Title:  %s\n", ev.Title); err != nil {
+	if _, err := fmt.Fprintf(w, "Title:  %s\n", SanitizeLine(ev.Title)); err != nil {
 		return err
 	}
 	if ev.Body != "" {
-		if _, err := fmt.Fprintf(w, "\n%s\n", ev.Body); err != nil {
+		// The body block is the one place newlines are the point, so it
+		// keeps them; everything else that could drive the terminal still
+		// goes. This path has no pager in front of it.
+		if _, err := fmt.Fprintf(w, "\n%s\n", sanitizeBlock(ev.Body)); err != nil {
 			return err
 		}
 	}
@@ -269,7 +330,7 @@ func Event(w io.Writer, ev *event.Event) error {
 			return err
 		}
 		for _, m := range ev.Meta {
-			if _, err := fmt.Fprintf(w, "  %s=%s\n", m.Key, m.Value); err != nil {
+			if _, err := fmt.Fprintf(w, "  %s=%s\n", SanitizeLine(m.Key), SanitizeLine(m.Value)); err != nil {
 				return err
 			}
 		}

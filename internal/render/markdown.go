@@ -46,9 +46,14 @@ func renderMarkdownEvent(w io.Writer, lastDate *string, ev event.Event) error {
 
 	timeStr := local.Format(timefmt.LayoutToday)
 
+	// Markdown gives newlines structural meaning — they become continuation
+	// lines — so it splits first and sanitizes each line, rather than
+	// escaping the newlines away. Everything else that could drive a
+	// terminal is still escaped; a digest is as likely to be `cat`ed as
+	// rendered.
 	titleLines := strings.Split(ev.Title, "\n")
 	for i, line := range titleLines {
-		titleLines[i] = strings.TrimSuffix(line, "\r")
+		titleLines[i] = SanitizeLine(strings.TrimSuffix(line, "\r"))
 	}
 
 	if _, err := fmt.Fprintf(w, "- %s — %s\n", timeStr, titleLines[0]); err != nil {
@@ -62,7 +67,7 @@ func renderMarkdownEvent(w io.Writer, lastDate *string, ev event.Event) error {
 
 	if ev.Body != "" {
 		for line := range strings.SplitSeq(ev.Body, "\n") {
-			line = strings.TrimSuffix(line, "\r")
+			line = SanitizeLine(strings.TrimSuffix(line, "\r"))
 			if _, err := fmt.Fprintf(w, "  %s\n", line); err != nil {
 				return err
 			}
@@ -72,7 +77,7 @@ func renderMarkdownEvent(w io.Writer, lastDate *string, ev event.Event) error {
 	if len(ev.Meta) > 0 {
 		pairs := make([]string, len(ev.Meta))
 		for i, m := range ev.Meta {
-			pairs[i] = m.Key + "=" + m.Value
+			pairs[i] = SanitizeLine(m.Key + "=" + m.Value)
 		}
 		slices.Sort(pairs)
 		if _, err := fmt.Fprintf(w, "  %s\n", strings.Join(pairs, " ")); err != nil {

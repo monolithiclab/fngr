@@ -121,6 +121,14 @@ func TestKongDispatch_AllCommands(t *testing.T) {
 // call and is only good for single-shot wiring checks.
 func newDispatcher(t *testing.T) func(argv []string) (string, error) {
 	t.Helper()
+	return newDispatcherWithStdin(t, "")
+}
+
+// newDispatcherWithStdin is newDispatcher for the commands that read a body
+// from a pipe. A non-empty stdin also means a non-TTY, which is what
+// resolveBody keys off.
+func newDispatcherWithStdin(t *testing.T, stdin string) func(argv []string) (string, error) {
+	t.Helper()
 
 	var cli CLI
 	parser, err := kong.New(&cli,
@@ -140,7 +148,12 @@ func newDispatcher(t *testing.T) func(argv []string) (string, error) {
 		}
 		out := &bytes.Buffer{}
 		kctx.BindTo(store, (*eventStore)(nil))
-		kctx.Bind(ioStreams{In: strings.NewReader(""), Out: out, Err: io.Discard, IsTTY: true})
+		kctx.Bind(ioStreams{
+			In:    strings.NewReader(stdin),
+			Out:   out,
+			Err:   io.Discard,
+			IsTTY: stdin == "",
+		})
 		err = kctx.Run()
 		return out.String(), err
 	}
@@ -252,6 +265,116 @@ func TestKongDispatch_UnicodeMetaNames(t *testing.T) {
 	}
 	if strings.Contains(out, "田中") {
 		t.Errorf("meta -S @josé should not list other people:\n%s", out)
+	}
+}
+
+// TestKongDispatch_ControlBytesEscapedInOutput drives the render sanitizer
+// through the real CLI. Text arrives from a file, a pipe or an editor, so a
+// title carrying a newline is entirely storable — and it used to print as a
+// second line indistinguishable from a real event, with any ANSI sequence
+// beside it reaching the terminal untouched.
+func TestKongDispatch_ControlBytesEscapedInOutput(t *testing.T) {
+	t.Parallel()
+	run := newDispatcher(t)
+
+	const forged = "benign note\n99  4.00pm  root  SYSTEM all clear\x1b[2J"
+	if _, err := run([]string{"add", forged}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name      string
+		argv      []string
+		wantLines int
+	}{
+		{"list flat", []string{"--format=flat"}, 1},
+		{"list tree", []string{"--format=tree"}, 1},
+		// ID / Date / Title / Meta: / author. No body block — the newline
+		// landed in the title, which is exactly the case that must not
+		// become a second line.
+		{"event detail", []string{"event", "1"}, 5},
+	} {
+		// Subtests share one parser and one store, so they run in sequence.
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := run(tc.argv)
+			if err != nil {
+				t.Fatalf("%v: %v", tc.argv, err)
+			}
+			if strings.ContainsRune(out, 0x1b) {
+				t.Errorf("%v emitted a raw ESC:\n%q", tc.argv, out)
+			}
+			if got := strings.Count(out, "\n"); got != tc.wantLines {
+				t.Errorf("%v produced %d lines, want %d:\n%q", tc.argv, got, tc.wantLines, out)
+			}
+		})
+	}
+}
+
+// TestKongDispatch_RawC1FromStdin covers the byte a rune-oriented sanitizer
+// cannot see. 0x9b is the 8-bit CSI introducer — a terminal acts on it just
+// as it acts on ESC-[ — and it is not valid UTF-8, so ranging over the string
+// decodes it to utf8.RuneError and lets it straight through.
+//
+// It has to arrive on a pipe: Kong rewrites invalid UTF-8 in argv to U+FFFD,
+// while SQLite stores whatever bytes it is handed and gives them back
+// verbatim.
+func TestKongDispatch_RawC1FromStdin(t *testing.T) {
+	t.Parallel()
+	run := newDispatcherWithStdin(t, "piped note \x9b31m tail")
+
+	if _, err := run([]string{"add"}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	out, err := run([]string{"--format=flat"})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+
+	if strings.IndexByte(out, 0x9b) >= 0 {
+		t.Errorf("a raw 0x9b reached the terminal:\n%q", out)
+	}
+	if !strings.Contains(out, `\x9b`) {
+		t.Errorf("the byte was dropped or replaced instead of escaped:\n%q", out)
+	}
+}
+
+// TestKongDispatch_ControlBytesEscapedInMetaList covers the one human-facing
+// listing that lays out its own columns instead of going through render. Meta
+// values are not limited to what the body-tag regex accepts — `--meta`
+// takes any string — so this path needs the same escaping, applied before the
+// widths are measured or the padding lands in the wrong place.
+func TestKongDispatch_ControlBytesEscapedInMetaList(t *testing.T) {
+	t.Parallel()
+	run := newDispatcher(t)
+
+	if _, err := run([]string{"add", "release notes", "--meta", "tag=ops\x1b[2Jfake"}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if _, err := run([]string{"add", "second note", "--meta", "tag=short"}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+
+	out, err := run([]string{"meta"})
+	if err != nil {
+		t.Fatalf("meta: %v", err)
+	}
+	if strings.ContainsRune(out, 0x1b) {
+		t.Errorf("meta emitted a raw ESC:\n%q", out)
+	}
+
+	// One line per distinct key=value: the author both events share, plus
+	// the two tags. A smuggled newline would add a fourth.
+	lines := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("meta produced %d lines, want 3:\n%q", len(lines), out)
+	}
+	// Widths are measured on the escaped strings, so the count column stays
+	// in one place.
+	for _, l := range lines[1:] {
+		if len(l) != len(lines[0]) {
+			t.Errorf("meta columns are misaligned:\n%s", out)
+			break
+		}
 	}
 }
 
