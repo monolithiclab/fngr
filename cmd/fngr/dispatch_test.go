@@ -378,6 +378,40 @@ func TestKongDispatch_ControlBytesEscapedInMetaList(t *testing.T) {
 	}
 }
 
+// TestKongDispatch_MetaRenameMerges drives the consolidation case end to end:
+// two tags collapsed into one while an event carries both. It used to fail
+// with a raw SQLite UNIQUE error and rename nothing at all, including the
+// events that had no conflict.
+func TestKongDispatch_MetaRenameMerges(t *testing.T) {
+	t.Parallel()
+	run := newDispatcher(t)
+
+	if _, err := run([]string{"add", "alpha task #wip"}); err != nil {
+		t.Fatalf("add alpha: %v", err)
+	}
+	if _, err := run([]string{"add", "beta task #wip #done"}); err != nil {
+		t.Fatalf("add beta: %v", err)
+	}
+
+	out, err := run([]string{"meta", "rename", "#wip", "#done", "-f"})
+	if err != nil {
+		t.Fatalf("meta rename: %v", err)
+	}
+	if !strings.Contains(out, "Renamed 2 occurrence(s)") {
+		t.Errorf("meta rename said %q, want 2 occurrences", strings.TrimSpace(out))
+	}
+
+	// One line, because tag=wip is gone; count 2, because the event that
+	// held both tags must not end up with a duplicate row.
+	out, err = run([]string{"meta", "-S", "tag"})
+	if err != nil {
+		t.Fatalf("meta: %v", err)
+	}
+	if got := strings.TrimSpace(out); got != "tag=done  (2)" {
+		t.Errorf("meta -S tag = %q, want %q", got, "tag=done  (2)")
+	}
+}
+
 // TestKongDispatch_SearchFilter drives -S through the full CLI. The operand
 // order in the negation cases is the point: `!#bugfix & #work` used to be
 // evaluated as `!(#bugfix & #work)` and returned every event, while the

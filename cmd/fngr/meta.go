@@ -12,7 +12,7 @@ import (
 
 type MetaCmd struct {
 	List   MetaListCmd   `cmd:"" default:"withargs" help:"List metadata, optionally filtered (default)."`
-	Rename MetaRenameCmd `cmd:"" help:"Rename a metadata entry across all events."`
+	Rename MetaRenameCmd `cmd:"" help:"Rename a metadata entry across all events, merging into the target if it already exists."`
 	Delete MetaDeleteCmd `cmd:"" help:"Delete a metadata entry across all events."`
 }
 
@@ -86,8 +86,24 @@ func (c *MetaRenameCmd) Run(s eventStore, io ioStreams) error {
 	}
 
 	if !c.Force {
-		prompt := fmt.Sprintf("Rename %d occurrence(s) of %s=%s to %s=%s? [Y/n] ",
-			count, oldM.Key, oldM.Value, newM.Key, newM.Value)
+		// A rename onto an existing entry merges, and merging destroys rows:
+		// an event carrying both ends up with one, so the totals go down.
+		// Say so before asking — "Renamed N occurrence(s)" on its own reads
+		// as a pure move.
+		merge := ""
+		if newM != oldM {
+			existing, err := s.CountMeta(ctx, newM.Key, newM.Value)
+			if err != nil {
+				return err
+			}
+			if existing > 0 {
+				merge = fmt.Sprintf(" (%s=%s already on %d; events with both merge into one)",
+					newM.Key, newM.Value, existing)
+			}
+		}
+
+		prompt := fmt.Sprintf("Rename %d occurrence(s) of %s=%s to %s=%s%s? [Y/n] ",
+			count, oldM.Key, oldM.Value, newM.Key, newM.Value, merge)
 		ok, err := confirm(io.In, io.Out, prompt, true)
 		if err != nil {
 			return err

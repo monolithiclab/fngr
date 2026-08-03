@@ -160,8 +160,12 @@ make ci             # codefix + format + lint + test
   ancestry cycles via `ErrCycle`), `AddTags` / `RemoveTags` (event-scoped meta CRUD with FTS
   resync), `Delete`, `HasChildren`, `List` / `ListSeq` (FTS5 filter + date range + `Limit` +
   `Ascending`), `GetSubtree` (recursive CTE), `ListMeta` (filtered via `ListMetaOpts{Key, Value}`),
-  `CountMeta`, `UpdateMeta`, `DeleteMeta`. All functions accept `context.Context`. `ErrNotFound`,
-  `ErrCycle` and `ErrTimeRange` sentinels.
+  `CountMeta`, `UpdateMeta` (a *merge*, not a plain rename — `UPDATE OR REPLACE` drops the row
+  colliding with migration 2's `UNIQUE(key, value, event_id)`, so an event carrying both tags ends
+  up with one. Plain `UPDATE` aborts the whole transaction there and renames nothing; any
+  two-statement formulation instead needs an `old == new` guard, because its delete half would
+  take out the rows the update half just wrote), `DeleteMeta`. All functions accept
+  `context.Context`. `ErrNotFound`, `ErrCycle` and `ErrTimeRange` sentinels.
   `loadMetaBatch` chunks the IN clause to stay under SQLite's parameter limit. Private helpers:
   `requireEventExists` (existence check used by every mutation function), `rebuildEventFTS`
   (used by Update/AddTags/RemoveTags to resync `events_fts`), `deleteMetaTuples` /
