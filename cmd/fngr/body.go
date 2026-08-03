@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"io"
@@ -23,55 +22,28 @@ var launchEditor = realLaunchEditor
 // Returns the body string or an error. errCancel signals a deliberate
 // editor cancel.
 func resolveBody(args []string, useEditor bool, io ioStreams) (string, error) {
-	hasArgs := len(args) > 0
-
-	// "piped" means stdin actually carries a body, not merely that stdin is
-	// non-interactive. A script, cron job, or CI step runs with stdin bound to
-	// /dev/null (non-TTY, no data); treating that as a piped body broke plain
-	// `fngr add "note"`. Only peek when non-TTY — peeking a real terminal would
-	// block waiting for the user to type.
-	in := io.In
-	piped := false
-	if !io.IsTTY {
-		piped, in = peekHasData(io.In)
-	}
-
 	switch {
-	case hasArgs && piped:
-		return "", fmt.Errorf("ambiguous: body via both args and stdin; pick one")
-	case !hasArgs && useEditor && piped:
-		return "", fmt.Errorf("--edit conflicts with piped stdin")
-	case hasArgs && useEditor:
+	case len(args) > 0 && useEditor:
 		return launchEditor(strings.Join(args, " "))
-	case hasArgs:
+	case len(args) > 0:
 		body := strings.Join(args, " ")
 		if strings.TrimSpace(body) == "" {
 			return "", fmt.Errorf("event title cannot be empty")
 		}
 		return body, nil
-	case useEditor:
-		return launchEditor("")
-	case piped:
-		return readStdin(in)
-	case io.IsTTY:
-		// Bare interactive `fngr add` opens the editor on an empty buffer.
+	case useEditor, io.IsTTY:
+		// -e, or bare interactive `fngr add`: editor on an empty buffer.
 		return launchEditor("")
 	default:
-		// Non-interactive with no args and nothing piped: no body source.
-		return "", fmt.Errorf("event title cannot be empty")
+		// Nothing else can supply a body, so stdin is it. Reading it blocks
+		// until EOF, and an open-but-idle pipe (`sleep 30 | fngr add`, a CI
+		// runner's inherited stdin) never delivers one — so blocking belongs
+		// only here, where the body is exactly what we are waiting for. Args
+		// and -e already answer the question and must not consult stdin at
+		// all. An empty /dev/null hits EOF at once and readStdin reports
+		// `event title cannot be empty`.
+		return readStdin(io.In)
 	}
-}
-
-// peekHasData reports whether in carries at least one byte without consuming
-// it, returning a reader that replays the peeked byte. Callers must use the
-// returned reader for subsequent reads. Used to distinguish a genuinely piped
-// body from a merely non-interactive stdin (a script's empty /dev/null).
-func peekHasData(in io.Reader) (bool, io.Reader) {
-	br := bufio.NewReader(in)
-	if _, err := br.Peek(1); err != nil {
-		return false, br // EOF or read error: no body to read.
-	}
-	return true, br
 }
 
 // maxStdinBytes caps stdin reads to bound memory when something large

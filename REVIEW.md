@@ -33,8 +33,10 @@ under concurrent writes, and the README states the opposite.**
 | [H1](#h1) | High | migrate | Migration 3's SQL `TRIM()` ≠ `strings.TrimSpace` → corrupted legacy titles/bodies | ✅ fixed |
 | [H2](#h2) | High | render | O(n²) prefix concatenation in `Tree` — 50k-deep chain: 67.85 s / 7.0 GB | ✅ fixed |
 | [H3](#h3) | High | event | `meta rename` fails with a raw UNIQUE error on its primary use case | ✅ fixed |
-| [H4](#h4) | High | cmd | `fngr add` hangs forever when stdin is an open, idle pipe | open |
-| [H5](#h5) | High | cmd | `confirm` treats EOF as consent → non-interactive `meta rename` acts without `-f` | open |
+| [H4](#h4) | High | cmd | `fngr add` hangs forever when stdin is an open, idle pipe | ✅ fixed |
+| [H5](#h5) | High | cmd | `confirm` treats EOF as consent → non-interactive `meta rename` acts without `-f` | ✅ fixed |
+| [H6](#h6) | High | cmd | `confirm` still blocks forever on an idle pipe — H4's hazard, surviving in the other stdin reader | open |
+| [H7](#h7) | High | cmd | `-e` under a non-TTY launches an editor that cannot run, discarding the piped body | open |
 | [M1](#m1) | Medium | event | Body-tag sync silently deletes operator-added meta | open |
 | [M2](#m2) | Medium | event | Parent cycle → two non-terminating loops + a silent total data blackout | open |
 | [M3](#m3) | Medium | event | Nothing enforces a single `author`; display picks whichever sorts first | open |
@@ -795,6 +797,37 @@ the body, and the only reason to peek is to detect the args+stdin conflict,
 which is not worth an unbounded block. Same for `useEditor && len(args)==0`.
 Alternatively bound the peek with a deadline on the fd.
 
+**Resolved** by deleting `peekHasData` outright. `resolveBody` is now plain
+precedence — args > `-e` > TTY > stdin — and reads stdin only in the last
+branch, where it is the sole possible body source and blocking to wait for
+the body is the whole point. An empty `/dev/null` hits EOF at once and
+`readStdin` already reports `event title cannot be empty`, which is the same
+message the peek's "non-TTY, no data" branch produced, so the emptiness check
+the helper existed to perform was redundant with the read that followed it.
+
+The deadline alternative was not taken: it needs a real `*os.File` (the
+`ioStreams.In` seam that makes every command testable would have to leak),
+and it trades a hang for an arbitrary timeout on the path where waiting is
+correct.
+
+Both conflict errors go with it. Reporting "ambiguous: body via both args and
+stdin" costs exactly the unbounded read that caused the hang, so extra stdin
+is now silently unread. It is a genuine loss of feedback for a real mistake,
+accepted because the check could not be performed safely and the mistake is
+self-evident (the event gets the args, verbatim, right there in the output).
+
+`TestResolveBody_NeverTouchesStdinWhenBodyIsDecided` runs each of {args,
+args+`-e`, `-e`, TTY} against a reader that never returns from `Read`, and
+fails on a 5 s timeout if any of them touches stdin; restoring the peek fails
+three of the four. End-to-end, the report's own reproducer now finishes in
+10 ms:
+
+```
+$ mkfifo f; ( sleep 30 > f & ); time fngr add "note text" < f
+Added event 2
+0.010 total
+```
+
 <a name="h5"></a>
 ### H5 — `confirm` treats EOF as consent
 
@@ -823,6 +856,100 @@ with success.
 **Fix:** have `confirm` distinguish `io.EOF` from an empty line and return an
 error on EOF, requiring `-f` for non-interactive runs. That fixes both
 directions at once.
+
+**Resolved** as suggested: `confirm` returns the `errNoAnswer` sentinel when
+the read ends in `io.EOF` **and** nothing was typed, so all three call sites
+change behaviour from one place and no call site's safety depends on which
+default it passes any more.
+
+```
+$ fngr meta rename '#ops' '#pwned' </dev/null
+Rename 1 occurrence(s) of tag=ops to tag=pwned? [Y/n] fngr: error: no answer on stdin; re-run with --force to skip the prompt
+rc=1
+```
+
+Both halves of the condition carry weight. `bufio.Reader.ReadString('\n')`
+returns `io.EOF` for a final line with no trailing newline too, so keying on
+the error alone would reject `printf y | fngr delete 1` — a legitimate
+scripted confirmation. `TestConfirm` pins `y`/`n` without a newline next to
+the two empty-input rows, and each mutation of the condition fails a
+different pair.
+
+`TestKongDispatch_PromptsRefuseEmptyStdin` drives all three prompting verbs
+(`delete`, `meta rename`, `meta delete`) through Kong with a non-TTY empty
+stdin, asserts `errNoAnswer` from each, and then asserts the tag and the
+event are both still there — the refusal has to be a refusal, not just a
+different exit code. That test also covers the report's "opposite direction"
+note: `fngr delete N </dev/null` used to print `Aborted.` at exit 0, and now
+exits 1.
+
+---
+
+<a name="h6"></a>
+### H6 — `confirm` still blocks forever on an idle pipe
+
+*Found by the altitude review of the H4+H5 fix, not in the original report.*
+
+H4 removed a blocking stdin read from `resolveBody`. `confirm`
+(`cmd/fngr/prompt.go:22`) still does one, and it is the same hazard:
+
+```
+$ sleep 30 | fngr meta delete '#wip'
+Delete 1 occurrence(s) of tag=wip? [y/N]        # hangs until the writer closes
+```
+
+H5 hardened the *EOF-arrives-immediately* half of this helper and left the
+*EOF-never-arrives* half untouched, so the command is now safe under
+`</dev/null` and still unbounded under a live-but-silent pipe: `docker run -i`
+without `-t`, CI runners, process supervisors, `ssh host 'fngr …'` without
+`-n`.
+
+The structural reason is that `confirm(in io.Reader, out io.Writer, …)` cannot
+see `ioStreams.IsTTY` — the free, non-blocking signal for "is a human here?" —
+so H5 had to *infer* absence from the read instead of knowing it beforehand.
+
+**The fix is a real behaviour decision, which is why it is filed rather than
+folded into H5.** Passing `ioStreams` and returning `errNoAnswer` before
+touching `In` whenever `!IsTTY` eliminates the hang outright and collapses the
+sentinel's ambiguity (EOF on a TTY then unambiguously means the human pressed
+^D, and can be a clean cancel at exit 0). But it also breaks
+`echo y | fngr delete 1` and `yes | fngr …`, which are idiomatic, currently
+supported, and pinned by `TestConfirm`. Decide explicitly whether piped
+answers stay supported; `-f` already covers the scripted case, which argues
+they need not.
+
+Note this is the same capability-vs-content generalisation as [H7](#h7) — one
+rule settles both.
+
+<a name="h7"></a>
+### H7 — `-e` under a non-TTY launches an editor that cannot run
+
+*Found by the altitude review of the H4+H5 fix. Introduced by that fix.*
+
+H4 deleted both conflict checks along with the peek. Dropping the args+stdin
+one is right: telling a piped body apart from cron's `/dev/null` genuinely
+requires consuming stdin, and accepting silently-unread stdin is the correct
+trade. The `-e`+stdin one was collateral — `-e` asks for an interactive
+editor, and `io.IsTTY` (already computed in `main.go`) says whether one is
+possible, at no cost and with no read.
+
+```
+$ echo "piped body that matters" | VISUAL= EDITOR=true fngr add -e
+cancelled (empty body)     # exit 0, no event, body gone
+```
+
+With a real terminal editor it is louder but still wrong: `realLaunchEditor`
+(`cmd/fngr/body.go`) sets `cmd.Stdin = os.Stdin`, handing vim the pipe.
+
+Fix: key the error on capability rather than content — `useEditor && !IsTTY`
+→ `--edit needs a terminal`. No read, no hang, and it additionally catches the
+pre-existing `fngr add -e </dev/null` case that the old content-based check
+never did. Costs one branch and flips the `-e`/non-TTY rows in
+`TestResolveBody` and the spec's resolution table from "editor opened empty"
+to an error.
+
+Severity is High for the silent-data-loss shape, but the blast radius is
+narrow: it needs `-e` *and* a pipe *and* a non-interactive `$EDITOR`.
 
 ---
 

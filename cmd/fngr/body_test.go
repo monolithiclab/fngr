@@ -67,33 +67,50 @@ type errReader struct{}
 
 func (errReader) Read(_ []byte) (int, error) { return 0, errors.New("boom") }
 
-func TestPeekHasData(t *testing.T) {
-	t.Parallel()
+// forbiddenReader fails the test if anything reads it. It stands in for a
+// non-TTY stdin that is open but idle — a terminal misdetected as a pipe, or
+// the read half of a pipe whose writer has not written yet. A real one of
+// those delivers neither a byte nor EOF, so a read never returns; here the
+// read is reported instead of hung, which fails in microseconds rather than
+// on a timeout.
+type forbiddenReader struct{ t *testing.T }
+
+func (r forbiddenReader) Read(_ []byte) (int, error) {
+	r.t.Helper()
+	r.t.Error("stdin was read although the body was already determined; a real idle pipe would hang here")
+	return 0, io.EOF
+}
+
+// TestResolveBody_NeverTouchesStdinWhenBodyIsDecided is the H4 regression
+// guard. resolveBody used to peek stdin up front to detect args+stdin and
+// -e+stdin conflicts, so every non-TTY invocation paid a read — and an idle
+// pipe hung `fngr add "note"` forever with no output and no timeout. The peek
+// is gone; none of the cases below may go near stdin.
+func TestResolveBody_NeverTouchesStdinWhenBodyIsDecided(t *testing.T) {
 	cases := []struct {
-		name  string
-		input string
-		want  bool
+		name      string
+		args      []string
+		useEditor bool
+		isTTY     bool
+		want      string
 	}{
-		{name: "empty", input: "", want: false},
-		{name: "single-byte", input: "x", want: true},
-		{name: "whitespace-counts-as-data", input: " ", want: true},
-		{name: "multi-line", input: "line one\nline two\n", want: true},
+		{name: "args", args: []string{"note"}, want: "note"},
+		{name: "args-and-editor", args: []string{"note"}, useEditor: true, want: "note::edited"},
+		{name: "editor", useEditor: true, want: "::edited"},
+		{name: "tty", isTTY: true, want: "::edited"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			has, r := peekHasData(strings.NewReader(tc.input))
-			if has != tc.want {
-				t.Fatalf("peekHasData(%q) = %v, want %v", tc.input, has, tc.want)
-			}
-			// The returned reader must replay the full input, including the
-			// peeked byte, so downstream readStdin sees everything.
-			got, err := io.ReadAll(r)
+			// NOTE: no t.Parallel() — launchEditor is package-level state.
+			stubEditor(t, func(initial string) (string, error) { return initial + "::edited", nil })
+
+			io := ioStreams{In: forbiddenReader{t: t}, IsTTY: tc.isTTY}
+			got, err := resolveBody(tc.args, tc.useEditor, io)
 			if err != nil {
-				t.Fatalf("ReadAll: %v", err)
+				t.Fatalf("resolveBody: %v", err)
 			}
-			if string(got) != tc.input {
-				t.Errorf("replayed = %q, want %q", got, tc.input)
+			if got != tc.want {
+				t.Errorf("body = %q, want %q", got, tc.want)
 			}
 		})
 	}
@@ -202,20 +219,23 @@ func TestResolveBody(t *testing.T) {
 	}{
 		// Row 1: args alone, TTY.
 		{name: "args-only-tty", args: []string{"foo", "bar"}, isTTY: true, wantBody: "foo bar"},
-		// Row 2: args + piped stdin = error.
-		{name: "args-and-stdin-error", args: []string{"x"}, isTTY: false, stdin: "y", wantErr: "ambiguous"},
+		// Row 2: args + piped stdin. Args win and stdin is left unread —
+		// noticing the conflict would cost a blocking peek on every run.
+		{name: "args-and-stdin-args-win", args: []string{"x"}, isTTY: false, stdin: "y", wantBody: "x"},
 		// Row 3: args + editor, TTY = pre-fill.
 		{name: "args-and-editor", args: []string{"foo", "bar"}, useEditor: true, isTTY: true, stubBody: "foo bar baz", wantInit: "foo bar", wantBody: "foo bar baz"},
-		// Row 4: args + editor + piped = error (caught by args+stdin first).
-		{name: "args-editor-stdin-error", args: []string{"x"}, useEditor: true, isTTY: false, stdin: "y", wantErr: "ambiguous"},
+		// Row 4: args + editor + piped = pre-filled editor, stdin unread.
+		{name: "args-editor-stdin", args: []string{"x"}, useEditor: true, isTTY: false, stdin: "y", stubBody: "x edited", wantInit: "x", wantBody: "x edited"},
 		// Row 5: bare add in TTY = editor opened empty.
 		{name: "bare-tty-launches-editor", isTTY: true, stubBody: "from editor", wantInit: "", wantBody: "from editor"},
 		// Row 6: bare add piped = stdin.
 		{name: "bare-piped-reads-stdin", isTTY: false, stdin: "piped body", wantBody: "piped body"},
 		// Row 7: -e in TTY = editor empty.
 		{name: "edit-flag-tty", useEditor: true, isTTY: true, stubBody: "from editor", wantInit: "", wantBody: "from editor"},
-		// Row 8: -e piped = error.
-		{name: "edit-flag-piped-error", useEditor: true, isTTY: false, stdin: "y", wantErr: "--edit conflicts"},
+		// Row 8: -e piped = editor, stdin unread. Empty piped stdin takes the
+		// same branch — -e no longer inspects stdin at all, so there is
+		// nothing left to distinguish the two.
+		{name: "edit-flag-piped", useEditor: true, isTTY: false, stdin: "y", stubBody: "from editor", wantInit: "", wantBody: "from editor"},
 		// Editor cancel (empty save) propagates errCancel.
 		{name: "editor-cancel", useEditor: true, isTTY: true, stubErr: errCancel, wantInit: "", wantErr: "cancelled"},
 		{name: "empty-arg-rejected", args: []string{""}, isTTY: true, wantErr: "event title cannot be empty"},
@@ -226,9 +246,6 @@ func TestResolveBody(t *testing.T) {
 		// Bare add, non-TTY, nothing piped: no body source at all → reject,
 		// don't fall through to launching an editor in a non-interactive context.
 		{name: "bare-nontty-empty-stdin", isTTY: false, stdin: "", wantErr: "event title cannot be empty"},
-		// -e with empty non-TTY stdin: no real conflict, so honour the editor
-		// request (the launch itself fails later if there's truly no terminal).
-		{name: "edit-flag-nontty-empty-stdin", useEditor: true, isTTY: false, stdin: "", stubBody: "from editor", wantInit: "", wantBody: "from editor"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -236,13 +253,11 @@ func TestResolveBody(t *testing.T) {
 			// shared across cases; race detector flags concurrent swaps.
 			var stubCalled bool
 			var gotInit string
-			origEditor := launchEditor
-			launchEditor = func(initial string) (string, error) {
+			stubEditor(t, func(initial string) (string, error) {
 				stubCalled = true
 				gotInit = initial
 				return tc.stubBody, tc.stubErr
-			}
-			t.Cleanup(func() { launchEditor = origEditor })
+			})
 
 			io, _, _ := newTestIOFull(tc.stdin, tc.isTTY)
 			got, err := resolveBody(tc.args, tc.useEditor, io)

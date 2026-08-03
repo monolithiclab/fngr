@@ -47,17 +47,27 @@ make ci             # codefix + format + lint + test
   `meta` is a sub-command tree too: `fngr meta` lists with optional `-S` filter (bare key,
   key=value, @person, #tag), `meta rename` and `meta delete` mutate (both accept the same
   shorthand). None of the event verbs prompt; meta verbs prompt with the destructive-vs-additive
-  defaults (rename `[Y/n]`, delete `[y/N]`); `-f`/`--force` skips the prompt on both.
+  defaults (rename `[Y/n]`, delete `[y/N]`); `-f`/`--force` skips the prompt on both, and is
+  *required* in a non-interactive run — every prompt errors rather than assume its default when
+  stdin has no answer to give (see `cmd/fngr/prompt.go`).
 - `cmd/fngr/store.go` — Defines the narrow `eventStore` interface that commands depend on plus the
   injectable `ioStreams` (`In io.Reader`, `Out io.Writer`, `Err io.Writer`, `IsTTY bool`).
 - `cmd/fngr/prompt.go` — `confirm(in, out, prompt, defaultVal) (bool, error)` shared yes/no helper.
+  An empty answer takes `defaultVal`, but end-of-input with *nothing typed* returns `errNoAnswer`
+  instead: a closed or empty stdin (cron, CI, `</dev/null`) is silence, not consent, and the
+  `meta rename` prompt defaults to yes — an unattended run that forgot `-f` used to rewrite
+  metadata across every event and report success. Both halves of the condition matter:
+  `ReadString` also returns `io.EOF` for a final line with no trailing newline, so a bare `y`
+  must still confirm.
 - `cmd/fngr/body.go` — Body-source dispatch for `fngr add`. `resolveBody` returns the body string
-  from one of {joined args, stdin, editor} per the (args, `-e`, stdin-carries-data) dispatch table.
-  "Piped" means stdin is non-TTY **and** has ≥1 byte — detected via `peekHasData` (a `bufio.Reader`
-  peek that replays the byte), so `fngr add "note"` works in scripts/CI/cron where stdin is an empty
-  `/dev/null` (the old `!IsTTY` proxy mis-fired "ambiguous" there). The args+stdin and `--edit`+stdin
-  conflicts only trip when stdin actually has data; bare non-interactive `add` with no body source
-  errors `event text cannot be empty`.
+  from one of {joined args, stdin, editor}, checked in that order: args win, then `-e`, then a
+  TTY opens the editor, and stdin is read only when nothing else can supply a body. Stdin is
+  *never* touched otherwise — reading it blocks until EOF, and an open-but-idle pipe delivers
+  neither a byte nor EOF, so the old up-front `bufio` peek (which existed only to report
+  args+stdin and `-e`+stdin as conflicts) could hang `fngr add "note"` forever. Those two
+  conflicts are gone with it; extra stdin is silently unread. Blocking is still correct in the
+  stdin-only branch, where the body is exactly what we are waiting for; an empty `/dev/null`
+  hits EOF at once and `readStdin` reports `event title cannot be empty`.
   `launchEditor` is a `var` for test stubbing; `realLaunchEditor` execs `$VISUAL`/`$EDITOR` on a
   temp file; `errCancel` signals empty-save (handled as exit-0 by `AddCmd.Run`). `readStdin`
   caps reads at `maxStdinBytes` (16 MiB) via `io.LimitReader` so a runaway pipe can't OOM.

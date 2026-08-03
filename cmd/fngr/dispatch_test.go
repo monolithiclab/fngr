@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"maps"
 	"strings"
@@ -12,40 +13,12 @@ import (
 )
 
 // dispatch parses argv, sets up the same bindings main() does, and runs the
-// chosen command. Tests that go through this path catch wiring bugs (missing
-// Kong bindings, wrong Run signatures, etc.) that direct cmd.Run() calls miss.
+// chosen command against a store of its own. Tests that go through this path
+// catch wiring bugs (missing Kong bindings, wrong Run signatures, etc.) that
+// direct cmd.Run() calls miss.
 func dispatch(t *testing.T, argv []string, stdin string, isTTY bool) (string, error) {
 	t.Helper()
-
-	var cli CLI
-	parser, err := kong.New(&cli,
-		kong.Name("fngr"),
-		kongVars("test", "tester"),
-		kong.Exit(func(int) {}),
-		kong.Writers(&bytes.Buffer{}, &bytes.Buffer{}),
-	)
-	if err != nil {
-		t.Fatalf("kong.New: %v", err)
-	}
-
-	kctx, err := parser.Parse(argv)
-	if err != nil {
-		return "", err
-	}
-
-	out := &bytes.Buffer{}
-	kctx.BindTo(newTestStore(t), (*eventStore)(nil))
-	kctx.Bind(ioStreams{
-		In:    strings.NewReader(stdin),
-		Out:   out,
-		Err:   io.Discard,
-		IsTTY: isTTY,
-	})
-
-	if err := kctx.Run(); err != nil {
-		return out.String(), err
-	}
-	return out.String(), nil
+	return newDispatcherIO(t, stdin, isTTY)(argv)
 }
 
 // TestKongDispatch_AllCommands is the regression test for the
@@ -101,9 +74,7 @@ func TestKongDispatch_AllCommands(t *testing.T) {
 			t.Parallel()
 
 			if tc.name == "add-editor" {
-				origEditor := launchEditor
-				launchEditor = func(string) (string, error) { return "from editor", nil }
-				t.Cleanup(func() { launchEditor = origEditor })
+				stubEditor(t, func(string) (string, error) { return "from editor", nil })
 			}
 
 			_, err := dispatch(t, tc.argv, tc.stdin, tc.isTTY)
@@ -115,19 +86,20 @@ func TestKongDispatch_AllCommands(t *testing.T) {
 	}
 }
 
-// newDispatcher returns a run function that parses and executes argv against
-// one shared store, so multi-command flows (add, then mutate, then list) see
-// each other's writes. The plain `dispatch` helper builds a fresh store per
-// call and is only good for single-shot wiring checks.
+// newDispatcher returns a run function for the common interactive case: empty
+// stdin, TTY.
 func newDispatcher(t *testing.T) func(argv []string) (string, error) {
 	t.Helper()
-	return newDispatcherWithStdin(t, "")
+	return newDispatcherIO(t, "", true)
 }
 
-// newDispatcherWithStdin is newDispatcher for the commands that read a body
-// from a pipe. A non-empty stdin also means a non-TTY, which is what
-// resolveBody keys off.
-func newDispatcherWithStdin(t *testing.T, stdin string) func(argv []string) (string, error) {
+// newDispatcherIO returns a run function that parses and executes argv against
+// one shared store, so multi-command flows (add, then mutate, then list) see
+// each other's writes. stdin and isTTY are spelled out for tests of piped
+// bodies and of non-interactive behaviour with nothing on stdin (cron, CI,
+// `</dev/null`). It is the one place the Kong wiring lives; `dispatch` and
+// `newDispatcher` are wrappers around it.
+func newDispatcherIO(t *testing.T, stdin string, isTTY bool) func(argv []string) (string, error) {
 	t.Helper()
 
 	var cli CLI
@@ -135,6 +107,8 @@ func newDispatcherWithStdin(t *testing.T, stdin string) func(argv []string) (str
 		kong.Name("fngr"),
 		kongVars("test", "tester"),
 		kong.Exit(func(int) {}),
+		// Keep Kong's usage/error output out of the test log.
+		kong.Writers(&bytes.Buffer{}, &bytes.Buffer{}),
 	)
 	if err != nil {
 		t.Fatalf("kong.New: %v", err)
@@ -152,10 +126,50 @@ func newDispatcherWithStdin(t *testing.T, stdin string) func(argv []string) (str
 			In:    strings.NewReader(stdin),
 			Out:   out,
 			Err:   io.Discard,
-			IsTTY: stdin == "",
+			IsTTY: isTTY,
 		})
 		err = kctx.Run()
 		return out.String(), err
+	}
+}
+
+// TestKongDispatch_PromptsRefuseEmptyStdin is the H5 regression guard. A
+// prompt reading a closed stdin got io.EOF and an empty answer, which confirm
+// treated as "just pressed enter" — so every prompting verb ran its default.
+// `meta rename` defaults to yes, meaning a cron job or CI step that forgot -f
+// silently rewrote metadata across every event and reported success. Nothing
+// may run unattended without -f now.
+func TestKongDispatch_PromptsRefuseEmptyStdin(t *testing.T) {
+	t.Parallel()
+	run := newDispatcherIO(t, "", false)
+
+	if _, err := run([]string{"add", "seed task #wip"}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	for _, argv := range [][]string{
+		{"meta", "rename", "#wip", "#done"},
+		{"meta", "delete", "#wip"},
+		{"delete", "1"},
+	} {
+		t.Run(strings.Join(argv, " "), func(t *testing.T) {
+			out, err := run(argv)
+			if !errors.Is(err, errNoAnswer) {
+				t.Fatalf("err = %v, want errNoAnswer (out %q)", err, out)
+			}
+		})
+	}
+
+	// Whatever the prompts refused to do must genuinely not have happened.
+	out, err := run([]string{"meta", "-S", "tag"})
+	if err != nil {
+		t.Fatalf("meta: %v", err)
+	}
+	if !strings.Contains(out, "tag=wip") {
+		t.Errorf("meta output = %q, want tag=wip intact", out)
+	}
+	if _, err := run([]string{"event", "1"}); err != nil {
+		t.Errorf("event 1: %v, want it to still exist", err)
 	}
 }
 
@@ -320,7 +334,7 @@ func TestKongDispatch_ControlBytesEscapedInOutput(t *testing.T) {
 // verbatim.
 func TestKongDispatch_RawC1FromStdin(t *testing.T) {
 	t.Parallel()
-	run := newDispatcherWithStdin(t, "piped note \x9b31m tail")
+	run := newDispatcherIO(t, "piped note \x9b31m tail", false)
 
 	if _, err := run([]string{"add"}); err != nil {
 		t.Fatalf("add: %v", err)

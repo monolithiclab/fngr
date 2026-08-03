@@ -26,6 +26,17 @@ func newTestStore(t *testing.T) *event.Store {
 	return event.NewStore(database)
 }
 
+// stubEditor swaps the package-level launchEditor for the duration of the
+// test and restores it afterwards. Because the seam is package state, a test
+// that calls this must NOT call t.Parallel() — the race detector flags
+// concurrent swaps, and two parallel tests would see each other's stub.
+func stubEditor(t *testing.T, fn func(initial string) (string, error)) {
+	t.Helper()
+	orig := launchEditor
+	launchEditor = fn
+	t.Cleanup(func() { launchEditor = orig })
+}
+
 func newTestIO(stdin string) (ioStreams, *bytes.Buffer) {
 	out := &bytes.Buffer{}
 	return ioStreams{

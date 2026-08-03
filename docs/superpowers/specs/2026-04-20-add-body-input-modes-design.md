@@ -49,93 +49,79 @@ because Kong sees a single positional arg either way.
 
 ### Body source resolution table
 
-> **Amendment (v0.0.3 hardening).** "piped" originally meant "stdin is
-> not a TTY". That conflated non-interactive stdin with *piped body
-> data*: a script, cron job, or CI step runs with stdin bound to an empty
-> `/dev/null` (non-TTY, zero bytes), so `fngr add "note"` wrongly hit the
-> ambiguity error. "piped" now means **non-TTY AND carries ≥1 byte**,
-> detected by `peekHasData` (a `bufio.Reader` peek that replays the byte
-> for `readStdin`). A non-TTY with no data ("empty") is treated as no
-> stdin source. The rows and the empty-stdin paragraph below reflect the
-> corrected semantics.
+> **Amended in v0.0.3 (review issue H4); this section states the current
+> design.** As shipped, resolution keyed off whether stdin "was piped",
+> which took two tries to get right and was the wrong question both
+> times. First `!IsTTY` alone, which wrongly hit the args+stdin
+> ambiguity error for any script, cron job or CI step (stdin bound to an
+> empty `/dev/null` is non-TTY with zero bytes). Then non-TTY **with
+> data**, via a `peekHasData` `bufio.Reader` peek — but reading an
+> open-but-idle pipe returns neither a byte nor EOF, so the peek hung
+> every non-TTY `fngr add "note"` forever, with no output and no
+> timeout, purely to report an error. Both conflict rows are gone with
+> it. Precedence replaces conflict detection, and stdin is not a
+> question anyone asks up front.
 
-The `(args, -e, stdin)` combinations resolve as follows. The body
-source is always exactly one of {args, stdin, editor}; conflicts error.
-"piped" = non-TTY with data; "empty" = non-TTY with no data.
+Resolution is strict precedence: **args > `-e` > TTY > stdin**. The body
+source is always exactly one of {args, stdin, editor}, and the first
+branch that can supply one wins.
 
 | Args | `-e` | Stdin | Resolution |
 |------|------|-------|------------|
-| present | absent | TTY or empty | Args joined with single space |
-| present | absent | piped | **Error**: `ambiguous: body via both args and stdin; pick one` |
-| present | present | TTY or empty | Editor pre-filled with joined args |
-| present | present | piped | **Error** (same wording as above) |
+| present | absent | any | Args joined with single space |
+| present | present | any | Editor pre-filled with joined args |
+| absent | present | any | Editor opened empty |
 | absent | absent | TTY | Editor opened empty |
-| absent | absent | piped | Read stdin to EOF |
-| absent | absent | empty | **Error**: `event title cannot be empty` |
-| absent | present | TTY or empty | Editor opened empty |
-| absent | present | piped | **Error**: `--edit conflicts with piped stdin` |
+| absent | absent | non-TTY | Read stdin to EOF |
 
-Empty *piped* stdin (zero bytes after trimming when data was promised)
-still errors with the existing `event title cannot be empty` message.
-Empty editor save cancels (the user can `:q!` to indicate intent; an
+Stdin is read in the last row only, where it is the sole possible body
+source and blocking to wait for the body is the whole point. Anywhere
+else it is left untouched — deliberately, since noticing that data is
+sitting there costs a read that may never return. Extra stdin alongside
+args or `-e` is therefore silently unread; that lost feedback is the
+accepted price of never hanging.
+
+An empty stdin needs no separate check: `/dev/null` hits EOF at once and
+`readStdin` reports `event title cannot be empty` after trimming. Empty
+editor save cancels instead (the user can `:q!` to indicate intent; an
 empty pipe has no equivalent).
 
 ### `cmd/fngr/body.go` — new file
 
-The dispatch logic lives in its own file alongside `add.go`. The switch
-order matters: `hasArgs && piped` must fire before any `useEditor` branch
-so that `echo X | fngr add foo -e` reports the args+stdin conflict
-(actionable: drop one input) rather than the args+edit case (which would
-otherwise be a non-conflict).
+The dispatch logic lives in its own file alongside `add.go`. Branch
+order *is* the precedence rule above, so it is load-bearing: the two
+`len(args) > 0` cases must precede the `useEditor`/`IsTTY` case, which
+must precede the `default` that reads stdin.
 
 ```go
-package main
-
-import (
-    "errors"
-    "fmt"
-    "io"
-    "os"
-    "os/exec"
-    "strings"
-)
-
-// errCancel signals a deliberate user cancel (empty editor save). AddCmd.Run
-// recognises it and converts to (nil error + status 0).
-var errCancel = errors.New("cancelled")
-
-// launchEditor is overridable so tests can stub the editor exec without
-// shelling out. Production points at the exec.Command-based implementation.
-var launchEditor = realLaunchEditor
-
 // resolveBody applies the dispatch table above. It owns no I/O state of
 // its own — every dependency arrives via the ioStreams arg.
 func resolveBody(args []string, useEditor bool, io ioStreams) (string, error) {
-    hasArgs := len(args) > 0
-    piped := !io.IsTTY
-
     switch {
-    case hasArgs && piped:
-        return "", fmt.Errorf("ambiguous: body via both args and stdin; pick one")
-    case !hasArgs && useEditor && piped:
-        return "", fmt.Errorf("--edit conflicts with piped stdin")
-    case hasArgs && useEditor:
+    case len(args) > 0 && useEditor:
         return launchEditor(strings.Join(args, " "))
-    case hasArgs:
-        return strings.Join(args, " "), nil
-    case useEditor:
+    case len(args) > 0:
+        body := strings.Join(args, " ")
+        if strings.TrimSpace(body) == "" {
+            return "", fmt.Errorf("event title cannot be empty")
+        }
+        return body, nil
+    case useEditor, io.IsTTY:
         return launchEditor("")
-    case piped:
-        return readStdin(io.In)
     default:
-        return launchEditor("")
+        return readStdin(io.In)
     }
 }
 
+// readStdin caps the read at maxStdinBytes (16 MiB) so a runaway pipe
+// cannot OOM the process.
 func readStdin(in io.Reader) (string, error) {
-    raw, err := io.ReadAll(in)
+    raw, err := io.ReadAll(io.LimitReader(in, maxStdinBytes+1))
     if err != nil {
         return "", fmt.Errorf("read stdin: %w", err)
+    }
+    if len(raw) > maxStdinBytes {
+        return "", fmt.Errorf("stdin exceeds %d-byte limit", maxStdinBytes)
     }
     body := strings.TrimSpace(string(raw))
     if body == "" {
@@ -325,10 +311,14 @@ Happy-path checks at the `AddCmd.Run` level for each body source:
 - `editor-cancel`: swapped editor returns `("", errCancel)` →
   no event added, `out.String()` empty, `err.String()` contains
   `"cancelled (empty body)"`, `Run` returns `nil`.
-- `args-plus-stdin-errors`: `Args: []string{"x"}`, `IsTTY: false`,
-  stdin `"y"` → error contains `"ambiguous"`.
-- `editor-plus-stdin-errors`: `Edit: true`, `IsTTY: false`,
-  stdin `"y"` → error contains `"--edit conflicts"`.
+- `args-win-over-stdin`: `Args: []string{"x"}`, `IsTTY: false`,
+  stdin `"y"` → body is `"x"`; stdin is never read.
+- `editor-wins-over-stdin`: `Edit: true`, `IsTTY: false`, stdin `"y"`
+  → the editor opens; stdin is never read.
+- `stdin-untouched-when-body-decided`: each of {args, args+`-e`, `-e`,
+  TTY} against a reader that fails the test if anything reads it. Guards
+  the hang itself, not just the wording — a real idle pipe would block
+  here forever, so any read at all is the defect.
 
 Existing test sites that construct `&AddCmd{Text: "..."}` migrate to
 `&AddCmd{Args: []string{"..."}}`. Per earlier grep this is ~6 sites.
