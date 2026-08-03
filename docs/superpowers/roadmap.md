@@ -73,6 +73,20 @@ Fixes for real friction surfaced by using the tool, not new features.
   `bufio.Reader` peek; args win when stdin is empty, while a genuine
   `echo x | fngr add "y"` still errors. Spec amended in
   `docs/superpowers/specs/2026-04-20-add-body-input-modes-design.md`.
+  **Superseded in v0.0.3** (review issue H4): the peek itself blocks
+  forever on a pipe that is open but idle, which hung `fngr add "note"`
+  under CI runners, process supervisors and `ssh host fngr add x`.
+  `peekHasData` is gone; `resolveBody` is now precedence — args > `-e` >
+  TTY > stdin — and reads stdin only when nothing else can supply a
+  body. `echo x | fngr add "y"` no longer errors: the args win and the
+  pipe goes unread, because noticing it costs the blocking read.
+- **Prompts refuse to assume a default when nobody is there** — `confirm`
+  read `("", io.EOF)` from a closed or empty stdin and treated it as
+  "pressed enter", taking the prompt's default. `meta rename` defaults to
+  yes, so an unattended run that forgot `-f` rewrote metadata across every
+  event and reported success. EOF with nothing typed now returns
+  `errNoAnswer`; `-f` is required in a non-interactive run (review issue
+  H5).
 
 ## Publishing pipeline polish
 

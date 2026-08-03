@@ -147,14 +147,12 @@ func TestAddCmd_EditorBody(t *testing.T) {
 	s := newTestStore(t)
 	io, out, _ := newTestIOFull("", true) // isTTY=true
 
-	origEditor := launchEditor
-	launchEditor = func(initial string) (string, error) {
+	stubEditor(t, func(initial string) (string, error) {
 		if initial != "" {
 			t.Errorf("editor called with non-empty initial %q", initial)
 		}
 		return "from editor", nil
-	}
-	t.Cleanup(func() { launchEditor = origEditor })
+	})
 
 	cmd := &AddCmd{Author: "alice"} // no args, no -e — bare TTY auto-launches editor
 	if err := cmd.Run(s, io); err != nil {
@@ -174,12 +172,10 @@ func TestAddCmd_ArgsPlusEditorPrefills(t *testing.T) {
 	io, _, _ := newTestIOFull("", true)
 
 	var gotInit string
-	origEditor := launchEditor
-	launchEditor = func(initial string) (string, error) {
+	stubEditor(t, func(initial string) (string, error) {
 		gotInit = initial
 		return initial + " z", nil
-	}
-	t.Cleanup(func() { launchEditor = origEditor })
+	})
 
 	cmd := &AddCmd{Args: []string{"x", "y"}, Edit: true, Author: "alice"}
 	if err := cmd.Run(s, io); err != nil {
@@ -198,9 +194,7 @@ func TestAddCmd_EditorCancel(t *testing.T) {
 	s := newTestStore(t)
 	io, out, errBuf := newTestIOFull("", true)
 
-	origEditor := launchEditor
-	launchEditor = func(string) (string, error) { return "", errCancel }
-	t.Cleanup(func() { launchEditor = origEditor })
+	stubEditor(t, func(string) (string, error) { return "", errCancel })
 
 	cmd := &AddCmd{Author: "alice"}
 	if err := cmd.Run(s, io); err != nil {
@@ -220,21 +214,26 @@ func TestAddCmd_EditorCancel(t *testing.T) {
 	}
 }
 
-func TestAddCmd_ArgsAndStdinError(t *testing.T) {
+// Args beat stdin: nothing reads the pipe once the args have supplied a body.
+func TestAddCmd_ArgsWinOverStdin(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
 	io, _, _ := newTestIOFull("piped", false) // isTTY=false
 
 	cmd := &AddCmd{Args: []string{"argbody"}, Author: "alice"}
-	err := cmd.Run(s, io)
-	if err == nil || !strings.Contains(err.Error(), "ambiguous") {
-		t.Errorf("err = %v, want 'ambiguous'", err)
+	if err := cmd.Run(s, io); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	ev, _ := s.Get(context.Background(), 1)
+	if ev.Title != "argbody" {
+		t.Errorf("title = %q, want %q", ev.Title, "argbody")
 	}
 }
 
 // Regression guard: `fngr add "note"` run non-interactively (script, CI,
-// cron) has stdin bound to an empty /dev/null. It must use the args, not
-// trip the args+stdin ambiguity guard. Exercised through the Run path.
+// cron) has stdin bound to an empty /dev/null. It must use the args.
+// Exercised through the Run path.
 func TestAddCmd_ArgsNonTTYEmptyStdin(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
@@ -271,15 +270,22 @@ func TestAddCmd_EmptyArgRejected(t *testing.T) {
 	}
 }
 
-func TestAddCmd_EditFlagPipedError(t *testing.T) {
-	t.Parallel()
+// -e beats stdin for the same reason args do: the editor is an explicit
+// request, and detecting the clash would mean reading a pipe that may block.
+func TestAddCmd_EditFlagWinsOverStdin(t *testing.T) {
 	s := newTestStore(t)
 	io, _, _ := newTestIOFull("piped", false)
 
+	stubEditor(t, func(string) (string, error) { return "from editor", nil })
+
 	cmd := &AddCmd{Edit: true, Author: "alice"}
-	err := cmd.Run(s, io)
-	if err == nil || !strings.Contains(err.Error(), "--edit conflicts") {
-		t.Errorf("err = %v, want '--edit conflicts'", err)
+	if err := cmd.Run(s, io); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	ev, _ := s.Get(context.Background(), 1)
+	if ev.Title != "from editor" {
+		t.Errorf("title = %q, want %q", ev.Title, "from editor")
 	}
 }
 

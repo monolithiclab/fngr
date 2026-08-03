@@ -118,8 +118,8 @@ don't work inside the image:
   image; neither exists in distroless-static.
 - The pager on `fngr list` — needs `less` + a TTY; pass `--no-pager`
   or pipe to a host-side pager.
-- Confirmation prompts on `delete` / `meta delete` — no TTY; pass
-  `-f` to skip the prompt.
+- Confirmation prompts on `delete` / `meta rename` / `meta delete` —
+  no TTY and nothing to read on stdin, so they error out. Pass `-f`.
 
 ## Quick start
 
@@ -389,6 +389,14 @@ input is rejected at parse time.
 stdin) launches `$VISUAL` / `$EDITOR`; saving an empty buffer is
 treated as a cancel. To force an empty event, that's not supported
 by design.
+
+**`no answer on stdin; re-run with --force to skip the prompt`** — a
+confirmation prompt (`fngr delete`, `fngr meta rename`, `fngr meta
+delete`) found nothing to read: you are in a script, a cron job, CI, or
+redirected from `/dev/null`. Add `-f` to state the intent explicitly.
+(Before v0.0.3 the prompt took its default instead — and `meta rename`
+defaults to *yes*, so an unattended run without `-f` rewrote metadata
+across every event and reported success.)
 
 **`set $EDITOR or $VISUAL` from `fngr add -e`** — the editor mode
 needs an editor binary on `PATH`. `export EDITOR=vim` (or whichever)

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -9,9 +10,10 @@ import (
 func TestConfirm(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name  string
-		input string
-		want  bool
+		name    string
+		input   string
+		want    bool
+		wantErr bool
 	}{
 		{name: "empty defaults to yes", input: "\n", want: true},
 		{name: "y", input: "y\n", want: true},
@@ -20,22 +22,74 @@ func TestConfirm(t *testing.T) {
 		{name: "n", input: "n\n", want: false},
 		{name: "no", input: "no\n", want: false},
 		{name: "garbage", input: "maybe\n", want: false},
-		{name: "eof without newline", input: "", want: true},
+		// An answer with no trailing newline still comes back with io.EOF, so
+		// the EOF check must look at what was typed, not just the error.
+		{name: "y without newline", input: "y", want: true},
+		{name: "n without newline", input: "n", want: false},
+		// Nothing typed at all: no one is there to answer, so taking the
+		// default would be inventing consent.
+		{name: "eof with nothing typed", input: "", wantErr: true},
+		{name: "eof after whitespace only", input: "  \t", wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			var out bytes.Buffer
 			got, err := confirm(strings.NewReader(tt.input), &out, "Continue? [Y/n] ", true)
+			if out.String() != "Continue? [Y/n] " {
+				t.Errorf("prompt not written; got %q", out.String())
+			}
+			if tt.wantErr {
+				if !errors.Is(err, errNoAnswer) {
+					t.Fatalf("err = %v, want errNoAnswer", err)
+				}
+				if got {
+					t.Error("confirm returned true alongside an error")
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("confirm: %v", err)
 			}
 			if got != tt.want {
 				t.Errorf("confirm(%q) = %v, want %v", tt.input, got, tt.want)
 			}
-			if out.String() != "Continue? [Y/n] " {
-				t.Errorf("prompt not written; got %q", out.String())
-			}
 		})
 	}
 }
+
+// TestConfirm_IOErrors covers the two failure paths that are not "the user
+// said no": a prompt that cannot be written and a stdin that cannot be read.
+// Both must surface the error rather than fall through to defaultVal.
+func TestConfirm_IOErrors(t *testing.T) {
+	t.Parallel()
+	wantErr := errors.New("boom")
+
+	t.Run("prompt write fails", func(t *testing.T) {
+		t.Parallel()
+		got, err := confirm(strings.NewReader("y\n"), errWriter{err: wantErr}, "Continue? ", true)
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("err = %v, want %v", err, wantErr)
+		}
+		if got {
+			t.Error("confirm returned true alongside an error")
+		}
+	})
+
+	t.Run("stdin read fails", func(t *testing.T) {
+		t.Parallel()
+		var out bytes.Buffer
+		got, err := confirm(errReader{}, &out, "Continue? ", true)
+		if err == nil {
+			t.Fatal("err = nil, want the read error")
+		}
+		if got {
+			t.Error("confirm returned true alongside an error")
+		}
+	})
+}
+
+// errWriter fails every Write, standing in for a closed stdout.
+type errWriter struct{ err error }
+
+func (w errWriter) Write(_ []byte) (int, error) { return 0, w.err }
