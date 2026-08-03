@@ -32,7 +32,7 @@ under concurrent writes, and the README states the opposite.**
 | [C5](#c5) | **Critical** | filter | Leading `!` discards the rest of the expression; bare `!` panics; hyphens error | ✅ fixed |
 | [H1](#h1) | High | migrate | Migration 3's SQL `TRIM()` ≠ `strings.TrimSpace` → corrupted legacy titles/bodies | ✅ fixed |
 | [H2](#h2) | High | render | O(n²) prefix concatenation in `Tree` — 50k-deep chain: 67.85 s / 7.0 GB | ✅ fixed |
-| [H3](#h3) | High | event | `meta rename` fails with a raw UNIQUE error on its primary use case | open |
+| [H3](#h3) | High | event | `meta rename` fails with a raw UNIQUE error on its primary use case | ✅ fixed |
 | [H4](#h4) | High | cmd | `fngr add` hangs forever when stdin is an open, idle pipe | open |
 | [H5](#h5) | High | cmd | `confirm` treats EOF as consent → non-interactive `meta rename` acts without `-f` | open |
 | [M1](#m1) | Medium | event | Body-tag sync silently deletes operator-added meta | open |
@@ -739,6 +739,33 @@ SQLite errcode.
 `DELETE FROM event_meta WHERE key=? AND value=?` (rows-affected becomes the
 union count) — or pre-delete rows whose event already carries the target
 tuple.
+
+**Resolved** as a merge rather than an error, and by one word rather than the
+two statements suggested above: `UPDATE OR REPLACE`. The conflict clause
+deletes the row standing in the way and completes the update, which *is* the
+merge, and `RowsAffected` counts only the rows updated — replaced-away rows
+are not counted, which is the honest number for "renamed".
+
+The suggested `OR IGNORE` + `DELETE` pair also works, but it needs a guard
+that `OR REPLACE` makes unnecessary: with old and new equal, its delete half
+removes exactly the rows the update half just wrote, so `fngr meta rename
+'#a' '#a'` would silently strip the tag from every event. SQLite checks
+uniqueness against the *other* rows, so under `OR REPLACE` that case is a
+plain rewrite-in-place. `TestUpdateMeta_RenameToItself` stays in the suite to
+catch a future rewrite that reintroduces the two-statement shape.
+
+`TestUpdateMeta_Merges` fails with the original raw UNIQUE error under a plain
+`UPDATE`, and with a leftover `tag=wip` row under a bare `OR IGNORE`, so it
+separates all three spellings. `TestKongDispatch_MetaRenameMerges` drives the
+same consolidation through Kong.
+
+One thing the fix opens that the report did not raise: a merge *destroys*
+rows, and `Renamed N occurrence(s)` reads as if nothing were lost. When the
+target entry already exists, the prompt now says so —
+`(tag=done already on 8; events with both merge into one)` — so the
+confirmation describes what will actually happen. `-f` still skips it, and
+`TestMetaRenameCmd_PromptWarnsAboutMerge` covers the three cases (target
+exists, target is new, rename to itself).
 
 <a name="h4"></a>
 ### H4 — `fngr add` hangs forever when stdin is an open, idle pipe

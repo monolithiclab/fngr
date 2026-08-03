@@ -248,7 +248,7 @@ fngr meta -S tag            # filter: every tag=*
 fngr meta -S tag=wip        # filter: exact key=value
 fngr meta -S '@sarah'       # filter: shorthand for people=sarah
 fngr meta -S '#ops'         # filter: shorthand for tag=ops
-fngr meta rename tag=wip tag=done   # or '#wip' '#done'
+fngr meta rename tag=wip tag=done   # or '#wip' '#done'; merges if the target exists
 fngr meta delete tag=obsolete       # or '#obsolete'
 
 # Show help (alias for --help; takes a command path, including verb trees)

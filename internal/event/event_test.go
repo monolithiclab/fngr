@@ -488,6 +488,95 @@ func TestUpdateMeta_ResyncsFTS(t *testing.T) {
 	}
 }
 
+// TestUpdateMeta_Merges covers the rename that lands on a tuple some event
+// already carries — consolidating two tags, which is the main reason to run
+// the verb at all. The UNIQUE(key, value, event_id) index makes that a
+// collision, and a plain UPDATE would abort the whole transaction, leaving
+// even the non-colliding events untouched. `OR IGNORE` alone is not enough
+// either: it would leave the losing row behind under the old tuple.
+func TestUpdateMeta_Merges(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	// Event 1 carries only the old tag; event 2 carries both, so its
+	// existing #done row is the one standing in the way.
+	if _, err := Add(ctx, database, AddInput{Title: "alpha", Meta: []parse.Meta{
+		{Key: MetaKeyTag, Value: "wip"},
+	}}); err != nil {
+		t.Fatalf("Add alpha: %v", err)
+	}
+	if _, err := Add(ctx, database, AddInput{Title: "beta", Meta: []parse.Meta{
+		{Key: MetaKeyTag, Value: "wip"},
+		{Key: MetaKeyTag, Value: "done"},
+	}}); err != nil {
+		t.Fatalf("Add beta: %v", err)
+	}
+
+	n, err := UpdateMeta(ctx, database, MetaKeyTag, "wip", MetaKeyTag, "done")
+	if err != nil {
+		t.Fatalf("UpdateMeta: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("UpdateMeta = %d, want 2 (both tuples accounted for)", n)
+	}
+
+	// One #done per event, no #wip anywhere, and no duplicate row on event 2.
+	counts, err := ListMeta(ctx, database, ListMetaOpts{Key: MetaKeyTag})
+	if err != nil {
+		t.Fatalf("ListMeta: %v", err)
+	}
+	if len(counts) != 1 {
+		t.Fatalf("ListMeta = %+v, want a single tag=done entry", counts)
+	}
+	if counts[0].Value != "done" || counts[0].Count != 2 {
+		t.Errorf("ListMeta = %s=%s (%d), want tag=done (2)",
+			counts[0].Key, counts[0].Value, counts[0].Count)
+	}
+
+	// The FTS index has to agree for event 2 as well, whose row was replaced
+	// rather than updated. TestUpdateMeta_ResyncsFTS already owns the
+	// straightforward direction, so only #wip is checked here.
+	wip, err := List(ctx, database, ListOpts{Filter: "#wip"})
+	if err != nil {
+		t.Fatalf("List #wip: %v", err)
+	}
+	if len(wip) != 0 {
+		t.Errorf("search #wip = %d events, want 0", len(wip))
+	}
+}
+
+// TestUpdateMeta_RenameToItself pins the degenerate case. `UPDATE OR REPLACE`
+// handles it for free — SQLite checks uniqueness against the other rows, so
+// the row is simply rewritten with the values it already had — but every
+// two-statement formulation of the merge gets it wrong, deleting exactly the
+// rows the update just wrote. The test is here so the next rewrite finds out.
+func TestUpdateMeta_RenameToItself(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	if _, err := Add(ctx, database, AddInput{Title: "alpha", Meta: []parse.Meta{
+		{Key: MetaKeyTag, Value: "ops"},
+	}}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	n, err := UpdateMeta(ctx, database, MetaKeyTag, "ops", MetaKeyTag, "ops")
+	if err != nil {
+		t.Fatalf("UpdateMeta: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("UpdateMeta = %d, want 1", n)
+	}
+
+	got, err := CountMeta(ctx, database, MetaKeyTag, "ops")
+	if err != nil {
+		t.Fatalf("CountMeta: %v", err)
+	}
+	if got != 1 {
+		t.Errorf("CountMeta(tag, ops) = %d, want 1 — the tag was deleted", got)
+	}
+}
+
 func TestDeleteMeta_ResyncsFTS(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)

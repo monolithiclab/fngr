@@ -650,9 +650,12 @@ var wellKnownMetaKeys = map[string]bool{
 }
 
 // UpdateMeta renames every (oldKey, oldValue) tuple across all events to
-// (newKey, newValue) and returns the number of rows updated. Refuses to
-// touch well-known meta keys (currently `author`) so accidental renames
-// don't break renderers that look them up by name.
+// (newKey, newValue) and returns the number of tuples it renamed. A rename
+// onto a tuple that already exists is a merge, not an error: an event
+// carrying both ends up with one, and the row it absorbed is gone (so the
+// count is rows renamed, not rows the database gained). Refuses to touch
+// well-known meta keys (currently `author`) so accidental renames don't
+// break renderers that look them up by name.
 func UpdateMeta(ctx context.Context, db *sql.DB, oldKey, oldValue, newKey, newValue string) (int64, error) {
 	if wellKnownMetaKeys[oldKey] {
 		return 0, fmt.Errorf("cannot rename well-known meta key %q", oldKey)
@@ -671,13 +674,24 @@ func UpdateMeta(ctx context.Context, db *sql.DB, oldKey, oldValue, newKey, newVa
 		return 0, err
 	}
 
+	// OR REPLACE is what makes consolidating two tags (`#wip` → `#done`)
+	// work, and consolidating is the main reason to run this verb. An event
+	// carrying both collides with the UNIQUE(key, value, event_id) index
+	// migration 2 added; a plain UPDATE aborts on the first such row and
+	// rolls the whole rename back, so nothing moves at all. OR REPLACE drops
+	// the row in the way and completes the update, which is exactly the
+	// merge. Renaming a tuple to itself needs no special case: SQLite checks
+	// uniqueness against the *other* rows, so the row is simply rewritten
+	// with the values it already had.
 	res, err := tx.ExecContext(ctx,
-		"UPDATE event_meta SET key = ?, value = ? WHERE key = ? AND value = ?",
+		"UPDATE OR REPLACE event_meta SET key = ?, value = ? WHERE key = ? AND value = ?",
 		newKey, newValue, oldKey, oldValue,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("update meta: %w", err)
 	}
+	// Rows replaced away are not counted here, only rows updated — which is
+	// the honest number for "renamed".
 	n, err := res.RowsAffected()
 	if err != nil {
 		return 0, fmt.Errorf("rows affected: %w", err)

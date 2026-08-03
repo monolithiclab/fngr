@@ -268,6 +268,50 @@ func TestMetaRenameCmd_AcceptsShorthand(t *testing.T) {
 	}
 }
 
+// TestMetaRenameCmd_PromptWarnsAboutMerge covers the prompt's one job in the
+// consolidation case: a rename onto an existing entry destroys rows, and
+// "Renamed N occurrence(s)" alone reads as if nothing was lost.
+func TestMetaRenameCmd_PromptWarnsAboutMerge(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		newTag   string
+		wantWarn bool
+	}{
+		{name: "target exists", newTag: "#done", wantWarn: true},
+		{name: "target is new", newTag: "#shipped", wantWarn: false},
+		// Old and new equal: the counts would say the target "already"
+		// exists, which describes the tuple being renamed, not a collision.
+		{name: "rename to itself", newTag: "#wip", wantWarn: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			s := newTestStore(t)
+			io, out := newTestIO("y\n")
+
+			if _, err := s.Add(context.Background(), event.AddInput{Title: "x", Meta: []parse.Meta{
+				{Key: "tag", Value: "wip"},
+				{Key: "tag", Value: "done"},
+			}}); err != nil {
+				t.Fatalf("Add: %v", err)
+			}
+
+			cmd := &MetaRenameCmd{Old: "#wip", New: tt.newTag}
+			if err := cmd.Run(s, io); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+
+			if got := strings.Contains(out.String(), "merge into one"); got != tt.wantWarn {
+				t.Errorf("prompt warned about merging = %v, want %v:\n%s",
+					got, tt.wantWarn, out.String())
+			}
+		})
+	}
+}
+
 func TestMetaDeleteCmd_NoMatch(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
