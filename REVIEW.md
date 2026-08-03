@@ -31,7 +31,7 @@ under concurrent writes, and the README states the opposite.**
 | [C4](#c4) | **Critical** | parse | `\w` is ASCII-only → `@josé` silently stored as `people=jos` | ✅ fixed |
 | [C5](#c5) | **Critical** | filter | Leading `!` discards the rest of the expression; bare `!` panics; hyphens error | ✅ fixed |
 | [H1](#h1) | High | migrate | Migration 3's SQL `TRIM()` ≠ `strings.TrimSpace` → corrupted legacy titles/bodies | ✅ fixed |
-| [H2](#h2) | High | render | O(n²) prefix concatenation in `Tree` — 50k-deep chain: 67.85 s / 7.0 GB | open |
+| [H2](#h2) | High | render | O(n²) prefix concatenation in `Tree` — 50k-deep chain: 67.85 s / 7.0 GB | ✅ fixed |
 | [H3](#h3) | High | event | `meta rename` fails with a raw UNIQUE error on its primary use case | open |
 | [H4](#h4) | High | cmd | `fngr add` hangs forever when stdin is an open, idle pipe | open |
 | [H5](#h5) | High | cmd | `confirm` treats EOF as consent → non-interactive `meta rename` acts without `-f` | open |
@@ -40,9 +40,9 @@ under concurrent writes, and the README states the opposite.**
 | [M3](#m3) | Medium | event | Nothing enforces a single `author`; display picks whichever sorts first | open |
 | [M4](#m4) | Medium | parse | Email addresses mint bogus `people` tags | ✅ fixed |
 | [M5](#m5) | Medium | timefmt | `"1 month ago"` on the 31st lands in the wrong month; int64 overflow yields a *future* time | ✅ fixed |
-| [M6](#m6) | Medium | render | Newlines and ANSI/OSC escapes in titles forge output rows | open |
+| [M6](#m6) | Medium | render | Newlines and ANSI/OSC escapes in titles forge output rows | ✅ fixed |
 | [M7](#m7) | Medium | event | FTS conflates content with metadata → body text forges tag matches | open |
-| [M8](#m8) | Medium | render | `--limit` on tree format promotes orphaned children to roots, unmarked | open |
+| [M8](#m8) | Medium | render | `--limit` on tree format promotes orphaned children to roots, unmarked | ✅ fixed |
 | [M9](#m9) | Medium | cmd | `fngr meta` output amplification: 1 MB stored → 202 MB printed | open |
 | [M10](#m10) | Medium | parse | `". "` split eats abbreviations — `Dr. Smith` → title `Dr` | open |
 | [M11](#m11) | Medium | db | `fngr add` never creates a project-local `.fngr.db`; first add lands in `~/.fngr.db` | open |
@@ -683,6 +683,27 @@ concatenating two new strings per node. Live memory becomes O(depth); at depth
 is almost entirely allocation and GC). No change at depth ≤100. Recursion
 depth itself is safe: Go grew the stack to 50k frames without incident.
 
+**Resolved.** `renderNode`'s six parameters became a `treeWriter` struct
+holding the shared state once, with `prefix []byte` appended to on the way
+down and truncated on the way back up. Splitting the old `prefix`/`childPrefix`
+pair into one buffer meant moving the connector into the callee's signature:
+`node(id, connector, continuation)` writes prefix + connector + event as one
+line and then recurses. That is also what makes the orphan marker in
+[M8](#m8) fall out for free — it is genuinely just another connector, passed
+by the root loop instead of the child loop, with no second drawing path.
+
+Assembling the line in a reusable `line []byte` rather than writing prefix,
+connector and text separately keeps each node at exactly one `Write`. On
+`io.Discard` that is invisible; on a real file descriptor three syscalls per
+node cost 3.37 ms per 2 000 events against 1.83 ms for one.
+
+Allocation now tracks the bytes written rather than the tree's shape. The
+guard is `TestTree_DeepChainAllocationIsLinear`, which measures `TotalAlloc`
+across an 8× depth increase (500 → 4 000) and fails above 16×; linear predicts
+~8×. Reverting to per-node string concatenation puts it at 45.9×, so the test
+is load-bearing rather than decorative. `BenchmarkTree_DeepChain` covers the
+5 000-deep case for anyone measuring.
+
 <a name="h3"></a>
 ### H3 — `meta rename` fails with a raw UNIQUE error on its primary use case
 
@@ -1010,6 +1031,60 @@ desyncing FTS — worth folding into the same sanitizer.
 **Fix:** strip C0/C1 control bytes other than `\t`/`\n` in `formatEventLine`
 when the destination is a TTY.
 
+**Resolved**, with two deliberate departures from that proposed fix.
+
+*Escape, don't strip.* fngr is a journal. A note that arrived carrying a stray
+byte should still show what it contained, and `\x1b` on screen is honest and
+harmless; dropping the byte silently rewrites the user's own text and makes
+the display disagree with `--format=json`. Control characters are rendered
+`\n`, `\r`, or `\xNN`.
+
+*Not TTY-gated.* The forged-row half of this defect does not need a terminal —
+piping `fngr --format=flat` into a script or a log delivers exactly the same
+fake row. Gating on `IsTTY` would also mean plumbing it from `ioStreams` into
+`render`, which currently takes nothing but an `io.Writer`. Sanitizing
+unconditionally in the human formats is both simpler and more correct.
+
+The new `internal/render/sanitize.go` exposes `SanitizeLine` (escapes
+newlines too — for the contexts where one event is exactly one line) and
+`sanitizeBlock` (keeps them — for the body block of `fngr event N`). Tab
+always survives: it is whitespace, it cannot introduce an escape sequence, and
+bodies legitimately contain it. C1 (U+0080–U+009F) is escaped alongside C0 and
+DEL, because a bare U+009B is a CSI introducer on some terminals. Clean text —
+nearly everything — is returned unchanged, asserted at zero allocations.
+
+*The walk is byte-oriented.* The obvious `for _, r := range s` decodes a raw
+0x9b to `utf8.RuneError`, so the 8-bit CSI — the exact byte the C1 range
+exists to catch — would pass through untouched, and every other malformed byte
+would be silently rewritten to U+FFFD, which is the same silent rewriting this
+fix set out to avoid. That byte is reachable in practice: Kong replaces
+invalid UTF-8 in argv, but a pipe does not, and SQLite stores and returns the
+bytes verbatim. `printf 'piped note \23331m tail' | fngr add` is the
+reproduction, and `TestKongDispatch_RawC1FromStdin` is the guard.
+
+Wiring is in `formatEventLine`, so tree, flat and both streams cannot forget;
+plus `Event`, per line in `Markdown`, and — the fifth human-facing path, found
+only when this fix was reviewed — `cmd/fngr/meta.go`, which lays out its own
+columns and has no pager in front of it. There the escaping has to happen
+*before* the widths are measured, or padding computed from the raw string
+lands in the wrong place on the escaped one.
+
+JSON and CSV stay unsanitized, for two different reasons that the first draft
+of this fix wrongly collapsed into one. JSON escapes control bytes itself and
+losslessly, so a second pass would only break the
+`fngr --format=json | fngr add --format=json` round trip. CSV does **not**
+escape them — `csv.Writer` quotes for structural safety and nothing else, so
+an ESC goes out raw and `less -FRX` will pass it to the terminal. That is
+accepted rather than fixed: CSV is a data export with no import path, and
+escaping there would be lossy, leaving a reader unable to tell a stored
+`\x1b` from an escaped one. Fidelity wins in the machine-readable formats,
+safety in the human-readable ones. `TestJSONCSV_KeepFullFidelity` asserts both
+halves, so the CSV trade stays a decision rather than an oversight.
+
+One correction to the finding above: `fngr delete` prints no stored text at
+all — `delete.go:32,34` interpolate only the event id — so the pager-less
+surface is `fngr event N`, `fngr meta`, and anything piped anywhere.
+
 <a name="m7"></a>
 ### M7 — FTS conflates content with metadata
 
@@ -1056,6 +1131,19 @@ the most obvious flag combine to misrepresent the data.
 absent from the set and render them with a distinguishing prefix (e.g.
 `⋯└─`), or emit a one-line stderr note. Pulling in missing ancestors would
 inflate the result past `--limit`, so marking is the honest cheap fix. ~15 LoC.
+
+**Resolved** by the marker, not the stderr note: the marker sits on the row it
+describes, survives redirection, and needs no second stream. No bookkeeping is
+needed to find the orphans — a root that still carries a non-null `parent_id`
+is one whose parent fell outside the set, since nothing else can put it in the
+root list — so the root loop passes `⋯└─ ` as that node's connector. The connector is four display columns to the tree's three, and
+`orphanBlank` matches at four, so an orphan's own descendants stay aligned
+under it — `TestTree_OrphanSubtreeAligns` covers that, and
+`TestTree_RootAfterOrphanResetsPrefix` covers the buffer truncation between
+roots that the [H2](#h2) rewrite made necessary.
+
+`TestTree_OrphanedChildren` previously asserted the flush-left output; that
+expectation *was* the bug, so it was updated rather than worked around.
 
 <a name="m9"></a>
 ### M9 — `fngr meta` output amplification
@@ -1288,7 +1376,9 @@ Grouped; each is small and independently actionable.
 - `fngr meta` column alignment flips with `-S`: unfiltered pads the key
   (`author  =nico`), filtered doesn't (`tag=bugfix`). Same renderer, two looks.
 - `render.Tree` on a limit-orphaned or cycle-broken set prints nothing at exit
-  0 — see [M2](#m2) and [M8](#m8) for the underlying causes.
+  0 — see [M2](#m2) and [M8](#m8) for the underlying causes. (The
+  limit-orphaned half is fixed: those events now render, marked. A cycle still
+  blanks the output — that is [M2](#m2).)
 
 **Errors and exit codes**
 
@@ -1795,6 +1885,8 @@ below the table). Each entry states why so we don't re-propose it.
   land here. The tree prefix refactor should come with a deep-chain benchmark
   (there are currently **zero** `Benchmark*` functions in the repo, so
   `make bench` is a no-op — worth fixing while touching this).
+  *Done: `BenchmarkTree_DeepChain` is the repo's first benchmark, so `make
+  bench` now does something. M6 grew its own file, `internal/render/sanitize.go`.*
 - **`cmd/fngr/dispatch_test.go`** — every new verb or flag needs an entry.
   `-e` on `event body`/`event text` ([recommendation 9](#feature-recommendations))
   would need the per-case `launchEditor` swap pattern currently scoped to
