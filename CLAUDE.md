@@ -33,8 +33,8 @@ make ci             # codefix + format + lint + test
   (Kong v1.x cannot mix positional args with branching subcommands on the same struct, so
   every list-ish command uses `-S`). `add` accepts variadic positional `Args` (joined with
   spaces); body source resolved by `cmd/fngr/body.go::resolveBody` via the
-  (args, `-e`, stdin-carries-data) dispatch table; `-e/--edit` forces the editor; bare `fngr add`
-  in a TTY auto-launches `$VISUAL`/`$EDITOR`. In text mode, when `--time` is absent, a leading
+  (args, `-e`, TTY) precedence table, behind a `-e`-needs-a-terminal veto that outranks it; bare
+  `fngr add` in a TTY auto-launches `$VISUAL`/`$EDITOR`. In text mode, when `--time` is absent, a leading
   time/date token in the title delimited by `": "` (colon+space, so times like `9:30` survive)
   is parsed via `timefmt.SplitTimePrefix` and stripped — `fngr add "9:30: had coffee"` stores
   title `had coffee` at 09:30 today; `--time` overrides and leaves the title verbatim. With
@@ -58,18 +58,27 @@ make ci             # codefix + format + lint + test
   `meta rename` prompt defaults to yes — an unattended run that forgot `-f` used to rewrite
   metadata across every event and report success. Both halves of the condition matter:
   `ReadString` also returns `io.EOF` for a final line with no trailing newline, so a bare `y`
-  must still confirm.
+  must still confirm. The read itself blocks by design — unlike `resolveBody`, a prompt reading
+  stdin *is* the point, so `echo y | fngr delete 1` keeps working and `sleep 30 | fngr meta
+  delete '#wip'` waits (REVIEW H6, won't fix; `-f` is the unattended form).
 - `cmd/fngr/body.go` — Body-source dispatch for `fngr add`. `resolveBody` returns the body string
-  from one of {joined args, stdin, editor}, checked in that order: args win, then `-e`, then a
-  TTY opens the editor, and stdin is read only when nothing else can supply a body. Stdin is
+  from one of {joined args, stdin, editor}: args win, then `-e`, then a TTY opens the editor, and
+  stdin is read only when nothing else can supply a body — all of it downstream of the
+  `errEditNeedsTTY` veto below, which can fail a run that plain args would have satisfied. Stdin is
   *never* touched otherwise — reading it blocks until EOF, and an open-but-idle pipe delivers
   neither a byte nor EOF, so the old up-front `bufio` peek (which existed only to report
   args+stdin and `-e`+stdin as conflicts) could hang `fngr add "note"` forever. Those two
   conflicts are gone with it; extra stdin is silently unread. Blocking is still correct in the
   stdin-only branch, where the body is exactly what we are waiting for; an empty `/dev/null`
   hits EOF at once and `readStdin` reports `event title cannot be empty`.
+  Both were reinstated in one broader, capability- rather than content-based check that costs no
+  read: `-e` with `!IsTTY` returns `errEditNeedsTTY` (`--edit needs a terminal`), which also
+  catches the `fngr add -e </dev/null` case the old checks never did. Launching anyway handed
+  `$EDITOR` a non-terminal stdin — vim bails, a non-interactive `$EDITOR` saves nothing, and
+  `fngr add` then reported a cancel at exit 0 while silently dropping the piped body.
   `launchEditor` is a `var` for test stubbing; `realLaunchEditor` execs `$VISUAL`/`$EDITOR` on a
-  temp file; `errCancel` signals empty-save (handled as exit-0 by `AddCmd.Run`). `readStdin`
+  temp file and inherits `os.Stdin`, so the veto must stay upstream of it; `errCancel` signals
+  empty-save (handled as exit-0 by `AddCmd.Run`). `readStdin`
   caps reads at `maxStdinBytes` (16 MiB) via `io.LimitReader` so a runaway pipe can't OOM.
 - `cmd/fngr/add_json.go` — `--format=json` import path. `jsonAddInput` is the wire shape
   `{id?, title, body?, parent_id?, created_at?, meta?: [[k,v],...]}`; `parseJSONAddInput` dispatches on the

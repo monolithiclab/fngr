@@ -114,12 +114,18 @@ cosign verify ghcr.io/monolithiclab/fngr:0.0.1 \
 The container is for scripted, non-interactive use. The following
 don't work inside the image:
 
-- `fngr add -e` (editor mode) — needs `$EDITOR` plus a binary in the
-  image; neither exists in distroless-static.
+- `fngr add -e` (editor mode) — without `docker run -t` it fails at
+  `--edit needs a terminal` before `$EDITOR` is ever consulted, and with
+  `-t` it still needs an editor binary in the image, which
+  distroless-static does not have.
 - The pager on `fngr list` — needs `less` + a TTY; pass `--no-pager`
   or pipe to a host-side pager.
 - Confirmation prompts on `delete` / `meta rename` / `meta delete` —
   no TTY and nothing to read on stdin, so they error out. Pass `-f`.
+  With `docker run -i` (stdin attached but nothing written) the prompt
+  waits for an answer instead, which is what a prompt is for — but it
+  will wait indefinitely if nothing ever arrives. `-f` is the reliable
+  form in any unattended run.
 
 ## Quick start
 
@@ -398,9 +404,26 @@ redirected from `/dev/null`. Add `-f` to state the intent explicitly.
 defaults to *yes*, so an unattended run without `-f` rewrote metadata
 across every event and reported success.)
 
+**A confirmation prompt hangs instead of erroring** — stdin is open but
+nobody is writing to it (`sleep 30 | fngr meta delete '#wip'`, `docker
+run -i` with no input, an inherited pipe in a CI runner). The prompt is
+waiting for the answer, which is the one place in fngr where blocking on
+stdin is intended: `echo y | fngr delete 1` and `yes | fngr …` are
+supported. Only a *closed* stdin can be told apart from a slow one, so
+this wait is by design. Pass `-f` in any unattended run, or redirect from
+`/dev/null` to get the error above.
+
 **`set $EDITOR or $VISUAL` from `fngr add -e`** — the editor mode
 needs an editor binary on `PATH`. `export EDITOR=vim` (or whichever)
 in your shell rc.
+
+**`--edit needs a terminal; stdin is not a TTY`** — `-e` opens an
+interactive editor, and there is no terminal for it to open in: you are
+in a script, a pipe, CI, or `docker run` without `-t`. Pass the body as
+arguments or on stdin instead. (Before v0.0.3 the editor launched
+anyway; with a non-interactive `$EDITOR` that saved nothing, so the run
+printed `cancelled (empty body)` at exit 0 and discarded whatever was
+piped in.)
 
 **`invalid filter syntax: ... (see --help for the -S grammar)`** —
 your `-S` expression is malformed, and the message names the rune

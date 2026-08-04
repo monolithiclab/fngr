@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -270,23 +271,21 @@ func TestAddCmd_EmptyArgRejected(t *testing.T) {
 	}
 }
 
-// -e beats stdin for the same reason args do: the editor is an explicit
-// request, and detecting the clash would mean reading a pipe that may block.
-func TestAddCmd_EditFlagWinsOverStdin(t *testing.T) {
+// TestAddCmd_EditFlagRequiresTerminal is the H7 regression guard. -e used to
+// launch the editor regardless, so `echo body | EDITOR=true fngr add -e`
+// saved nothing, reported `cancelled (empty body)` at exit 0, and dropped the
+// piped text on the floor.
+func TestAddCmd_EditFlagRequiresTerminal(t *testing.T) {
 	s := newTestStore(t)
-	io, _, _ := newTestIOFull("piped", false)
+	io, _, _ := newTestIOFull("piped body that matters", false)
 
-	stubEditor(t, func(string) (string, error) { return "from editor", nil })
+	forbidEditor(t)
 
 	cmd := &AddCmd{Edit: true, Author: "alice"}
-	if err := cmd.Run(s, io); err != nil {
-		t.Fatalf("Run: %v", err)
+	if err := cmd.Run(s, io); !errors.Is(err, errEditNeedsTTY) {
+		t.Fatalf("err = %v, want errEditNeedsTTY", err)
 	}
-
-	ev, _ := s.Get(context.Background(), 1)
-	if ev.Title != "from editor" {
-		t.Errorf("title = %q, want %q", ev.Title, "from editor")
-	}
+	assertNoEvents(t, s)
 }
 
 func TestAddCmd_FormatJSON_Single(t *testing.T) {

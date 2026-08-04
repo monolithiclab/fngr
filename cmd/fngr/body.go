@@ -13,6 +13,11 @@ import (
 // recognises it and converts to (nil error + status 0).
 var errCancel = errors.New("cancelled")
 
+// errEditNeedsTTY rejects -e when there is no terminal for the editor to run
+// in. A sentinel rather than an inline fmt.Errorf so tests match it with
+// errors.Is instead of by substring, same as errNoAnswer.
+var errEditNeedsTTY = errors.New("--edit needs a terminal; stdin is not a TTY")
+
 // launchEditor is overridable so tests can stub the editor exec without
 // shelling out. Production wires it to realLaunchEditor.
 var launchEditor = realLaunchEditor
@@ -23,6 +28,11 @@ var launchEditor = realLaunchEditor
 // editor cancel.
 func resolveBody(args []string, useEditor bool, io ioStreams) (string, error) {
 	switch {
+	case useEditor && !io.IsTTY:
+		// A capability check, not a content one: IsTTY is already known, so
+		// asking it costs no read. See REVIEW.md H7 for what launching an
+		// editor without a terminal did instead.
+		return "", errEditNeedsTTY
 	case len(args) > 0 && useEditor:
 		return launchEditor(strings.Join(args, " "))
 	case len(args) > 0:
@@ -31,8 +41,10 @@ func resolveBody(args []string, useEditor bool, io ioStreams) (string, error) {
 			return "", fmt.Errorf("event title cannot be empty")
 		}
 		return body, nil
-	case useEditor, io.IsTTY:
-		// -e, or bare interactive `fngr add`: editor on an empty buffer.
+	case io.IsTTY:
+		// Bare interactive `fngr add`, or -e with no args: the guard above
+		// has already established that -e implies a TTY, so this one case
+		// covers both. Editor on an empty buffer either way.
 		return launchEditor("")
 	default:
 		// Nothing else can supply a body, so stdin is it. Reading it blocks
@@ -69,6 +81,8 @@ func readStdin(in io.Reader) (string, error) {
 // realLaunchEditor opens the user's $VISUAL/$EDITOR on a temp file seeded
 // with `initial`, waits for it to exit, and returns the trimmed contents.
 // Empty save returns errCancel so callers can treat it as "user cancelled".
+// It inherits os.Stdin, so callers must have established that a terminal
+// exists — resolveBody's first branch is the only such caller.
 func realLaunchEditor(initial string) (string, error) {
 	editor := os.Getenv("VISUAL")
 	if editor == "" {

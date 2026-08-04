@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"path/filepath"
 	"strings"
@@ -35,6 +36,30 @@ func stubEditor(t *testing.T, fn func(initial string) (string, error)) {
 	orig := launchEditor
 	launchEditor = fn
 	t.Cleanup(func() { launchEditor = orig })
+}
+
+// forbidEditor fails the test if the editor is launched. It is the editor-side
+// mirror of body_test.go's forbiddenReader: for cases that must be rejected
+// before any editor runs, the launch itself is the defect.
+func forbidEditor(t *testing.T) {
+	t.Helper()
+	stubEditor(t, func(string) (string, error) {
+		t.Error("editor launched although there is no terminal to run it in")
+		return "", nil
+	})
+}
+
+// assertNoEvents fails the test unless the store is empty. A rejected `add`
+// must not leave a partial write behind.
+func assertNoEvents(t *testing.T, s *event.Store) {
+	t.Helper()
+	events, err := s.List(context.Background(), event.ListOpts{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(events) != 0 {
+		t.Errorf("created %d events, want 0", len(events))
+	}
 }
 
 func newTestIO(stdin string) (ioStreams, *bytes.Buffer) {
