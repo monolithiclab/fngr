@@ -85,7 +85,9 @@ func (r forbiddenReader) Read(_ []byte) (int, error) {
 // guard. resolveBody used to peek stdin up front to detect args+stdin and
 // -e+stdin conflicts, so every non-TTY invocation paid a read — and an idle
 // pipe hung `fngr add "note"` forever with no output and no timeout. The peek
-// is gone; none of the cases below may go near stdin.
+// is gone; none of the cases below may go near stdin, including the one that
+// errors (H7 rejects -e without a terminal, and it must do so without
+// reading, or it reintroduces the very hang H4 removed).
 func TestResolveBody_NeverTouchesStdinWhenBodyIsDecided(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -93,11 +95,14 @@ func TestResolveBody_NeverTouchesStdinWhenBodyIsDecided(t *testing.T) {
 		useEditor bool
 		isTTY     bool
 		want      string
+		wantErr   string
 	}{
 		{name: "args", args: []string{"note"}, want: "note"},
-		{name: "args-and-editor", args: []string{"note"}, useEditor: true, want: "note::edited"},
-		{name: "editor", useEditor: true, want: "::edited"},
+		{name: "args-and-editor", args: []string{"note"}, useEditor: true, isTTY: true, want: "note::edited"},
+		{name: "editor", useEditor: true, isTTY: true, want: "::edited"},
 		{name: "tty", isTTY: true, want: "::edited"},
+		{name: "editor-without-terminal", useEditor: true, wantErr: errEditNeedsTTY.Error()},
+		{name: "args-editor-without-terminal", args: []string{"note"}, useEditor: true, wantErr: errEditNeedsTTY.Error()},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -106,6 +111,12 @@ func TestResolveBody_NeverTouchesStdinWhenBodyIsDecided(t *testing.T) {
 
 			io := ioStreams{In: forbiddenReader{t: t}, IsTTY: tc.isTTY}
 			got, err := resolveBody(tc.args, tc.useEditor, io)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err = %v, want substring %q", err, tc.wantErr)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("resolveBody: %v", err)
 			}
@@ -217,25 +228,23 @@ func TestResolveBody(t *testing.T) {
 		wantBody string
 		wantErr  string // substring; "" means no error
 	}{
-		// Row 1: args alone, TTY.
+		// -e without a terminal: rejected whatever else is on offer. Args
+		// present and stdin holding data both lose to it, so this covers the
+		// spec's "any / present / non-TTY" row on its widest input.
+		{name: "args-editor-no-terminal", args: []string{"x"}, useEditor: true, isTTY: false, stdin: "y", wantErr: errEditNeedsTTY.Error()},
+		// Args alone, TTY.
 		{name: "args-only-tty", args: []string{"foo", "bar"}, isTTY: true, wantBody: "foo bar"},
-		// Row 2: args + piped stdin. Args win and stdin is left unread —
-		// noticing the conflict would cost a blocking peek on every run.
+		// Args + piped stdin. Args win and stdin is left unread — noticing the
+		// conflict would cost a blocking peek on every run.
 		{name: "args-and-stdin-args-win", args: []string{"x"}, isTTY: false, stdin: "y", wantBody: "x"},
-		// Row 3: args + editor, TTY = pre-fill.
+		// Args + editor, TTY = pre-fill.
 		{name: "args-and-editor", args: []string{"foo", "bar"}, useEditor: true, isTTY: true, stubBody: "foo bar baz", wantInit: "foo bar", wantBody: "foo bar baz"},
-		// Row 4: args + editor + piped = pre-filled editor, stdin unread.
-		{name: "args-editor-stdin", args: []string{"x"}, useEditor: true, isTTY: false, stdin: "y", stubBody: "x edited", wantInit: "x", wantBody: "x edited"},
-		// Row 5: bare add in TTY = editor opened empty.
-		{name: "bare-tty-launches-editor", isTTY: true, stubBody: "from editor", wantInit: "", wantBody: "from editor"},
-		// Row 6: bare add piped = stdin.
-		{name: "bare-piped-reads-stdin", isTTY: false, stdin: "piped body", wantBody: "piped body"},
-		// Row 7: -e in TTY = editor empty.
+		// -e in TTY = editor opened empty.
 		{name: "edit-flag-tty", useEditor: true, isTTY: true, stubBody: "from editor", wantInit: "", wantBody: "from editor"},
-		// Row 8: -e piped = editor, stdin unread. Empty piped stdin takes the
-		// same branch — -e no longer inspects stdin at all, so there is
-		// nothing left to distinguish the two.
-		{name: "edit-flag-piped", useEditor: true, isTTY: false, stdin: "y", stubBody: "from editor", wantInit: "", wantBody: "from editor"},
+		// Bare add in TTY = editor opened empty.
+		{name: "bare-tty-launches-editor", isTTY: true, stubBody: "from editor", wantInit: "", wantBody: "from editor"},
+		// Bare add piped = stdin.
+		{name: "bare-piped-reads-stdin", isTTY: false, stdin: "piped body", wantBody: "piped body"},
 		// Editor cancel (empty save) propagates errCancel.
 		{name: "editor-cancel", useEditor: true, isTTY: true, stubErr: errCancel, wantInit: "", wantErr: "cancelled"},
 		{name: "empty-arg-rejected", args: []string{""}, isTTY: true, wantErr: "event title cannot be empty"},

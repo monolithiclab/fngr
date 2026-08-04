@@ -173,6 +173,29 @@ func TestKongDispatch_PromptsRefuseEmptyStdin(t *testing.T) {
 	}
 }
 
+// TestKongDispatch_EditFlagRequiresTerminal is the H7 regression guard at the
+// dispatch layer: `fngr add -e` piped into from a script must fail loudly
+// instead of launching an editor with nowhere to run.
+func TestKongDispatch_EditFlagRequiresTerminal(t *testing.T) {
+	// NOTE: no t.Parallel() — stubEditor swaps package-level state.
+	run := newDispatcherIO(t, "piped body that matters", false)
+
+	forbidEditor(t)
+
+	if _, err := run([]string{"add", "-e"}); !errors.Is(err, errEditNeedsTTY) {
+		t.Fatalf("err = %v, want errEditNeedsTTY", err)
+	}
+
+	// Nothing was written.
+	out, listErr := run([]string{"list", "--format", "flat"})
+	if listErr != nil {
+		t.Fatalf("list: %v", listErr)
+	}
+	if strings.TrimSpace(out) != "" {
+		t.Errorf("expected no events, got:\n%s", out)
+	}
+}
+
 // TestKongDispatch_AddTimePrefix covers both outcomes of the title time-prefix
 // rule through the full Kong Parse + Run path, not just direct cmd.Run: a
 // usable prefix is parsed and stripped, an unstorable one is left verbatim.

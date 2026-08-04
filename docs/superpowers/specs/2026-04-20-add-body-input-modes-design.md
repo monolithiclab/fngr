@@ -20,12 +20,13 @@ because Kong sees a single positional arg either way.
 - `echo body | fngr add` reads the body from stdin when stdin is not a TTY.
 - `fngr add` (no args, no flags, interactive TTY) launches `$VISUAL` or
   `$EDITOR` on a temp file; saved contents become the body.
-- `fngr add -e` (or `--edit`) launches the editor explicitly. Args present
-  with `-e` pre-fill the editor with the joined args.
+- `fngr add -e` (or `--edit`) launches the editor explicitly, and requires a
+  terminal to run it in. Args present with `-e` pre-fill the editor with the
+  joined args.
 - Editor save-empty (or quit-without-save) cancels: no event added, exit
   status 0, single-line `cancelled (empty body)` notice on stderr.
-- Conflict cases that combine a body source with stdin error loudly rather
-  than silently dropping the pipe.
+- `-e` without a terminal errors loudly rather than silently dropping the
+  body the user supplied.
 
 ## Non-goals
 
@@ -62,24 +63,38 @@ because Kong sees a single positional arg either way.
 > it. Precedence replaces conflict detection, and stdin is not a
 > question anyone asks up front.
 
-Resolution is strict precedence: **args > `-e` > TTY > stdin**. The body
-source is always exactly one of {args, stdin, editor}, and the first
-branch that can supply one wins.
+One capability pre-check runs first: `-e` without a terminal is refused
+outright, before any body source is considered. Past that, resolution is
+strict precedence — **args > `-e` > TTY > stdin**. The body source is
+always exactly one of {args, stdin, editor}, and the first branch that can
+supply one wins.
 
 | Args | `-e` | Stdin | Resolution |
 |------|------|-------|------------|
+| any | present | non-TTY | **Error**: `--edit needs a terminal; stdin is not a TTY` |
 | present | absent | any | Args joined with single space |
-| present | present | any | Editor pre-filled with joined args |
-| absent | present | any | Editor opened empty |
+| present | present | TTY | Editor pre-filled with joined args |
+| absent | present | TTY | Editor opened empty |
 | absent | absent | TTY | Editor opened empty |
 | absent | absent | non-TTY | Read stdin to EOF |
+
+The first row is the H4 pair reinstated in a broader, capability-based
+form (review issue H7) — it also catches `fngr add -e </dev/null`, which
+the content-based checks never did. `-e` asks for an interactive editor
+and `IsTTY` answers whether one can run: for free, and without reading a
+byte. Launching anyway hands `$EDITOR` a non-terminal stdin — vim bails
+out, and a non-interactive `$EDITOR` saves nothing, so `fngr add`
+reported a cancel at exit 0 and silently dropped whatever was piped in.
+It is a veto rather than a precedence rule: `fngr add "note" -e
+</dev/null` fails even though plain `fngr add "note"` would have
+succeeded, because the user asked for an editor and there is none.
 
 Stdin is read in the last row only, where it is the sole possible body
 source and blocking to wait for the body is the whole point. Anywhere
 else it is left untouched — deliberately, since noticing that data is
 sitting there costs a read that may never return. Extra stdin alongside
-args or `-e` is therefore silently unread; that lost feedback is the
-accepted price of never hanging.
+args is therefore silently unread; that lost feedback is the accepted
+price of never hanging.
 
 An empty stdin needs no separate check: `/dev/null` hits EOF at once and
 `readStdin` reports `event title cannot be empty` after trimming. Empty
@@ -89,15 +104,19 @@ empty pipe has no equivalent).
 ### `cmd/fngr/body.go` — new file
 
 The dispatch logic lives in its own file alongside `add.go`. Branch
-order *is* the precedence rule above, so it is load-bearing: the two
-`len(args) > 0` cases must precede the `useEditor`/`IsTTY` case, which
-must precede the `default` that reads stdin.
+order *is* the resolution rule above, so it is load-bearing: the
+capability guard must come first (otherwise `fngr add "note" -e` falls
+into the args branch and the `-e` request is silently ignored), the two
+`len(args) > 0` cases next, then `io.IsTTY`, then the `default` that
+reads stdin.
 
 ```go
 // resolveBody applies the dispatch table above. It owns no I/O state of
 // its own — every dependency arrives via the ioStreams arg.
 func resolveBody(args []string, useEditor bool, io ioStreams) (string, error) {
     switch {
+    case useEditor && !io.IsTTY:
+        return "", errEditNeedsTTY
     case len(args) > 0 && useEditor:
         return launchEditor(strings.Join(args, " "))
     case len(args) > 0:
@@ -106,7 +125,7 @@ func resolveBody(args []string, useEditor bool, io ioStreams) (string, error) {
             return "", fmt.Errorf("event title cannot be empty")
         }
         return body, nil
-    case useEditor, io.IsTTY:
+    case io.IsTTY:
         return launchEditor("")
     default:
         return readStdin(io.In)
@@ -265,8 +284,8 @@ interactive stdin without touching real fds. Existing call sites pass
 
 ### `cmd/fngr/body_test.go` — new
 
-Table-driven coverage of all eight `resolveBody` rows plus the two
-conflict errors:
+Table-driven coverage of all six `resolveBody` rows, plus the empty-body
+and editor-cancel rejections:
 
 ```go
 cases := []struct{
@@ -313,12 +332,16 @@ Happy-path checks at the `AddCmd.Run` level for each body source:
   `"cancelled (empty body)"`, `Run` returns `nil`.
 - `args-win-over-stdin`: `Args: []string{"x"}`, `IsTTY: false`,
   stdin `"y"` → body is `"x"`; stdin is never read.
-- `editor-wins-over-stdin`: `Edit: true`, `IsTTY: false`, stdin `"y"`
-  → the editor opens; stdin is never read.
-- `stdin-untouched-when-body-decided`: each of {args, args+`-e`, `-e`,
-  TTY} against a reader that fails the test if anything reads it. Guards
-  the hang itself, not just the wording — a real idle pipe would block
-  here forever, so any read at all is the defect.
+- `editor-requires-terminal`: `Edit: true`, `IsTTY: false`, stdin `"y"`
+  → error contains `"--edit needs a terminal"`; the editor is never
+  launched, stdin is never read, and no event is written.
+- `stdin-untouched-when-body-decided`: each of {args, args+`-e` in a TTY,
+  `-e` in a TTY, TTY, `-e` without a terminal, args+`-e` without a
+  terminal} against a reader that fails the test if anything reads it.
+  Guards the hang itself, not just the wording — a real idle pipe would
+  block here forever, so any read at all is the defect. The last two rows
+  make it the H7 guard as well: the refusal must land before anything
+  consults stdin.
 
 Existing test sites that construct `&AddCmd{Text: "..."}` migrate to
 `&AddCmd{Args: []string{"..."}}`. Per earlier grep this is ~6 sites.

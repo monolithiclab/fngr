@@ -35,8 +35,8 @@ under concurrent writes, and the README states the opposite.**
 | [H3](#h3) | High | event | `meta rename` fails with a raw UNIQUE error on its primary use case | ✅ fixed |
 | [H4](#h4) | High | cmd | `fngr add` hangs forever when stdin is an open, idle pipe | ✅ fixed |
 | [H5](#h5) | High | cmd | `confirm` treats EOF as consent → non-interactive `meta rename` acts without `-f` | ✅ fixed |
-| [H6](#h6) | High | cmd | `confirm` still blocks forever on an idle pipe — H4's hazard, surviving in the other stdin reader | open |
-| [H7](#h7) | High | cmd | `-e` under a non-TTY launches an editor that cannot run, discarding the piped body | open |
+| [H6](#h6) | High | cmd | `confirm` still blocks forever on an idle pipe — H4's hazard, surviving in the other stdin reader | ⛔ won't fix |
+| [H7](#h7) | High | cmd | `-e` under a non-TTY launches an editor that cannot run, discarding the piped body | ✅ fixed |
 | [M1](#m1) | Medium | event | Body-tag sync silently deletes operator-added meta | open |
 | [M2](#m2) | Medium | event | Parent cycle → two non-terminating loops + a silent total data blackout | open |
 | [M3](#m3) | Medium | event | Nothing enforces a single `author`; display picks whichever sorts first | open |
@@ -918,8 +918,21 @@ supported, and pinned by `TestConfirm`. Decide explicitly whether piped
 answers stay supported; `-f` already covers the scripted case, which argues
 they need not.
 
-Note this is the same capability-vs-content generalisation as [H7](#h7) — one
-rule settles both.
+Note this is the same capability-vs-content generalisation as [H7](#h7) — but
+only [H7](#h7) gets it, because only there is the capability check free of a
+behaviour loss.
+
+**Resolution: won't fix.** Piped answers stay supported. `echo y | fngr
+delete 1` and `yes | fngr …` are idiomatic and in use; breaking them to
+foreclose a hang that needs a pipe nobody ever writes to is the worse trade.
+A prompt waiting for an answer is a prompt doing its job — unlike H4, where
+`fngr add "note"` had no reason to consult stdin at all. That asymmetry is
+the whole distinction: H4 read stdin to answer a question it did not need to
+ask; `confirm` reads it because the answer is the point.
+
+`-f` remains the reliable form for any unattended run, and both the Docker
+limitations list and the troubleshooting entry in the README now say the
+prompt will wait indefinitely rather than implying it always errors out.
 
 <a name="h7"></a>
 ### H7 — `-e` under a non-TTY launches an editor that cannot run
@@ -950,6 +963,31 @@ to an error.
 
 Severity is High for the silent-data-loss shape, but the blast radius is
 narrow: it needs `-e` *and* a pipe *and* a non-interactive `$EDITOR`.
+
+**Resolution: fixed.** `resolveBody` now leads with
+`useEditor && !io.IsTTY` → `--edit needs a terminal; stdin is not a TTY`.
+It is the first branch precisely so that `fngr add foo -e </dev/null` is
+caught too — `-e` cannot run anywhere without a terminal, args or no args.
+The check reads nothing, so it does not walk back [H4](#h4); the guard test
+proves that by running the error path against a reader that fails on any
+read.
+
+```
+$ echo "piped body that matters" | VISUAL= EDITOR=true fngr add -e
+fngr: error: --edit needs a terminal; stdin is not a TTY
+rc=1
+```
+
+With the guard in place `-e` implies a TTY, so the old
+`case useEditor, io.IsTTY` collapses to `case io.IsTTY`.
+
+Four test sites: two rows in `TestResolveBody_NeverTouchesStdinWhenBodyIsDecided`
+(with and without args, both against `forbiddenReader`, so the refusal is
+proven to land before anything consults stdin), the `args-editor-no-terminal`
+row in `TestResolveBody`, `TestAddCmd_EditFlagRequiresTerminal` (asserts no
+event was written and the stub editor was never called), and
+`TestKongDispatch_EditFlagRequiresTerminal` through Kong. The spec's
+resolution table gains the error as its first row.
 
 ---
 

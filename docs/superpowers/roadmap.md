@@ -80,6 +80,15 @@ Fixes for real friction surfaced by using the tool, not new features.
   TTY > stdin — and reads stdin only when nothing else can supply a
   body. `echo x | fngr add "y"` no longer errors: the args win and the
   pipe goes unread, because noticing it costs the blocking read.
+- **`-e` requires a terminal** — `fngr add -e` launched the editor even
+  with no terminal to launch it in, handing `$EDITOR` a non-terminal
+  stdin. A non-interactive `$EDITOR` saved nothing, so the run printed
+  `cancelled (empty body)` at exit 0 and discarded the piped body. It now
+  errors with `--edit needs a terminal`. It is the pre-H4 conflict pair
+  reinstated in one broader form, keyed on *capability* (`IsTTY`, already
+  known) rather than *content* (a read that may never return) — so it
+  also catches `fngr add -e </dev/null`, which the old checks missed.
+  Review issue H7.
 - **Prompts refuse to assume a default when nobody is there** — `confirm`
   read `("", io.EOF)` from a closed or empty stdin and treated it as
   "pressed enter", taking the prompt's default. `meta rename` defaults to
