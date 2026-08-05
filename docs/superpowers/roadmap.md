@@ -119,6 +119,20 @@ Fixes for real friction surfaced by using the tool, not new features.
   `protectedMetaKeys`. No migration repairs pre-existing duplicates on
   purpose — nothing on disk records which row was the auto-injected one.
   Review issue M3.
+- **A corrupt parent chain terminates instead of hanging** — fngr cannot
+  write a parent cycle, but it can be handed one: `db.ResolvePath` adopts
+  `.fngr.db` from the current directory, so `cd` into an extracted
+  tarball or a cloned repo and every invocation reads that database.
+  Given `1 → 2 → 1`, bare `fngr` printed nothing at exit 0 (a total data
+  blackout reported as success), `fngr event 1 -t` spun forever with no
+  output, and `fngr event attach 3 1` did the same inside an open
+  transaction. All three terminate now, behind an `ErrCorruptTree`
+  sentinel kept distinct from `ErrCycle` — refusing a change and
+  reporting an already-broken file are different messages. `GetSubtree`
+  uses `UNION` rather than a depth cap, so there is no bound to get
+  wrong and no legitimate tree is truncated however deep it is; the
+  error tells the user to `fngr event detach <id>`, which walks nothing
+  and so repairs the file the traversal could not read. Review issue M2.
 
 ## Publishing pipeline polish
 

@@ -861,6 +861,101 @@ func TestGetSubtree_LeafNode(t *testing.T) {
 	}
 }
 
+// TestGetSubtree_CorruptChainTerminates is the M2 CTE fix. `fngr event 1 -t`
+// on a cyclic chain used to spin with no output and no error until killed.
+// Terminating is only half of it — the query must also refuse rather than
+// present a deduped loop as though it were a subtree.
+func TestGetSubtree_CorruptChainTerminates(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		build func(t *testing.T, database *sql.DB) int64
+	}{
+		{
+			name: "two events pointing at each other",
+			build: func(t *testing.T, database *sql.DB) int64 {
+				a, _ := Add(ctx, database, AddInput{Title: "a"})
+				b, _ := Add(ctx, database, AddInput{Title: "b", ParentID: &a})
+				forgeParent(t, database, a, b)
+				return a
+			},
+		},
+		{
+			name: "self-parent",
+			build: func(t *testing.T, database *sql.DB) int64 {
+				a, _ := Add(ctx, database, AddInput{Title: "a"})
+				forgeParent(t, database, a, a)
+				return a
+			},
+		},
+		{
+			// A well-formed subtree hangs off the cycle, so the recursion
+			// fans out as well as looping and the result is more than just
+			// the loop. Only a cycle member can be the root of a run that
+			// loops: every member's parent is another member, so nothing
+			// outside the cycle can descend into one.
+			name: "cycle with a clean subtree hanging off it",
+			build: func(t *testing.T, database *sql.DB) int64 {
+				a, _ := Add(ctx, database, AddInput{Title: "a"})
+				b, _ := Add(ctx, database, AddInput{Title: "b", ParentID: &a})
+				bystander, _ := Add(ctx, database, AddInput{Title: "bystander", ParentID: &a})
+				if _, err := Add(ctx, database, AddInput{Title: "leaf", ParentID: &bystander}); err != nil {
+					t.Fatalf("Add leaf: %v", err)
+				}
+				forgeParent(t, database, a, b)
+				return a
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			database := testDB(t)
+			root := tt.build(t, database)
+
+			_, err := GetSubtree(boundedCtx(t), database, root)
+			if !errors.Is(err, ErrCorruptTree) {
+				t.Errorf("err = %v, want ErrCorruptTree", err)
+			}
+		})
+	}
+}
+
+// TestGetSubtree_DeepChainIsNotTruncated pins the other half: nothing legitimate
+// may be lost to the cycle defence. The whole table is one chain — the deepest
+// recursion the row count allows — and every event must still come back. A
+// defence that quietly dropped the last generation would be the blackout M2 is
+// about, moved one level down.
+func TestGetSubtree_DeepChainIsNotTruncated(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	const depth = 40
+	var root, parent int64
+	for i := range depth {
+		in := AddInput{Title: fmt.Sprintf("e%d", i)}
+		if i > 0 {
+			in.ParentID = &parent
+		}
+		id, err := Add(ctx, database, in)
+		if err != nil {
+			t.Fatalf("Add %d: %v", i, err)
+		}
+		if i == 0 {
+			root = id
+		}
+		parent = id
+	}
+
+	events, err := GetSubtree(ctx, database, root)
+	if err != nil {
+		t.Fatalf("GetSubtree: %v", err)
+	}
+	if len(events) != depth {
+		t.Errorf("len(events) = %d, want %d", len(events), depth)
+	}
+}
+
 func TestGetSubtree_NotFound(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
@@ -1147,6 +1242,67 @@ func TestReparent_RejectsAncestryCycle(t *testing.T) {
 	err := Reparent(ctx, database, a, &c)
 	if !errors.Is(err, ErrCycle) {
 		t.Errorf("err = %v, want ErrCycle", err)
+	}
+}
+
+// forgeParent wires parent_id directly, bypassing Reparent's guard, to build
+// the corrupt tree fngr cannot write but can be handed: a `.fngr.db` picked up
+// from an untrusted directory, a hand-edit, a half-written file.
+func forgeParent(t *testing.T, database *sql.DB, child, parent int64) {
+	t.Helper()
+	if _, err := database.Exec("UPDATE events SET parent_id = ? WHERE id = ?", parent, child); err != nil {
+		t.Fatalf("forge parent of %d as %d: %v", child, parent, err)
+	}
+}
+
+// boundedCtx caps a traversal that is supposed to terminate on its own. If a
+// regression brings the unbounded loop back, the query fails on the deadline
+// and the test reports the wrong error in seconds instead of hanging until
+// the whole package times out.
+func boundedCtx(t *testing.T) context.Context {
+	t.Helper()
+	c, cancel := context.WithTimeout(ctx, 20*time.Second)
+	t.Cleanup(cancel)
+	return c
+}
+
+// TestReparent_CorruptAncestryTerminates is the M2 walk bound. In both cases
+// the cycle sits upstream of the event being moved rather than containing it,
+// so the `parent == id` check never fires and the walk climbed forever at full
+// CPU with the transaction still open.
+func TestReparent_CorruptAncestryTerminates(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		forge func(t *testing.T, database *sql.DB, a, b int64)
+	}{
+		{
+			name:  "two events pointing at each other",
+			forge: func(t *testing.T, database *sql.DB, a, b int64) { forgeParent(t, database, a, b) },
+		},
+		{
+			// The one-event cycle's first hop is already a repeat, so the
+			// seen set has to be seeded with the starting node rather than
+			// filled only as the walk moves.
+			name:  "self-parent",
+			forge: func(t *testing.T, database *sql.DB, a, _ int64) { forgeParent(t, database, a, a) },
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			database := testDB(t)
+
+			a, _ := Add(ctx, database, AddInput{Title: "a"})
+			b, _ := Add(ctx, database, AddInput{Title: "b", ParentID: &a})
+			outsider, _ := Add(ctx, database, AddInput{Title: "outsider"})
+			tt.forge(t, database, a, b)
+
+			err := Reparent(boundedCtx(t), database, outsider, &a)
+			if !errors.Is(err, ErrCorruptTree) {
+				t.Errorf("err = %v, want ErrCorruptTree", err)
+			}
+		})
 	}
 }
 

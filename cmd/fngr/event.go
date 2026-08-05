@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/monolithiclab/fngr/internal/event"
 	"github.com/monolithiclab/fngr/internal/parse"
 	"github.com/monolithiclab/fngr/internal/render"
 	"github.com/monolithiclab/fngr/internal/timefmt"
@@ -38,7 +40,7 @@ func (c *EventShowCmd) Run(s eventStore, io ioStreams) error {
 	if c.Tree {
 		events, err := s.GetSubtree(ctx, c.ID)
 		if err != nil {
-			return err
+			return withRepairHint(err)
 		}
 		return render.Events(io.Out, c.Format, events)
 	}
@@ -187,10 +189,21 @@ type EventAttachCmd struct {
 func (c *EventAttachCmd) Run(s eventStore, io ioStreams) error {
 	ctx := context.Background()
 	if err := s.Reparent(ctx, c.ID, &c.Parent); err != nil {
-		return err
+		return withRepairHint(err)
 	}
 	fmt.Fprintf(io.Out, "Attached event %d to event %d\n", c.ID, c.Parent)
 	return nil
+}
+
+// withRepairHint names the way out of a stored parent cycle. Every message
+// wrapping ErrCorruptTree identifies an event on the loop, and detaching any
+// one of them breaks it — Reparent clears parent_id without walking anything,
+// so the repair works on exactly the database the walk could not survive.
+func withRepairHint(err error) error {
+	if !errors.Is(err, event.ErrCorruptTree) {
+		return err
+	}
+	return fmt.Errorf("%w (detach an event on the loop to break it: fngr event detach <id>)", err)
 }
 
 // EventDetachCmd clears parent_id.

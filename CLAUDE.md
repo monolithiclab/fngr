@@ -43,7 +43,10 @@ make ci             # codefix + format + lint + test
   > CLI flag > built-in. `event` hosts a sub-command tree: `fngr event N`
   reads (shorthand for `event show N`); `text` (re-splits into title+body), `title`, `body`,
   `time`, `date`, `attach`, `detach`, `tag`, `untag` mutate. Each verb owns its own `ID` arg,
-  syntax `fngr event <verb> <id> [<args>]`.
+  syntax `fngr event <verb> <id> [<args>]`. The two verbs that walk the tree (`show -t`, `attach`)
+  route their error through `withRepairHint`, which appends the way out of an `ErrCorruptTree` —
+  `fngr event detach <id>` on any event the message names, since clearing `parent_id` walks
+  nothing and so works on the very database the traversal could not survive.
   `meta` is a sub-command tree too: `fngr meta` lists with optional `-S` filter (bare key,
   key=value, @person, #tag), `meta rename` and `meta delete` mutate (both accept the same
   shorthand). None of the event verbs prompt; meta verbs prompt with the destructive-vs-additive
@@ -207,13 +210,25 @@ make ci             # codefix + format + lint + test
   inline `@bob` also deletes the `people=bob` an operator added by hand, the two being the same
   row. Subtracting the delta is an optimisation on top, same end state either way, worth it
   because most edits touch no tags and would otherwise rewrite every row), `Reparent` (set/clear
-  `parent_id`; rejects self and ancestry cycles via `ErrCycle`), `AddTags` (inserts as
+  `parent_id`; rejects self and ancestry cycles via `ErrCycle`. Its upward walk carries a `seen`
+  set seeded with the starting node — that is a *bound*, not part of the cycle check: a cycle
+  sitting upstream of the walk never contains the moving event, so the `parent == id` test never
+  fires and the loop spun at full CPU forever inside an open transaction. A repeat means the
+  stored chain is already cyclic → `ErrCorruptTree`), `AddTags` (inserts as
   `'explicit'`, *promoting* an existing body-derived row, since a tag named on the command line
   must survive the next body edit; the `DO UPDATE` is guarded on `source <> excluded.source` so
   only that promotion rewrites a row, and the added count comes from a pre-read because
   `RowsAffected` cannot tell the promotion from an insert) / `RemoveTags` (event-scoped meta CRUD with FTS
   resync; both refuse `protectedMetaKeys`), `Delete`, `HasChildren`, `List` / `ListSeq` (FTS5 filter + date range + `Limit` +
-  `Ascending`), `GetSubtree` (recursive CTE), `ListMeta` (filtered via `ListMetaOpts{Key, Value}`),
+  `Ascending`), `GetSubtree` (recursive CTE whose recursive term is `UNION`, not `UNION ALL` — on
+  a cyclic chain an `UNION ALL` does not recurse deeply, it never returns at all: no output, no
+  error, one core pinned. `UNION` discards a row already in the result, so a second lap adds
+  nothing and the queue drains; on a well-formed tree the two are identical because `id` is the
+  primary key, at ~15% for the dedup index. Don't switch it back. Terminating is not answering,
+  so the scan after it reports `ErrCorruptTree` rather than passing a deduped loop off as a
+  subtree: a cycle is reachable only from a member of it — every member's parent is another
+  member, so nothing outside can descend in — which reduces the test to whether the queried
+  root's own parent came back among its descendants), `ListMeta` (filtered via `ListMetaOpts{Key, Value}`),
   `CountMeta`, `UpdateMeta` (a *merge*, not a plain rename — `UPDATE OR REPLACE` drops the row
   colliding with migration 2's `UNIQUE(key, value, event_id)`, so an event carrying both tags ends
   up with one. Plain `UPDATE` aborts the whole transaction there and renames nothing; any
@@ -228,7 +243,11 @@ make ci             # codefix + format + lint + test
   `--author` stays correctable — protecting it against that too made `author` the one field
   nothing could repair. An empty new value is still refused.
   All functions accept
-  `context.Context`. `ErrNotFound`, `ErrCycle` and `ErrTimeRange` sentinels.
+  `context.Context`. `ErrNotFound`, `ErrCycle`, `ErrTimeRange` and `ErrCorruptTree` sentinels —
+  the last one distinct from `ErrCycle` on purpose: `ErrCycle` refuses a requested change,
+  `ErrCorruptTree` reports a chain that was already broken when fngr opened the file (a
+  hand-edit, a half-written database, or someone else's `.fngr.db` that `db.ResolvePath` picked
+  up from the current directory).
   `loadMetaBatch` chunks the IN clause to stay under SQLite's parameter limit. Private helpers:
   `requireEventExists` (existence check used by every mutation function), `rebuildEventFTS`
   (used by Update/AddTags/RemoveTags to resync `events_fts`), `execBodyMetaTuples` (both halves
@@ -269,10 +288,18 @@ make ci             # codefix + format + lint + test
   costs the writer exactly one `Write`. It used to concatenate two fresh strings per node, each
   pinned by every ancestor frame — O(depth²) live bytes, 7.0 GB on a 50k chain. Don't go back to
   strings. `node(id, connector, continuation)` is the only entry point: roots go through it too,
-  passing an empty connector, so there is no separate root-drawing path. An event whose parent is
+  passing an empty connector, so there is no separate root-drawing path. `top(id)` is the only
+  caller that decides the marker, for the root loop and the sweep alike. An event whose parent is
   absent from the result set (`--limit`, or a filter that matched only the child) still renders
   at top level but carries the `⋯└─ ` `orphanConnector` rather than passing as a true root; it
-  and `orphanBlank` are four columns wide so orphan subtrees stay aligned.
+  and `orphanBlank` are four columns wide so orphan subtrees stay aligned. Every input event
+  reaches the output exactly once whatever the topology claims: `treeWriter.visited` (a `[]bool`
+  indexed through `byID`, not a map — a map cost 148 KB/op on the 5k-deep benchmark this file
+  already guards) skips a node already drawn, impossible in a real tree with one parent each, so
+  a cyclic chain cannot recurse until the stack gives out; a final sweep then draws anything the
+  root walk never reached, needing no test of its own because `node` skips what is drawn.
+  Members of a cycle have no root above them, so `Tree` used to find no roots, write nothing and
+  return nil — `fngr` printed an empty journal and exited 0.
 - `internal/render/sanitize.go` — `SanitizeLine` / `sanitizeBlock` escape control characters
   (C0, DEL, and C1 — a bare U+009B is a CSI introducer) as `\n`, `\r`, `\xNN`. Tab always
   survives; newline survives only in `sanitizeBlock`, used for the body block of `fngr event N`.

@@ -215,6 +215,71 @@ func TestTree_RootAfterOrphanResetsPrefix(t *testing.T) {
 	}
 }
 
+// TestTree_CycleStillRendersEveryEvent is the M2 blackout guard. A cyclic
+// parent chain leaves its members with no root above them; Tree used to find
+// no roots at all, write nothing and return nil, so `fngr` on such a database
+// printed an empty journal and exited 0. Every event must appear, and the
+// walk must come back.
+func TestTree_CycleStillRendersEveryEvent(t *testing.T) {
+	pinNow(t, time.Date(2030, 1, 1, 0, 0, 0, 0, time.Local))
+	id1, id2 := int64(1), int64(2)
+	events := []event.Event{
+		makeEvent(1, &id2, "First half", "2026-04-10", "nicolas"),
+		makeEvent(2, &id1, "Second half", "2026-04-11", "nicolas"),
+	}
+
+	// Event 1 is reached first and drawn as an orphan — its parent is real
+	// but not above it — and 2 hangs off it. Recursing from 2 back into 1
+	// stops at the visited check, so 1 is not drawn twice.
+	want := "" +
+		"⋯└─ 1   Apr 10 2026 12.00am  nicolas  First half\n" +
+		"    └─ 2   Apr 11 2026 12.00am  nicolas  Second half\n"
+
+	got := renderTreeString(t, events)
+	if got != want {
+		t.Errorf("Tree over a cycle:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestTree_CycleBesideRealRoots checks the sweep does not disturb the events
+// that do have roots, and that a self-parenting event — the smallest possible
+// cycle — is rendered rather than dropped.
+func TestTree_CycleBesideRealRoots(t *testing.T) {
+	pinNow(t, time.Date(2030, 1, 1, 0, 0, 0, 0, time.Local))
+	id1, id3 := int64(1), int64(3)
+	events := []event.Event{
+		makeEvent(1, nil, "True root", "2026-04-10", "nicolas"),
+		makeEvent(2, &id1, "Its child", "2026-04-10", "nicolas"),
+		makeEvent(3, &id3, "Its own parent", "2026-04-11", "nicolas"),
+	}
+
+	want := "" +
+		"1   Apr 10 2026 12.00am  nicolas  True root\n" +
+		"└─ 2   Apr 10 2026 12.00am  nicolas  Its child\n" +
+		"⋯└─ 3   Apr 11 2026 12.00am  nicolas  Its own parent\n"
+
+	got := renderTreeString(t, events)
+	if got != want {
+		t.Errorf("Tree with a self-parent:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// TestTree_CycleWriteError covers the error path out of the sweep, which the
+// roots loop cannot reach: a failing write on a line only the sweep emits.
+func TestTree_CycleWriteError(t *testing.T) {
+	t.Parallel()
+	id1, id2 := int64(1), int64(2)
+	events := []event.Event{
+		makeEvent(1, &id2, "First half", "2026-04-10", "nicolas"),
+		makeEvent(2, &id1, "Second half", "2026-04-11", "nicolas"),
+	}
+
+	wantErr := errors.New("write failed")
+	if err := Tree(&failWriter{failOn: 1, err: wantErr}, events); !errors.Is(err, wantErr) {
+		t.Errorf("Tree over a cycle with a failing write = %v, want %v", err, wantErr)
+	}
+}
+
 // TestTree_WriteError covers the failure paths of the recursion. Each node is
 // exactly one Write, so failOn selects which line breaks: 1 is a root, 2 a
 // child (the error must climb back out of the recursion), 3 the last root

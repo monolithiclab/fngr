@@ -111,6 +111,12 @@ const (
 // parent_id is not present in the input slice still render at top level, so
 // a `--limit`-truncated query produces well-formed output, but they carry
 // the orphanConnector marker rather than passing as true roots.
+//
+// Every event in the input appears in the output exactly once, whatever the
+// topology says. A cyclic parent chain (which fngr cannot write but can be
+// handed) leaves its members with no root above them, and the old code then
+// found no roots, wrote nothing and exited 0 — a total data blackout reported
+// as success. The sweep below draws whatever the root walk missed.
 func Tree(w io.Writer, events []event.Event) error {
 	if len(events) == 0 {
 		return nil
@@ -135,15 +141,23 @@ func Tree(w io.Writer, events []event.Event) error {
 		}
 	}
 
-	t := &treeWriter{w: w, events: events, byID: byID, children: children}
+	t := &treeWriter{
+		w:        w,
+		events:   events,
+		byID:     byID,
+		children: children,
+		visited:  make([]bool, len(events)),
+	}
 	for _, id := range roots {
-		// A root that still names a parent is one whose parent fell outside
-		// the result set; nothing else can put it in this slice.
-		connector, continuation := "", ""
-		if events[byID[id]].ParentID != nil {
-			connector, continuation = orphanConnector, orphanBlank
+		if err := t.top(id); err != nil {
+			return err
 		}
-		if err := t.node(id, connector, continuation); err != nil {
+	}
+
+	// Anything the root walk could not reach belongs to a cycle. node skips
+	// whatever is already drawn, so the sweep needs no test of its own.
+	for i := range events {
+		if err := t.top(events[i].ID); err != nil {
 			return err
 		}
 	}
@@ -165,16 +179,38 @@ type treeWriter struct {
 	events   []event.Event
 	byID     map[int64]int
 	children map[int64][]int64
+	visited  []bool // indexed like events, via byID
 	prefix   []byte
 	line     []byte // scratch, so each node costs the writer one Write
+}
+
+// top writes id at the outer level, marking it as an orphan when it names a
+// parent that is not drawn above it. That covers a child whose parent fell
+// outside the result set (--limit, or a filter that matched only the child)
+// and a cycle member the root walk could not reach, which make the same claim:
+// this has a parent you cannot see from here.
+func (t *treeWriter) top(id int64) error {
+	if t.events[t.byID[id]].ParentID != nil {
+		return t.node(id, orphanConnector, orphanBlank)
+	}
+	return t.node(id, "", "")
 }
 
 // node writes one line for id — the running prefix, this node's own
 // connector, then the event — and recurses into its children under an
 // extended prefix. Roots come in through the same door: an ordinary root
 // just passes an empty connector.
+//
+// A node already drawn is skipped rather than drawn again. In a well-formed
+// tree that cannot happen — one parent each, so one visit each — and it is
+// what stops a cyclic chain from recursing until the stack gives out.
 func (t *treeWriter) node(id int64, connector, continuation string) error {
-	ev := t.events[t.byID[id]]
+	i := t.byID[id]
+	if t.visited[i] {
+		return nil
+	}
+	t.visited[i] = true
+	ev := t.events[i]
 
 	t.line = append(t.line[:0], t.prefix...)
 	t.line = append(t.line, connector...)
