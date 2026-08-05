@@ -96,6 +96,29 @@ Fixes for real friction surfaced by using the tool, not new features.
   event and reported success. EOF with nothing typed now returns
   `errNoAnswer`; `-f` is required in a non-interactive run (review issue
   H5).
+- **`event_meta.source` — a body edit only retracts what the body put
+  there** — editing an event deleted every body tag of the old text and
+  re-inserted those of the new, so a `people=bob` added with `event tag`
+  or `--meta` vanished the first time an edit dropped an inline `@bob`.
+  The review's own suggested fix — delete only `BodyTags(old) \
+  BodyTags(new)` — was implemented first and proved a behavioural no-op:
+  the tuples the delta spares are exactly the ones the insert re-adds, so
+  final state is identical. Provenance has to be *recorded*, not derived
+  after the fact. Migration 5 adds `event_meta.source` (`'body'` |
+  `'explicit'`, defaulting to explicit) with a Go step that back-fills by
+  demoting the rows each event's own text still yields; `Update`'s sync
+  deletes `source = 'body'` only, `event tag` promotes a body row to
+  explicit, and `meta rename` stamps the renamed row explicit. Review
+  issue M1.
+- **One author per event** — `--author x -m author=y` appended both, and
+  every render picked whichever sorted first; `event tag`, `event untag`,
+  `meta rename` and `meta delete` could then add, remove or rewrite the
+  author of an existing event. `MergeMeta` now has an explicit author
+  *replace* the default and rejects two differing explicit authors; the
+  four mutation verbs refuse `author` at both ends via
+  `protectedMetaKeys`. No migration repairs pre-existing duplicates on
+  purpose — nothing on disk records which row was the auto-injected one.
+  Review issue M3.
 
 ## Publishing pipeline polish
 

@@ -508,6 +508,106 @@ func TestKongDispatch_SearchFilter(t *testing.T) {
 	})
 }
 
+// TestKongDispatch_TagSurvivesBodyEdit walks the M1 report verbatim through
+// the CLI: tag an event with a handle, mention the handle in its body, then
+// edit the mention away. The tag was silently gone at the end.
+func TestKongDispatch_TagSurvivesBodyEdit(t *testing.T) {
+	t.Parallel()
+	run := newDispatcher(t)
+
+	if _, err := run([]string{"add", "plain note"}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	for _, argv := range [][]string{
+		{"event", "tag", "1", "@bob"},
+		{"event", "body", "1", "now mentions @bob inline"},
+		{"event", "body", "1", "no more mention"},
+	} {
+		if _, err := run(argv); err != nil {
+			t.Fatalf("%v: %v", argv, err)
+		}
+	}
+
+	out, err := run([]string{"event", "1"})
+	if err != nil {
+		t.Fatalf("event 1: %v", err)
+	}
+	if !strings.Contains(out, "people=bob") {
+		t.Errorf("people=bob is gone after the body edit:\n%s", out)
+	}
+}
+
+// TestKongDispatch_AuthorIsNotMutable is the M3 guard at the CLI boundary.
+// Every meta verb that could give an event a second `author` or take its only
+// one away has to refuse — the renderers read the key by name and show
+// whichever row sorts first. Correcting the value in place is the one
+// permitted edit, since it leaves every event with the row it already had;
+// TestKongDispatch_AuthorValueIsCorrectable covers that side.
+func TestKongDispatch_AuthorIsNotMutable(t *testing.T) {
+	t.Parallel()
+	run := newDispatcher(t)
+
+	if _, err := run([]string{"add", "a note", "--author", "nicolas"}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+
+	for _, argv := range [][]string{
+		{"event", "tag", "1", "author=evil"},
+		{"event", "untag", "1", "author=nicolas"},
+		{"meta", "rename", "author=nicolas", "people=nicolas", "-f"},
+		{"meta", "delete", "author=nicolas", "-f"},
+	} {
+		// Not parallel: the subtests share one store, and each asserts on
+		// the state the others must not have changed.
+		t.Run(strings.Join(argv, " "), func(t *testing.T) {
+			if _, err := run(argv); err == nil {
+				t.Fatal("succeeded, want a protected-key rejection")
+			}
+		})
+	}
+
+	// `meta rename tag=x author=…` targets the protected key from the other
+	// side: the source tuple is renameable, the destination is not.
+	if _, err := run([]string{"event", "tag", "1", "#wip"}); err != nil {
+		t.Fatalf("event tag #wip: %v", err)
+	}
+	if _, err := run([]string{"meta", "rename", "#wip", "author=evil", "-f"}); err == nil {
+		t.Fatal("meta rename onto author succeeded, want a protected-key rejection")
+	}
+
+	out, err := run([]string{"meta", "-S", "author"})
+	if err != nil {
+		t.Fatalf("meta -S author: %v", err)
+	}
+	if got := strings.TrimSpace(out); got != "author=nicolas  (1)" {
+		t.Errorf("meta -S author = %q, want exactly one unchanged author", got)
+	}
+}
+
+// TestKongDispatch_AuthorValueIsCorrectable is the counterpart: a misspelled
+// --author has to be fixable. Protecting the key against every verb made it
+// the one field nothing could repair, and re-adding the event to correct a
+// typo loses its id and its children.
+func TestKongDispatch_AuthorValueIsCorrectable(t *testing.T) {
+	t.Parallel()
+	run := newDispatcher(t)
+
+	if _, err := run([]string{"add", "a note", "--author", "nicolass"}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if _, err := run([]string{"meta", "rename", "author=nicolass", "author=nicolas", "-f"}); err != nil {
+		t.Fatalf("meta rename author value: %v", err)
+	}
+
+	out, err := run([]string{"meta", "-S", "author"})
+	if err != nil {
+		t.Fatalf("meta -S author: %v", err)
+	}
+	if got := strings.TrimSpace(out); got != "author=nicolas  (1)" {
+		t.Errorf("meta -S author = %q, want the corrected spelling", got)
+	}
+}
+
 // TestKongDispatch_OutOfRangeTimeFlagErrors proves --time rejects an offset
 // that cannot be stored, instead of writing an unreadable row.
 func TestKongDispatch_OutOfRangeTimeFlagErrors(t *testing.T) {

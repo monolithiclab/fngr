@@ -16,6 +16,37 @@ func assertMetaEqual(t *testing.T, got, want []Meta) {
 	}
 }
 
+// TestEventText pins the join every body-tag derivation shares. The separator
+// matters: without it a title ending in text and a body starting with `@name`
+// would fuse into one token and the mention would go unseen by one caller and
+// seen by another, depending on which built the string by hand.
+func TestEventText(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name         string
+		title, body  string
+		want         string
+		wantBodyTags []Meta
+	}{
+		{name: "both", title: "standup", body: "with @sarah", want: "standup with @sarah",
+			wantBodyTags: []Meta{{Key: "people", Value: "sarah"}}},
+		{name: "empty body", title: "ship #ops", body: "", want: "ship #ops ",
+			wantBodyTags: []Meta{{Key: "tag", Value: "ops"}}},
+		{name: "sigil at the boundary", title: "ship", body: "@sarah reviewed", want: "ship @sarah reviewed",
+			wantBodyTags: []Meta{{Key: "people", Value: "sarah"}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := EventText(tt.title, tt.body)
+			if got != tt.want {
+				t.Errorf("EventText(%q, %q) = %q, want %q", tt.title, tt.body, got, tt.want)
+			}
+			assertMetaEqual(t, BodyTags(got), tt.wantBodyTags)
+		})
+	}
+}
+
 func TestBodyTags(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

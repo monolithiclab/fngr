@@ -219,7 +219,9 @@ fngr event 1 --tree         # with children
 fngr event 1 --format json
 
 # Edit text — re-splits on '. ' into title + body
-# (@person/#tag tags are synced — old ones removed, new ones added)
+# (@person/#tag tags are synced: a tag the edit removed from the text goes
+#  with it, but only if the text is where it came from — anything you added
+#  with `event tag` or --meta stays put)
 fngr event text 1 "fixed wording. for @sarah #urgent"
 
 # Or set just the title (body untouched)
@@ -242,6 +244,12 @@ fngr event detach 2
 # Add or remove tags (n args; @person, #tag, or key=value)
 fngr event tag 1 "@sarah" "#urgent" "env=prod"
 fngr event untag 1 "#urgent"
+
+# `author` is fixed when the event is created: one event, one author, so it
+# cannot be tagged, untagged or deleted afterwards, and no other key can be
+# renamed onto it. Correcting a misspelled one is allowed, since it leaves
+# every event with the single author row it already had:
+#   fngr meta rename author=nicolass author=nicolas
 
 # Delete (prompts for confirmation)
 fngr delete 3
@@ -338,7 +346,9 @@ that `--format=json` emits. Omitted fields fall back to the corresponding CLI
 flag (`--parent`, `--time`, `--meta`, `--author`) and then to the built-in
 default. An explicit `meta` array replaces the `--meta` flags rather than
 adding to them, and an `author` entry there overrides `--author` for that
-record. Every record must end up with an author from some source. Batches are
+record. Every record must end up with an author from some source, and with
+exactly one — two differing `author` entries in the same record are rejected
+rather than merged. Batches are
 capped at 10 000 records and are atomic — any error rolls back the whole thing.
 
 ## Database location

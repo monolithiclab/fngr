@@ -128,6 +128,22 @@ func TestJSONInputToAddInput(t *testing.T) {
 			wantTitle:  "x",
 			wantAuthor: "bob",
 		},
+		{
+			// The import path takes meta as an arbitrary list of pairs, so it
+			// is the one place a caller can hand over two authors without
+			// going through a flag parser. Rejected rather than merged: the
+			// event has one author and the file does not say which.
+			name:    "two-json-authors-conflict",
+			in:      jsonAddInput{Title: "x", Meta: [][2]string{{"author", "bob"}, {"author", "carol"}}},
+			author:  "alice",
+			wantErr: "exactly one author",
+		},
+		{
+			name:    "no-author-from-any-source",
+			in:      jsonAddInput{Title: "x"},
+			author:  "",
+			wantErr: "author is required",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

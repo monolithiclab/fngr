@@ -30,6 +30,7 @@ type migration struct {
 // behind. A step needing the reverse order has to split across two versions.
 var goMigrations = map[int]func(*sql.Tx) error{
 	4: repairLegacyText,
+	5: classifyMetaSource,
 }
 
 // dbExec accepts either *sql.DB or *sql.Tx.

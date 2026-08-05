@@ -37,9 +37,9 @@ under concurrent writes, and the README states the opposite.**
 | [H5](#h5) | High | cmd | `confirm` treats EOF as consent → non-interactive `meta rename` acts without `-f` | ✅ fixed |
 | [H6](#h6) | High | cmd | `confirm` still blocks forever on an idle pipe — H4's hazard, surviving in the other stdin reader | ⛔ won't fix |
 | [H7](#h7) | High | cmd | `-e` under a non-TTY launches an editor that cannot run, discarding the piped body | ✅ fixed |
-| [M1](#m1) | Medium | event | Body-tag sync silently deletes operator-added meta | open |
+| [M1](#m1) | Medium | event | Body-tag sync silently deletes operator-added meta | ✅ fixed |
 | [M2](#m2) | Medium | event | Parent cycle → two non-terminating loops + a silent total data blackout | open |
-| [M3](#m3) | Medium | event | Nothing enforces a single `author`; display picks whichever sorts first | open |
+| [M3](#m3) | Medium | event | Nothing enforces a single `author`; display picks whichever sorts first | ✅ fixed |
 | [M4](#m4) | Medium | parse | Email addresses mint bogus `people` tags | ✅ fixed |
 | [M5](#m5) | Medium | timefmt | `"1 month ago"` on the 31st lands in the wrong month; int64 overflow yields a *future* time | ✅ fixed |
 | [M6](#m6) | Medium | render | Newlines and ANSI/OSC escapes in titles forge output rows | ✅ fixed |
@@ -1024,6 +1024,72 @@ text at some point.
 change with no migration that fixes the common case. The thorough version is a
 `source` column on `event_meta` (`'body'` vs `'explicit'`) scoping the delete.
 
+**Resolved.** The `source` column, because the small change turned out to fix
+nothing at all. `BodyTags(old) \ BodyTags(new)` was implemented first and the
+repro above still reproduced: the delete set it narrows away is exactly the
+set the *next* statement re-inserts, so delete-all-then-insert-new and
+delete-the-delta-then-insert-new leave the database in the same state. The
+delta is not wrong — it stops the sync churning rows pointlessly — but it is
+unobservable on its own, and only provenance can tell `people=bob` from
+`people=bob`.
+
+Migration 5 adds `event_meta.source TEXT NOT NULL DEFAULT 'explicit' CHECK
+(source IN ('body', 'explicit'))`:
+
+- `addInTx` stamps `'body'` on any tuple `parse.BodyTags(parse.EventText(title,
+  body))` yields, re-deriving them because `AddInput.Meta` arrives already
+  merged.
+- `Update` deletes only the removed tags whose row says `'body'` and re-inserts
+  the new set as `'body'` with `ON CONFLICT DO NOTHING`, so an explicit row
+  keeps its provenance. The `source` filter is what carries the semantics; the
+  delta against the old text is an optimisation on top, which is why the delta
+  alone changed nothing.
+- `AddTags` inserts as `'explicit'` and *promotes* an existing `'body'` row —
+  `event tag @bob` on a body that already says `@bob` is still the operator
+  claiming the tag. Its "N added" count moved to a pre-read, since
+  `RowsAffected` counts that promotion as a change. The `DO UPDATE` is guarded
+  by `WHERE event_meta.source <> excluded.source` so it fires only for the
+  promotion it exists for.
+- `UpdateMeta` stamps `'explicit'` on the renamed row: no event's text yields
+  the new value, so a body-derived one would be deleted by the next edit.
+
+The `CHECK` pins the enum in the schema, not only in Go: both values are
+written as bare string literals from Go *and* from this migration's SQL, and a
+typo would mint a row `deleteBodyMetaTuples` could never match, silently and
+forever. There is deliberately **no index** on `source` — every statement that
+filters on it also supplies `(key, value, event_id)`, which migration 2's
+unique index already covers. Measured on a 300k-row database, adding one cost
++24% file size and +17% insert time for zero appearances in any query plan.
+
+The Go step `classifyMetaSource` back-fills existing databases by demoting the
+rows an event's own text still yields. It is a reconstruction — provenance was
+never recorded — and it is lossy in exactly one place: a tuple added *both*
+ways is a single row and comes out `'body'`. That matches how `addInTx`
+resolves the same tie for a new event, and re-asserting with `event tag`
+promotes such a row back to `'explicit'`.
+
+Text-wins is the deliberate choice over carrying the merged partition down from
+`MergeMeta` (which would resolve the tie as `'explicit'` and skip the
+re-derivation). Carrying it would freeze every body tag as explicit on a
+`fngr --format=json | fngr add -f json` round trip — the JSON wire shape has
+one flat `meta` list and no provenance field — so the common path would go
+permanently stale to fix the rare `-m people=bob` beside an inline `@bob`.
+
+`parse.EventText(title, body)` is now the single title+body join contract: the
+add path, `Update`'s sync and migration 5's back-fill all classify tuples as
+body-derived, and a join differing by so much as a space would have them
+disagree about a tag near the boundary — one stamping `'body'`, another
+deleting it.
+
+Guarded by `TestUpdate_RetractsOnlyBodyDerivedTags` (four claim paths including
+the report's exact ordering, one of them the baseline where the tag *should*
+go), `TestAddTags_CountsPromotionAsAlreadyPresent`,
+`TestKongDispatch_TagSurvivesBodyEdit` through Kong, `TestEventText`, and three
+migration tests including `TestMigrate5_RejectsUnknownSource` for the `CHECK`.
+Each was mutation-checked against the fix removed.
+
+*Note for [M7](#m7):* the `events_fts` split is now migration 6.
+
 <a name="m2"></a>
 ### M2 — Parent cycle: two non-terminating loops and a silent data blackout
 
@@ -1099,6 +1165,63 @@ default when an explicit `author` is present (mirroring what
 `mergeMetaForJSON` already does correctly), and `AddTags`/`UpdateMeta` should
 reject `author` as a *target* key. Pick one behavior for `event untag author=…`
 and apply it consistently.
+
+**Resolved.** Closed at both ends.
+
+At creation: `CollectMeta`'s merge moved into an exported `MergeMeta(text,
+explicit, defaultAuthor)`, where an explicit `author` *replaces* the default
+instead of joining it, and two differing explicit authors are an error rather
+than a merge. `mergeMetaForJSON` — the private near-copy in
+`cmd/fngr/add_json.go` that got this right for the JSON path only — is gone;
+both paths now call the one function.
+
+An **empty** explicit author is rejected there too, rather than ignored. `-m
+author=` used to do two wrong things at once: the blank value suppressed the
+synthesised default *and* was then appended by the explicit pass, so the event
+stored a blank author and lost the real one — permanently, since `author` is
+protected against every meta verb.
+
+At the writer: `requireOneAuthor` runs inside `addInTx` on the already-merged
+slice. `MergeMeta` is the only *CLI* path to the database, but it is not the
+only path — a directly-built `AddInput` (a library caller, a future importer)
+bypasses it entirely, and the data layer should not refuse to repair an
+invariant it does not also enforce. `AuthorOf(meta)` is the matching single
+reading of that rule, now called by `render.eventAuthor` and by the JSON
+import's "every record needs an author" check, so the two cannot drift on what
+happens when the guarantee is somehow broken.
+
+At mutation: `wellKnownMetaKeys` became `protectedMetaKeys`, applied by every
+meta verb as a *target* — `AddTags`, `RemoveTags`, `DeleteMeta`, and
+`UpdateMeta` on both the source key and the destination key. That settles the
+inconsistency the report names by picking the refusing side for all of them:
+an event with no author renders a blank column everywhere, so `event untag 1
+author=…` now errors like `meta delete author=…` always did.
+
+`UpdateMeta`'s gate (`requireRenamableMeta`) is looser by exactly one case: a
+*same-key* value rewrite is allowed. `fngr meta rename author=nicolass
+author=nicolas` leaves every affected event with the single author row it
+already had, and refusing it would make a typo in `--author` unfixable through
+the CLI. Any rename that changes the key is still refused at both ends, as is
+an empty new value.
+
+**No migration for existing duplicates, deliberately.** A migration cannot
+tell which of two `author` rows was auto-injected and which the operator
+asked for, so dropping one would be a coin flip on which name the journal
+attributes an entry to — worse than showing both. Every path that could
+create the second row is closed, so a database only carries duplicates if it
+was written by ≤ v0.0.2 or edited by hand; `fngr meta -S author` lists them
+and `sqlite3` removes them.
+
+Guarded by `TestMergeMeta_Author` (seven cases, including the two-explicit-
+authors pair that slipped past a first draft comparing against the default
+instead of tracking "an explicit one was seen", and the blank-author row),
+`TestProtectedMetaKey_RefusedByEveryVerb` (six verbs, each asserting exactly
+one unchanged author survives), `TestAdd_RejectsBadAuthorMeta` (the writer
+gate, asserting no event is created either), `TestAuthorOf`,
+`TestUpdateMeta_AuthorValueIsCorrectable` (the permitted rewrite plus the
+three still-blocked renames), three new `TestJSONInputToAddInput` rows, and
+`TestKongDispatch_AuthorIsNotMutable` / `TestKongDispatch_AuthorValueIs
+Correctable` through Kong.
 
 <a name="m4"></a>
 ### M4 — Email addresses mint bogus `people` tags

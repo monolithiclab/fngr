@@ -207,20 +207,15 @@ func jsonInputToAddInput(
 		explicit = defaults.meta
 	}
 
-	// Merge explicit meta + body tags + default author with dedup. CollectMeta
-	// would inject defaultAuthor unconditionally, so we hand-roll the merge
-	// here to honour an explicit JSON `author` entry instead. Body-tag
-	// extraction runs against title+body so tags from either are picked up.
-	merged := mergeMetaForJSON(title+" "+body, explicit, defaultAuthor)
-
-	hasAuthor := false
-	for _, m := range merged {
-		if m.Key == event.MetaKeyAuthor {
-			hasAuthor = true
-			break
-		}
+	// Same merge the text path gets: an explicit `author` replaces the CLI
+	// default instead of joining it, and body-tag extraction runs against
+	// title+body so tags from either are picked up.
+	merged, err := event.MergeMeta(parse.EventText(title, body), explicit, defaultAuthor)
+	if err != nil {
+		return event.AddInput{}, fmt.Errorf("--format=json: record %d: %w", index, err)
 	}
-	if !hasAuthor {
+
+	if event.AuthorOf(merged) == "" {
 		return event.AddInput{}, fmt.Errorf("--format=json: record %d: author is required (set meta.author, --author, FNGR_AUTHOR, or $USER)", index)
 	}
 
@@ -232,40 +227,4 @@ func jsonInputToAddInput(
 		Meta:        merged,
 		CreatedAt:   createdAt,
 	}, nil
-}
-
-// mergeMetaForJSON builds the final meta list for a JSON record. It applies
-// the same merge rules as event.CollectMeta — author first (unless the
-// explicit list already names one), then body-derived tags, then explicit
-// entries — with (key, value) dedup. Unlike CollectMeta the default author
-// is suppressed when the explicit meta already includes an `author` entry,
-// so JSON records can override author per-event.
-func mergeMetaForJSON(text string, explicit []parse.Meta, defaultAuthor string) []parse.Meta {
-	seen := make(map[parse.Meta]struct{})
-	var result []parse.Meta
-	add := func(m parse.Meta) {
-		if _, ok := seen[m]; !ok {
-			seen[m] = struct{}{}
-			result = append(result, m)
-		}
-	}
-
-	hasExplicitAuthor := false
-	for _, m := range explicit {
-		if m.Key == event.MetaKeyAuthor {
-			hasExplicitAuthor = true
-			break
-		}
-	}
-	if !hasExplicitAuthor && defaultAuthor != "" {
-		add(parse.Meta{Key: event.MetaKeyAuthor, Value: defaultAuthor})
-	}
-
-	for _, m := range parse.BodyTags(text) {
-		add(m)
-	}
-	for _, m := range explicit {
-		add(m)
-	}
-	return result
 }

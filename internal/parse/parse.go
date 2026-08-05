@@ -46,6 +46,14 @@ var tagPatterns = []struct {
 	{regexp.MustCompile(metaNameBoundary + `#(` + metaNamePattern + `)`), "tag"},
 }
 
+// EventText joins an event's title and body into the single string body-tag
+// extraction runs over. Every caller of BodyTags that starts from a stored
+// event must go through it: the add path, Update's sync and migration 5's
+// back-fill each classify a tuple as body-derived or not, and a join that
+// differs by so much as a space would have them disagree about a tag near the
+// boundary — one stamping `source = 'body'`, another deleting it.
+func EventText(title, body string) string { return title + " " + body }
+
 func BodyTags(text string) []Meta {
 	seen := make(map[Meta]struct{})
 	var result []Meta
