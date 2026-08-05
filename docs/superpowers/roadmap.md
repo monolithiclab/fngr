@@ -133,6 +133,37 @@ Fixes for real friction surfaced by using the tool, not new features.
   wrong and no legitimate tree is truncated however deep it is; the
   error tells the user to `fngr event detach <id>`, which walks nothing
   and so repairs the file the traversal could not read. Review issue M2.
+- **`--from`/`--to` accept everything `--time` does** — the range flags
+  had their own stricter grammar, rejecting relative forms *and* the
+  RFC 3339 stamps `--format=json` and `--format=csv` emit, so a
+  `created_at` copied out of fngr's own output could not be pasted back
+  in. Both now go through `timefmt.ParsePartial`, and the second grammar
+  (`ParseDate`) is gone with its last caller. `--to` is turned into the
+  first instant past what was named — next second for a clock, next
+  midnight for a bare date — so it reads as inclusive at either
+  granularity, and an empty range (`--from >= --to`) warns rather than
+  returning nothing at exit 0. Review issue M12.
+- **A skipped wall clock is reported, not swallowed** — a DST
+  spring-forward removes an hour, and `time.Date` and
+  `time.ParseInLocation` both resolve a clock inside the gap to the hour
+  before it with no error. `fngr event time N 2:30` on that day stored
+  01:30 and printed `Updated event N`. Every wall clock the package
+  builds now goes through one gate, so every door that stores one a user
+  typed reports it — `event time`, `event date`, `add --time`, `add`'s
+  title prefix, and the `--format=json` import — and a mismatch warns on
+  stderr naming both times. Still stored, never refused: the shifted
+  instant is a real one and almost certainly what was meant, so failing
+  would leave nothing useful to type instead. Fall-back ambiguity stays
+  silent; a clock that happens twice still gives the user the stamp they
+  typed. Review issue M13.
+- **`-n N -r` keeps the newest N** — `ORDER BY` ran before `LIMIT`, so
+  the sort direction chose *which* rows survived and `fngr -n 20 -r`,
+  read by anyone as "recent activity, chronological", returned the 20
+  **oldest** events in the database. The limited query now sorts
+  descending inside a subquery and the ascending case re-sorts the
+  survivors outside it. `-r` is a display-order toggle everywhere else
+  it appears; documenting the interaction instead would have documented
+  a trap rather than removed one. Review issue M14.
 
 ## Publishing pipeline polish
 

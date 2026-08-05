@@ -57,25 +57,6 @@ func TestParse_Invalid(t *testing.T) {
 	}
 }
 
-func TestParseDate(t *testing.T) {
-	t.Parallel()
-	got, err := ParseDate("2026-04-15")
-	if err != nil {
-		t.Fatalf("ParseDate: %v", err)
-	}
-	want := time.Date(2026, 4, 15, 0, 0, 0, 0, time.Local)
-	if !got.Equal(want) {
-		t.Errorf("ParseDate = %v, want %v", got, want)
-	}
-}
-
-func TestParseDate_RejectsNonDate(t *testing.T) {
-	t.Parallel()
-	if _, err := ParseDate("not-a-date"); err == nil {
-		t.Error("expected error")
-	}
-}
-
 func TestFormatRelative(t *testing.T) {
 	t.Parallel()
 
@@ -248,7 +229,7 @@ func TestParsePartial(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, hasDate, hasTime, err := ParsePartial(tt.input)
+			got, hasDate, hasTime, _, err := ParsePartial(tt.input)
 			if tt.input == "not a time" {
 				if err == nil {
 					t.Fatalf("ParsePartial(%q) expected error", tt.input)
@@ -326,7 +307,7 @@ func TestParseRelative(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, hasDate, hasTime, ok := parseRelative(tt.input, now)
+			got, hasDate, hasTime, _, ok := parseRelative(tt.input, now)
 			if ok != tt.wantOK {
 				t.Fatalf("parseRelative(%q) ok=%v, want %v", tt.input, ok, tt.wantOK)
 			}
@@ -391,7 +372,7 @@ func TestParsePartial_Relative(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, hasDate, hasTime, err := ParsePartial(tt.input)
+			got, hasDate, hasTime, _, err := ParsePartial(tt.input)
 			if err != nil {
 				t.Fatalf("ParsePartial(%q): %v", tt.input, err)
 			}
@@ -410,17 +391,19 @@ func TestSplitTimePrefix(t *testing.T) {
 	t.Parallel()
 	now := time.Now()
 	tests := []struct {
-		name     string
-		input    string
-		wantOK   bool
-		wantRest string
-		check    func(t *testing.T, got time.Time)
+		name       string
+		input      string
+		wantOK     bool
+		wantPrefix string
+		wantRest   string
+		check      func(t *testing.T, got time.Time)
 	}{
 		{
-			name:     "time only prefix uses today",
-			input:    "9:30: had coffee",
-			wantOK:   true,
-			wantRest: "had coffee",
+			name:       "time only prefix uses today",
+			input:      "9:30: had coffee",
+			wantOK:     true,
+			wantPrefix: "9:30",
+			wantRest:   "had coffee",
 			check: func(t *testing.T, got time.Time) {
 				if got.Hour() != 9 || got.Minute() != 30 {
 					t.Errorf("got h=%d m=%d, want 9:30", got.Hour(), got.Minute())
@@ -431,10 +414,11 @@ func TestSplitTimePrefix(t *testing.T) {
 			},
 		},
 		{
-			name:     "12h prefix",
-			input:    "3pm: lunch",
-			wantOK:   true,
-			wantRest: "lunch",
+			name:       "12h prefix",
+			input:      "3pm: lunch",
+			wantOK:     true,
+			wantPrefix: "3pm",
+			wantRest:   "lunch",
 			check: func(t *testing.T, got time.Time) {
 				if got.Hour() != 15 || got.Minute() != 0 {
 					t.Errorf("got h=%d m=%d, want 15:00", got.Hour(), got.Minute())
@@ -442,10 +426,11 @@ func TestSplitTimePrefix(t *testing.T) {
 			},
 		},
 		{
-			name:     "date prefix",
-			input:    "2026-04-15: trip",
-			wantOK:   true,
-			wantRest: "trip",
+			name:       "date prefix",
+			input:      "2026-04-15: trip",
+			wantOK:     true,
+			wantPrefix: "2026-04-15",
+			wantRest:   "trip",
 			check: func(t *testing.T, got time.Time) {
 				want := time.Date(2026, 4, 15, 0, 0, 0, 0, time.Local)
 				if !got.Equal(want) {
@@ -454,10 +439,11 @@ func TestSplitTimePrefix(t *testing.T) {
 			},
 		},
 		{
-			name:     "hh:mm:ss prefix",
-			input:    "15:04:05: deploy",
-			wantOK:   true,
-			wantRest: "deploy",
+			name:       "hh:mm:ss prefix",
+			input:      "15:04:05: deploy",
+			wantOK:     true,
+			wantPrefix: "15:04:05",
+			wantRest:   "deploy",
 			check: func(t *testing.T, got time.Time) {
 				if got.Hour() != 15 || got.Minute() != 4 || got.Second() != 5 {
 					t.Errorf("got %v, want 15:04:05", got)
@@ -465,10 +451,11 @@ func TestSplitTimePrefix(t *testing.T) {
 			},
 		},
 		{
-			name:     "only first delimiter splits",
-			input:    "9:30: Meeting: discuss",
-			wantOK:   true,
-			wantRest: "Meeting: discuss",
+			name:       "only first delimiter splits",
+			input:      "9:30: Meeting: discuss",
+			wantOK:     true,
+			wantPrefix: "9:30",
+			wantRest:   "Meeting: discuss",
 			check: func(t *testing.T, got time.Time) {
 				if got.Hour() != 9 || got.Minute() != 30 {
 					t.Errorf("got h=%d m=%d, want 9:30", got.Hour(), got.Minute())
@@ -494,10 +481,11 @@ func TestSplitTimePrefix(t *testing.T) {
 			wantRest: "9:30:coffee",
 		},
 		{
-			name:     "empty remainder",
-			input:    "9:30: ",
-			wantOK:   true,
-			wantRest: "",
+			name:       "empty remainder",
+			input:      "9:30: ",
+			wantOK:     true,
+			wantPrefix: "9:30",
+			wantRest:   "",
 			check: func(t *testing.T, got time.Time) {
 				if got.Hour() != 9 || got.Minute() != 30 {
 					t.Errorf("got h=%d m=%d, want 9:30", got.Hour(), got.Minute())
@@ -508,9 +496,14 @@ func TestSplitTimePrefix(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, rest, ok := SplitTimePrefix(tt.input)
+			got, prefix, rest, _, ok := SplitTimePrefix(tt.input)
 			if ok != tt.wantOK {
 				t.Fatalf("SplitTimePrefix(%q) ok=%v, want %v", tt.input, ok, tt.wantOK)
+			}
+			// The prefix is what the caller re-reads to check the clock
+			// against the local zone, so it has to be the token verbatim.
+			if prefix != tt.wantPrefix {
+				t.Errorf("SplitTimePrefix(%q) prefix=%q, want %q", tt.input, prefix, tt.wantPrefix)
 			}
 			if rest != tt.wantRest {
 				t.Errorf("SplitTimePrefix(%q) rest=%q, want %q", tt.input, rest, tt.wantRest)
@@ -528,7 +521,10 @@ func TestSpliceTime(t *testing.T) {
 	orig := time.Date(2026, 4, 22, 9, 0, 0, 0, loc)
 	newTime := time.Date(2030, 12, 1, 21, 32, 7, 123, time.UTC)
 
-	got := SpliceTime(orig, newTime)
+	got, exists := SpliceTime(orig, newTime)
+	if !exists {
+		t.Error("exists = false, want true for a fixed-offset zone with no transitions")
+	}
 
 	if got.Year() != 2026 || got.Month() != 4 || got.Day() != 22 {
 		t.Errorf("date not preserved: %v", got)
@@ -547,7 +543,10 @@ func TestSpliceDate(t *testing.T) {
 	orig := time.Date(2026, 4, 22, 21, 32, 7, 123, loc)
 	newDate := time.Date(2030, 12, 1, 9, 0, 0, 0, time.UTC)
 
-	got := SpliceDate(orig, newDate)
+	got, exists := SpliceDate(orig, newDate)
+	if !exists {
+		t.Error("exists = false, want true for a fixed-offset zone with no transitions")
+	}
 
 	if got.Year() != 2030 || got.Month() != 12 || got.Day() != 1 {
 		t.Errorf("date not spliced: %v", got)
@@ -610,7 +609,7 @@ func TestParsePartial_RejectsOutOfRangeYear(t *testing.T) {
 	for _, in := range inputs {
 		t.Run(in, func(t *testing.T) {
 			t.Parallel()
-			got, _, _, err := ParsePartial(in)
+			got, _, _, _, err := ParsePartial(in)
 			if err == nil {
 				t.Fatalf("ParsePartial(%q) = %v, want an out-of-range error", in, got)
 			}
@@ -627,7 +626,7 @@ func TestParsePartial_RejectsOutOfRangeYear(t *testing.T) {
 func TestSplitTimePrefix_OutOfRangeIsNotATimestamp(t *testing.T) {
 	t.Parallel()
 	const in = "2147483647 months ago: meeting notes from a scraped page"
-	got, rest, ok := SplitTimePrefix(in)
+	got, _, rest, _, ok := SplitTimePrefix(in)
 	if ok {
 		t.Fatalf("SplitTimePrefix(%q) parsed a prefix (%v), want it left verbatim", in, got)
 	}

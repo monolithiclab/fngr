@@ -119,38 +119,61 @@ func ParseStorage(s string) (t time.Time, ok bool) {
 //
 // When hasDate is false, the returned t carries today's local date so the
 // caller can either use it as-is or splice into another date.
-func ParsePartial(s string) (t time.Time, hasDate, hasTime bool, err error) {
-	t, hasDate, hasTime, err = parsePartial(s)
+func ParsePartial(s string) (t time.Time, hasDate, hasTime, exists bool, err error) {
+	t, hasDate, hasTime, exists, err = parsePartial(s, time.Now())
 	if err != nil {
-		return time.Time{}, false, false, err
+		return time.Time{}, false, false, false, err
 	}
 	if !InRange(t) {
-		return time.Time{}, false, false, fmt.Errorf(
+		return time.Time{}, false, false, false, fmt.Errorf(
 			"time %q resolves to year %d, outside the supported range %d-%d",
 			s, t.Year(), minYear, maxYear)
 	}
-	return t, hasDate, hasTime, nil
+	return t, hasDate, hasTime, exists, nil
 }
 
-func parsePartial(s string) (t time.Time, hasDate, hasTime bool, err error) {
-	if t, hasDate, hasTime, ok := parseRelative(s, time.Now()); ok {
-		return t, hasDate, hasTime, nil
+// parsePartial is ParsePartial with the anchor for relative and time-only
+// input injected, for testability.
+func parsePartial(s string, now time.Time) (t time.Time, hasDate, hasTime, exists bool, err error) {
+	if t, hasDate, hasTime, exists, ok := parseRelative(s, now); ok {
+		return t, hasDate, hasTime, exists, nil
 	}
 	for _, layout := range fullFormats {
-		if t, err := time.ParseInLocation(layout, s, time.Local); err == nil {
-			return t, true, layoutHasTime(layout), nil
+		if layoutHasOffset(layout) {
+			// The input carries its own UTC offset, so it names an instant
+			// rather than a local clock and nothing can contradict it.
+			if t, err := time.ParseInLocation(layout, s, time.Local); err == nil {
+				return t, true, true, true, nil
+			}
+			continue
 		}
+		// Parsed in UTC — which has no transitions — the fields come back
+		// exactly as written, before the local zone has had any say over
+		// them. Rebuilding them with localClock is what notices a clock the
+		// zone skips; parsing straight into time.Local would shift it first
+		// and leave nothing to compare against.
+		asked, err := time.ParseInLocation(layout, s, time.UTC)
+		if err != nil {
+			continue
+		}
+		t, exists := localClock(asked.Year(), asked.Month(), asked.Day(),
+			asked.Hour(), asked.Minute(), asked.Second(), asked.Nanosecond(), time.Local)
+		if !layoutHasTime(layout) {
+			// A bare date names no clock, so the zone has nothing to skip —
+			// and some zones do shift at midnight.
+			exists = true
+		}
+		return t, true, layoutHasTime(layout), exists, nil
 	}
 	if clock, ok := parseClock(s); ok {
-		now := time.Now()
-		t = time.Date(
+		t, exists := localClock(
 			now.Year(), now.Month(), now.Day(),
 			clock.Hour(), clock.Minute(), clock.Second(), clock.Nanosecond(),
 			time.Local,
 		)
-		return t, false, true, nil
+		return t, false, true, exists, nil
 	}
-	return time.Time{}, false, false, fmt.Errorf(
+	return time.Time{}, false, false, false, fmt.Errorf(
 		"unrecognized time %q (try YYYY-MM-DD, YYYY-MM-DDTHH:MM, RFC3339, HH:MM, 3:04PM, "+
 			"or relative forms like \"today\", \"yesterday\", \"2 days ago\", \"yesterday at 9am\")", s)
 }
@@ -158,6 +181,12 @@ func parsePartial(s string) (t time.Time, hasDate, hasTime bool, err error) {
 // layoutHasTime reports whether layout (one of fullFormats) carries a time
 // component. The only date-only layout in fullFormats is DateFormat.
 func layoutHasTime(layout string) bool { return layout != DateFormat }
+
+// layoutHasOffset reports whether layout (one of fullFormats) carries a UTC
+// offset. Lives beside layoutHasTime so fullFormats has one place that answers
+// questions about its entries — a new offset-bearing layout has to be handled
+// here or parsePartial will treat it as a bare local clock.
+func layoutHasOffset(layout string) bool { return layout == time.RFC3339 }
 
 // parseClock parses s against the time-only layouts and returns the parsed
 // wall-clock time (its date fields are unspecified and must be ignored).
@@ -182,40 +211,47 @@ func parseClock(s string) (time.Time, bool) {
 // can still splice. Sub-day offsets and "now" report hasTime=true.
 // ok=false means s is not a relative form (the caller should try other
 // layouts).
-func parseRelative(s string, now time.Time) (t time.Time, hasDate, hasTime, ok bool) {
+//
+// Only the "<day> at <time>" form can report exists=false: every other
+// relative form is an offset from a real instant, and its clock comes from
+// now rather than from the user.
+func parseRelative(s string, now time.Time) (t time.Time, hasDate, hasTime, exists, ok bool) {
 	s = strings.ToLower(strings.Join(strings.Fields(s), " "))
 	if s == "" {
-		return time.Time{}, false, false, false
+		return time.Time{}, false, false, false, false
 	}
 	if s == "now" {
-		return now, true, true, true
+		return now, true, true, true, true
 	}
 
 	dayPart, timePart, hasAt := strings.Cut(s, " at ")
 
 	base, hasClock, ok := relOffset(dayPart, now)
 	if !ok {
-		return time.Time{}, false, false, false
+		return time.Time{}, false, false, false, false
 	}
 	if hasClock {
 		// Sub-day offsets ("3 hours ago") already fix the time of day and
 		// cannot be combined with an explicit "at <time>".
 		if hasAt {
-			return time.Time{}, false, false, false
+			return time.Time{}, false, false, false, false
 		}
-		return base, true, true, true
+		return base, true, true, true, true
 	}
 	if !hasAt {
 		// No explicit time: keep now's time-of-day but report date-only.
-		return base, true, false, true
+		return base, true, false, true, true
 	}
 	clock, clockOK := parseClock(timePart)
 	if !clockOK {
-		return time.Time{}, false, false, false
+		return time.Time{}, false, false, false, false
 	}
-	return time.Date(base.Year(), base.Month(), base.Day(),
+	// "yesterday at 2:30" is a wall clock the user typed, so it can name an
+	// hour the zone skips just as "2026-03-08 02:30" can.
+	t, exists = localClock(base.Year(), base.Month(), base.Day(),
 		clock.Hour(), clock.Minute(), clock.Second(), clock.Nanosecond(),
-		now.Location()), true, true, true
+		now.Location())
+	return t, true, true, exists, true
 }
 
 // relOffset resolves a relative day expression to a time anchored at now.
@@ -299,7 +335,7 @@ func relCountUnit(s string) (n int, unit string, ok bool) {
 // Parse accepts a timestamp in one of several layouts. Time-only inputs
 // (e.g. "15:04", "3:04PM") are completed with today's local date.
 func Parse(s string) (time.Time, error) {
-	t, _, _, err := ParsePartial(s)
+	t, _, _, _, err := ParsePartial(s)
 	return t, err
 }
 
@@ -309,36 +345,32 @@ func Parse(s string) (time.Time, error) {
 const timePrefixDelim = ": "
 
 // SplitTimePrefix detects a leading time/date token in s. If the text before
-// the first ": " parses as a timestamp via Parse, it returns the parsed time,
-// the remaining text (whitespace-trimmed), and ok=true. Otherwise it returns
-// the zero time, s unchanged, and ok=false.
-func SplitTimePrefix(s string) (t time.Time, rest string, ok bool) {
+// the first ": " parses as a timestamp, it returns the parsed time, that token
+// (whitespace-trimmed), the remaining text (likewise), whether the clock the
+// token names exists locally, and ok=true. Otherwise it returns the zero time,
+// an empty prefix, s unchanged, and ok=false.
+//
+// The prefix is returned rather than consumed silently so a caller warning
+// about a skipped clock can name the very text the user typed.
+func SplitTimePrefix(s string) (t time.Time, prefix, rest string, exists, ok bool) {
 	before, after, found := strings.Cut(s, timePrefixDelim)
 	if !found {
-		return time.Time{}, s, false
+		return time.Time{}, "", s, false, false
 	}
-	t, err := Parse(strings.TrimSpace(before))
+	before = strings.TrimSpace(before)
+	t, _, _, exists, err := ParsePartial(before)
 	if err != nil {
-		return time.Time{}, s, false
+		return time.Time{}, "", s, false, false
 	}
-	return t, strings.TrimSpace(after), true
-}
-
-// ParseDate accepts a date-only input (YYYY-MM-DD) and returns the start of
-// that day in the local timezone.
-func ParseDate(s string) (time.Time, error) {
-	t, err := time.ParseInLocation(DateFormat, s, time.Local)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("unrecognized date %q (expected YYYY-MM-DD)", s)
-	}
-	return t, nil
+	return t, before, strings.TrimSpace(after), exists, true
 }
 
 // SpliceTime returns orig with its wall-clock time replaced by the
 // hour/minute/second/nanosecond of newTime. Date and timezone come from
-// orig.
-func SpliceTime(orig, newTime time.Time) time.Time {
-	return time.Date(
+// orig. exists is false when the result is not the clock that was asked for
+// — see localClock.
+func SpliceTime(orig, newTime time.Time) (t time.Time, exists bool) {
+	return localClock(
 		orig.Year(), orig.Month(), orig.Day(),
 		newTime.Hour(), newTime.Minute(), newTime.Second(), newTime.Nanosecond(),
 		orig.Location(),
@@ -346,11 +378,30 @@ func SpliceTime(orig, newTime time.Time) time.Time {
 }
 
 // SpliceDate returns orig with its date replaced by the year/month/day of
-// newDate. Wall-clock time and timezone come from orig.
-func SpliceDate(orig, newDate time.Time) time.Time {
-	return time.Date(
+// newDate. Wall-clock time and timezone come from orig. exists is false when
+// the result is not the clock that was asked for — see localClock.
+func SpliceDate(orig, newDate time.Time) (t time.Time, exists bool) {
+	return localClock(
 		newDate.Year(), newDate.Month(), newDate.Day(),
 		orig.Hour(), orig.Minute(), orig.Second(), orig.Nanosecond(),
 		orig.Location(),
 	)
+}
+
+// localClock builds a wall clock in loc and reports whether that clock exists
+// there — the single gate every wall clock in this package is assembled
+// through. time.Date does not fail on a timestamp that a DST spring-forward
+// skipped: 02:30 on 2026-03-08 in America/New_York comes back as 01:30 EST, an
+// hour earlier than asked for, and every caller stored it and reported success.
+// Neither does time.ParseInLocation, which is why parsePartial reads the clock
+// in UTC first and rebuilds it here.
+//
+// The fall-back case counts as existing. A clock that occurs twice resolves to
+// the first (still-DST) offset, so the user gets the stamp they typed; which of
+// the two they meant is unknowable and the displayed time is right either way.
+func localClock(year int, month time.Month, day, hour, minute, sec, nsec int, loc *time.Location) (time.Time, bool) {
+	t := time.Date(year, month, day, hour, minute, sec, nsec, loc)
+	exists := t.Year() == year && t.Month() == month && t.Day() == day &&
+		t.Hour() == hour && t.Minute() == minute && t.Second() == sec
+	return t, exists
 }

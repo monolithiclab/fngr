@@ -201,13 +201,45 @@ func TestListCmd_Reverse(t *testing.T) {
 		}
 	}
 
-	cmd := &ListCmd{Format: "flat", Limit: 1, Reverse: true}
+	cmd := &ListCmd{Format: "flat", Reverse: true}
 	if err := cmd.Run(s, io); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	got := out.String()
-	if !strings.Contains(got, "alpha") {
-		t.Errorf("reverse sort: expected alpha first, got:\n%s", got)
+	if !strings.HasPrefix(got, "1 ") || !strings.Contains(got, "alpha") {
+		t.Errorf("reverse sort: expected alpha (id 1) first, got:\n%s", got)
+	}
+}
+
+// TestListCmd_ReverseKeepsTheNewestUnderALimit pins the interaction the two
+// flags used to get wrong together: -r is a display-order toggle, so `fngr -n 2
+// -r` means the newest two shown oldest-first, not the two oldest events in the
+// database.
+func TestListCmd_ReverseKeepsTheNewestUnderALimit(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, out := newTestIO("")
+
+	base := time.Date(2026, 4, 20, 9, 0, 0, 0, time.Local)
+	for i, text := range []string{"alpha", "beta", "gamma"} {
+		at := base.AddDate(0, 0, i)
+		if _, err := s.Add(context.Background(), event.AddInput{Title: text, CreatedAt: &at, Meta: []parse.Meta{
+			{Key: "author", Value: "alice"},
+		}}); err != nil {
+			t.Fatalf("Add %s: %v", text, err)
+		}
+	}
+
+	cmd := &ListCmd{Format: "flat", Limit: 2, Reverse: true}
+	if err := cmd.Run(s, io); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	got := out.String()
+	if strings.Contains(got, "alpha") {
+		t.Errorf("limit took the oldest events, not the newest:\n%s", got)
+	}
+	if i, j := strings.Index(got, "beta"), strings.Index(got, "gamma"); i < 0 || j < 0 || i > j {
+		t.Errorf("want beta before gamma (oldest-first display), got:\n%s", got)
 	}
 }
 
@@ -311,5 +343,124 @@ func TestListCmd_NoPagerStillRendersToBuffer(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "evt") {
 		t.Errorf("expected 'evt' in output, got %q", out.String())
+	}
+}
+
+// TestListCmd_FromBound pins M12 for --from: the flag used to go through a
+// date-only parser, so it rejected relative forms *and* the RFC 3339 stamp
+// fngr's own --format=json emits — a created_at value could not be pasted back.
+func TestListCmd_FromBound(t *testing.T) {
+	t.Parallel()
+	yesterday := time.Now().AddDate(0, 0, -1)
+	y, m, d := yesterday.Date()
+
+	tests := []struct {
+		name string
+		in   string
+		want time.Time
+	}{
+		{"bare date floors to midnight", "2026-04-22", time.Date(2026, 4, 22, 0, 0, 0, 0, time.Local)},
+		{"clock is taken verbatim", "2026-04-22 14:30", time.Date(2026, 4, 22, 14, 30, 0, 0, time.Local)},
+		{"fngr's own RFC 3339 output", "2026-04-22T14:30:00Z", time.Date(2026, 4, 22, 14, 30, 0, 0, time.UTC)},
+		{"relative day floors to midnight", "yesterday", time.Date(y, m, d, 0, 0, 0, 0, time.Local)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			opts, err := (&ListCmd{From: tt.in}).toListOpts()
+			if err != nil {
+				t.Fatalf("--from %q: %v", tt.in, err)
+			}
+			if opts.From == nil || !opts.From.Equal(tt.want) {
+				t.Errorf("--from %q = %v, want %v", tt.in, opts.From, tt.want)
+			}
+		})
+	}
+}
+
+// TestListCmd_ToBound is the --from mirror, plus the inclusivity the help text
+// promises: the store compares created_at < To, so each bound is the first
+// instant past what was named.
+func TestListCmd_ToBound(t *testing.T) {
+	t.Parallel()
+	y, m, d := time.Now().Date()
+
+	tests := []struct {
+		name string
+		in   string
+		want time.Time
+	}{
+		{"bare date ends at the next midnight", "2026-04-22", time.Date(2026, 4, 23, 0, 0, 0, 0, time.Local)},
+		{"clock includes its own second", "2026-04-22 14:30", time.Date(2026, 4, 22, 14, 30, 1, 0, time.Local)},
+		{"fngr's own RFC 3339 output", "2026-04-22T14:30:00Z", time.Date(2026, 4, 22, 14, 30, 1, 0, time.UTC)},
+		{"relative day ends at the next midnight", "today", time.Date(y, m, d+1, 0, 0, 0, 0, time.Local)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			opts, err := (&ListCmd{To: tt.in}).toListOpts()
+			if err != nil {
+				t.Fatalf("--to %q: %v", tt.in, err)
+			}
+			if opts.To == nil || !opts.To.Equal(tt.want) {
+				t.Errorf("--to %q = %v, want %v", tt.in, opts.To, tt.want)
+			}
+		})
+	}
+}
+
+// TestListCmd_WarnsOnEmptyRange covers the other half of M12: an inverted or
+// empty range returns nothing at exit 0, which reads exactly like a journal
+// with no events in the window.
+func TestListCmd_WarnsOnEmptyRange(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		from, to string
+		wantWarn bool
+	}{
+		{"inverted", "2026-04-22", "2026-01-01", true},
+		{"same clock", "2026-04-22 14:30", "2026-04-22 14:30", false},
+		{"same day", "2026-04-22", "2026-04-22", false},
+		{"ordered", "2026-01-01", "2026-04-22", false},
+		{"only from", "2026-04-22", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			s := newTestStore(t)
+			io, _, errBuf := newTestIOFull("", false)
+
+			cmd := &ListCmd{Format: "flat", From: tt.from, To: tt.to, NoPager: true}
+			if err := cmd.Run(s, io); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if got := strings.Contains(errBuf.String(), "empty range"); got != tt.wantWarn {
+				t.Errorf("warned = %v, want %v (stderr: %q)", got, tt.wantWarn, errBuf.String())
+			}
+		})
+	}
+}
+
+// TestListCmd_ToIsInclusiveOfItsSecond is the store-level consequence of the
+// --to arithmetic: an event stamped exactly at the bound must come back.
+func TestListCmd_ToIsInclusiveOfItsSecond(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, out := newTestIO("")
+
+	at := time.Date(2026, 4, 22, 14, 30, 0, 0, time.Local)
+	if _, err := s.Add(context.Background(), event.AddInput{Title: "on the bound", CreatedAt: &at, Meta: []parse.Meta{
+		{Key: "author", Value: "alice"},
+	}}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	cmd := &ListCmd{Format: "flat", From: "2026-04-22 14:30", To: "2026-04-22 14:30", NoPager: true}
+	if err := cmd.Run(s, io); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !strings.Contains(out.String(), "on the bound") {
+		t.Errorf("event stamped at the bound was excluded: %q", out.String())
 	}
 }

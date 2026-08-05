@@ -952,9 +952,9 @@ func ListMeta(ctx context.Context, db *sql.DB, opts ListMetaOpts) ([]MetaCount, 
 type ListOpts struct {
 	Filter    string
 	From      *time.Time // inclusive lower bound
-	To        *time.Time // exclusive upper bound (compute end-of-day in caller)
-	Limit     int        // 0 means no limit
-	Ascending bool       // oldest first when true; default is newest first
+	To        *time.Time // exclusive upper bound (caller rounds up past what it means to include)
+	Limit     int        // 0 means no limit; a limit always keeps the newest N
+	Ascending bool       // display order only: oldest first when true
 }
 
 // ListSeq yields events matching opts one at a time, accumulating
@@ -1058,7 +1058,13 @@ func buildListQuery(opts ListOpts) (string, []any, error) {
 		args = append(args, timefmt.FormatStorage(*opts.To))
 	}
 
-	if opts.Ascending {
+	// A Limit always keeps the newest N, and Ascending only decides how they
+	// are displayed — so the inner sort is free to follow Ascending only when
+	// there is no limit for it to select through. Sorting ascending before
+	// LIMIT would let the display flag choose *which* rows survive, and
+	// `fngr -n 20 -r` — read by anyone as "recent activity, chronological" —
+	// returned the 20 oldest events in the database.
+	if opts.Ascending && opts.Limit == 0 {
 		query += " ORDER BY e.created_at ASC"
 	} else {
 		query += " ORDER BY e.created_at DESC"
@@ -1066,8 +1072,15 @@ func buildListQuery(opts ListOpts) (string, []any, error) {
 	if opts.Limit > 0 {
 		query += " LIMIT ?"
 		args = append(args, opts.Limit)
+		if opts.Ascending {
+			// SELECT * rather than the column list again: the subquery already
+			// fixes both the columns and their order, and restating them here
+			// is a second place to update when the base query grows one.
+			// SQLite cannot flatten this, so `-n N -r` buffers N rows before
+			// yielding any — the one case where ListSeq is not O(1) memory.
+			query = "SELECT * FROM (" + query + ") ORDER BY created_at ASC"
+		}
 	}
-
 	return query, args, nil
 }
 

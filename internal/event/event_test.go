@@ -1084,13 +1084,72 @@ func TestList_LimitAndSort(t *testing.T) {
 		t.Errorf("default limit got %d events, first=%q; want 2 starting with 'evt 4'", len(desc), desc[0].Title)
 	}
 
+	// Ascending decides the display order, never which rows survive the
+	// limit: both of these are the newest two events, oldest-first. Applying
+	// ORDER BY before LIMIT in one statement used to return evt 0 and evt 1.
 	asc, err := List(ctx, database, ListOpts{Limit: 2, Ascending: true})
 	if err != nil {
 		t.Fatalf("List ascending limit: %v", err)
 	}
-	if len(asc) != 2 || asc[0].Title != "evt 0" {
-		t.Errorf("ascending limit got %d events, first=%q; want 2 starting with 'evt 0'", len(asc), asc[0].Title)
+	if len(asc) != 2 || asc[0].Title != "evt 3" || asc[1].Title != "evt 4" {
+		t.Errorf("ascending limit got %v; want [evt 3, evt 4]", titlesOf(asc))
 	}
+}
+
+// TestList_LimitAndSortWithFilter pins that the newest-N subquery composes with
+// a compiled -S filter rather than losing its WHERE clause to the wrapper, and
+// that ListSeq — which shares buildListQuery — gets the same rows as List.
+func TestList_LimitAndSortWithFilter(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	// keep 0, skip 1, keep 2, skip 3, keep 4 — oldest to newest.
+	for i := range 5 {
+		title := fmt.Sprintf("keep %d", i)
+		if i%2 == 1 {
+			title = fmt.Sprintf("skip %d", i)
+		}
+		if _, err := database.Exec(
+			"INSERT INTO events (title, created_at) VALUES (?, ?)",
+			title, fmt.Sprintf("2026-01-0%d 10:00:00", i+1),
+		); err != nil {
+			t.Fatalf("seed event %d: %v", i, err)
+		}
+		if _, err := database.Exec("INSERT INTO events_fts (rowid, content) VALUES (?, ?)", i+1, title); err != nil {
+			t.Fatalf("seed FTS %d: %v", i, err)
+		}
+	}
+
+	opts := ListOpts{Filter: "keep", Limit: 2, Ascending: true}
+	want := []string{"keep 2", "keep 4"}
+
+	got, err := List(ctx, database, opts)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if !slices.Equal(titlesOf(got), want) {
+		t.Errorf("List got %v, want %v", titlesOf(got), want)
+	}
+
+	var streamed []Event
+	for ev, err := range ListSeq(ctx, database, opts) {
+		if err != nil {
+			t.Fatalf("ListSeq: %v", err)
+		}
+		streamed = append(streamed, ev)
+	}
+	if !slices.Equal(titlesOf(streamed), want) {
+		t.Errorf("ListSeq got %v, want %v", titlesOf(streamed), want)
+	}
+}
+
+// titlesOf renders an event slice for failure messages.
+func titlesOf(events []Event) []string {
+	out := make([]string, len(events))
+	for i, ev := range events {
+		out[i] = ev.Title
+	}
+	return out
 }
 
 func TestList_LoadMetaAcrossChunkBoundary(t *testing.T) {

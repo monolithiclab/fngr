@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/monolithiclab/fngr/internal/event"
 	"github.com/monolithiclab/fngr/internal/parse"
@@ -118,7 +117,7 @@ type EventTimeCmd struct {
 func (c *EventTimeCmd) Run(s eventStore, io ioStreams) error {
 	ctx := context.Background()
 
-	parsed, hasDate, hasTime, err := timefmt.ParsePartial(c.Value)
+	parsed, hasDate, hasTime, exists, err := timefmt.ParsePartial(c.Value)
 	if err != nil {
 		return fmt.Errorf("event time: %w", err)
 	}
@@ -126,16 +125,18 @@ func (c *EventTimeCmd) Run(s eventStore, io ioStreams) error {
 		return fmt.Errorf("event time: expected a time or full timestamp, got date-only %q", c.Value)
 	}
 
-	var when time.Time
-	if hasDate {
-		when = parsed
-	} else {
+	// A full timestamp replaces both halves; a bare clock splices into the
+	// stored date, which can land it on a day whose zone skips that hour even
+	// though the clock itself was fine.
+	when := parsed
+	if !hasDate {
 		ev, err := s.Get(ctx, c.ID)
 		if err != nil {
 			return err
 		}
-		when = timefmt.SpliceTime(ev.CreatedAt.Local(), parsed)
+		when, exists = timefmt.SpliceTime(ev.CreatedAt.Local(), parsed)
 	}
+	warnSkippedClock(io.Err, exists, c.Value, when)
 
 	if err := s.Update(ctx, c.ID, nil, nil, &when); err != nil {
 		return err
@@ -154,7 +155,7 @@ type EventDateCmd struct {
 func (c *EventDateCmd) Run(s eventStore, io ioStreams) error {
 	ctx := context.Background()
 
-	parsed, hasDate, hasTime, err := timefmt.ParsePartial(c.Value)
+	parsed, hasDate, hasTime, exists, err := timefmt.ParsePartial(c.Value)
 	if err != nil {
 		return fmt.Errorf("event date: %w", err)
 	}
@@ -162,16 +163,17 @@ func (c *EventDateCmd) Run(s eventStore, io ioStreams) error {
 		return fmt.Errorf("event date: expected a date or full timestamp, got time-only %q", c.Value)
 	}
 
-	var when time.Time
-	if hasTime {
-		when = parsed
-	} else {
+	// Mirror of EventTimeCmd: a bare date keeps the stored clock, which the
+	// new date's zone may not have.
+	when := parsed
+	if !hasTime {
 		ev, err := s.Get(ctx, c.ID)
 		if err != nil {
 			return err
 		}
-		when = timefmt.SpliceDate(ev.CreatedAt.Local(), parsed)
+		when, exists = timefmt.SpliceDate(ev.CreatedAt.Local(), parsed)
 	}
+	warnSkippedClock(io.Err, exists, c.Value, when)
 
 	if err := s.Update(ctx, c.ID, nil, nil, &when); err != nil {
 		return err
