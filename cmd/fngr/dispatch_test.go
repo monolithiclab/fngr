@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/alecthomas/kong"
+
+	"github.com/monolithiclab/fngr/internal/event"
 )
 
 // dispatch parses argv, sets up the same bindings main() does, and runs the
@@ -101,6 +103,14 @@ func newDispatcher(t *testing.T) func(argv []string) (string, error) {
 // `newDispatcher` are wrappers around it.
 func newDispatcherIO(t *testing.T, stdin string, isTTY bool) func(argv []string) (string, error) {
 	t.Helper()
+	return newDispatcherOn(t, newTestStore(t), stdin, isTTY)
+}
+
+// newDispatcherOn is newDispatcherIO over a caller-supplied store, for tests
+// that also have to reach past the CLI to the database — forging a corrupt
+// parent chain, say, which no fngr command can produce.
+func newDispatcherOn(t *testing.T, store *event.Store, stdin string, isTTY bool) func(argv []string) (string, error) {
+	t.Helper()
 
 	var cli CLI
 	parser, err := kong.New(&cli,
@@ -114,7 +124,6 @@ func newDispatcherIO(t *testing.T, stdin string, isTTY bool) func(argv []string)
 		t.Fatalf("kong.New: %v", err)
 	}
 
-	store := newTestStore(t)
 	return func(argv []string) (string, error) {
 		kctx, err := parser.Parse(argv)
 		if err != nil {
@@ -506,6 +515,62 @@ func TestKongDispatch_SearchFilter(t *testing.T) {
 			t.Fatal(`-S "!" succeeded, want a syntax error`)
 		}
 	})
+}
+
+// TestKongDispatch_CorruptParentChain is the M2 guard at the CLI. A cyclic
+// parent chain — which fngr cannot write, but which `db.ResolvePath` will
+// happily pick up from someone else's `.fngr.db` in the current directory —
+// used to produce, in order: an empty listing at exit 0, a subtree query that
+// spun until killed, and an attach that did the same inside an open
+// transaction. Every event must be shown, and the two traversals must come
+// back with an error naming the problem.
+func TestKongDispatch_CorruptParentChain(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	run := newDispatcherOn(t, store, "", true)
+
+	for _, argv := range [][]string{
+		{"add", "first half"},
+		{"add", "second half", "--parent", "1"},
+		{"add", "bystander"},
+	} {
+		if _, err := run(argv); err != nil {
+			t.Fatalf("%v: %v", argv, err)
+		}
+	}
+	if _, err := store.DB.Exec("UPDATE events SET parent_id = 2 WHERE id = 1"); err != nil {
+		t.Fatalf("forge cycle: %v", err)
+	}
+
+	out, err := run([]string{"--no-pager"})
+	if err != nil {
+		t.Fatalf("bare fngr: %v", err)
+	}
+	for _, want := range []string{"first half", "second half", "bystander"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("bare fngr dropped %q from the listing:\n%s", want, out)
+		}
+	}
+
+	// Both traversals must fail loudly, and each must name the way out —
+	// an error that only says "corrupt" leaves the user with a database
+	// they cannot read and no next move.
+	for _, tt := range []struct {
+		name string
+		argv []string
+	}{
+		{"subtree", []string{"event", "1", "-t"}},
+		{"attach", []string{"event", "attach", "3", "1"}},
+	} {
+		_, err := run(tt.argv)
+		if !errors.Is(err, event.ErrCorruptTree) {
+			t.Errorf("%s err = %v, want ErrCorruptTree", tt.name, err)
+			continue
+		}
+		if !strings.Contains(err.Error(), "fngr event detach") {
+			t.Errorf("%s err = %q, want it to point at detach", tt.name, err)
+		}
+	}
 }
 
 // TestKongDispatch_TagSurvivesBodyEdit walks the M1 report verbatim through

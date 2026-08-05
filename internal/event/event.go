@@ -25,6 +25,12 @@ var ErrCycle = errors.New("would create a parent cycle")
 // storage format.
 var ErrTimeRange = errors.New("timestamp out of range")
 
+// ErrCorruptTree is returned when a parent chain already in the database loops
+// back on itself. Distinct from ErrCycle: that one refuses a requested change,
+// this one reports a file that was already broken — by a hand edit or a partial
+// write, since Reparent is the only writer of parent_id and refuses.
+var ErrCorruptTree = errors.New("corrupt parent chain")
+
 // Event is a single journal entry as stored, complete with its parsed
 // metadata. CreatedAt is in UTC at the SQL boundary; renderers convert
 // to local time for display.
@@ -426,6 +432,13 @@ func Reparent(ctx context.Context, db *sql.DB, id int64, newParent *int64) error
 		}
 
 		// Walk ancestry from *newParent upward; reject if we hit id.
+		//
+		// The seen set is not part of that check — it bounds the walk. A
+		// cycle *upstream* of the chain never contains id, so the id test
+		// alone never fires and the loop spins forever, at full CPU, inside
+		// this open transaction. (A walk starting inside the cycle does hit
+		// id and stops, which is why this looks safe until it isn't.)
+		seen := map[int64]struct{}{*newParent: {}}
 		cursor := *newParent
 		for {
 			var parent sql.NullInt64
@@ -442,6 +455,10 @@ func Reparent(ctx context.Context, db *sql.DB, id int64, newParent *int64) error
 			if parent.Int64 == id {
 				return fmt.Errorf("attaching event %d to event %d would form a cycle: %w", id, *newParent, ErrCycle)
 			}
+			if _, repeat := seen[parent.Int64]; repeat {
+				return fmt.Errorf("ancestry of event %d revisits event %d: %w", *newParent, parent.Int64, ErrCorruptTree)
+			}
+			seen[parent.Int64] = struct{}{}
 			cursor = parent.Int64
 		}
 
@@ -1056,12 +1073,22 @@ func buildListQuery(opts ListOpts) (string, []any, error) {
 
 // GetSubtree returns the event with id == rootID plus every transitive
 // descendant via parent_id, sorted by created_at ascending. Returns
-// ErrNotFound when no event has id == rootID.
+// ErrNotFound when no event has id == rootID, and ErrCorruptTree when the
+// descendants loop back on themselves.
+//
+// The recursive term is UNION, not UNION ALL. On a cyclic parent chain an
+// UNION ALL does not merely recurse deeply — it never terminates, producing no
+// output and no error while pinning a core until the process is killed. UNION
+// discards a row already in the result, so going round the loop a second time
+// adds nothing and the queue drains. On a well-formed tree the two are
+// identical (id is the primary key, so no two rows can collide) and UNION costs
+// ~15% for the dedup index; that buys termination on the one input that hangs.
 func GetSubtree(ctx context.Context, db *sql.DB, rootID int64) ([]Event, error) {
 	rows, err := db.QueryContext(ctx, `
 		WITH RECURSIVE subtree AS (
-			SELECT id, parent_id, title, body, created_at FROM events WHERE id = ?
-			UNION ALL
+			SELECT id, parent_id, title, body, created_at
+			FROM events WHERE id = ?
+			UNION
 			SELECT e.id, e.parent_id, e.title, e.body, e.created_at
 			FROM events e JOIN subtree s ON e.parent_id = s.id
 		)
@@ -1078,6 +1105,28 @@ func GetSubtree(ctx context.Context, db *sql.DB, rootID int64) ([]Event, error) 
 	}
 	if len(events) == 0 {
 		return nil, fmt.Errorf("event %d: %w", rootID, ErrNotFound)
+	}
+
+	// Terminating is not the same as answering, so say so rather than hand
+	// back a "subtree" of a graph that has no such thing. A cycle is only
+	// ever reachable from a member of it — every member's parent is another
+	// member, so no descent from outside can enter one — which reduces the
+	// whole test to whether rootID's own parent came back as one of rootID's
+	// descendants. If it did, following parent_id from rootID returns to
+	// rootID.
+	ids := make(map[int64]struct{}, len(events))
+	var root Event
+	for _, ev := range events {
+		ids[ev.ID] = struct{}{}
+		if ev.ID == rootID {
+			root = ev
+		}
+	}
+	if root.ParentID != nil {
+		if _, loops := ids[*root.ParentID]; loops {
+			return nil, fmt.Errorf("subtree of event %d loops back through event %d: %w",
+				rootID, *root.ParentID, ErrCorruptTree)
+		}
 	}
 	return events, nil
 }

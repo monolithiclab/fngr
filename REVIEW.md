@@ -38,7 +38,7 @@ under concurrent writes, and the README states the opposite.**
 | [H6](#h6) | High | cmd | `confirm` still blocks forever on an idle pipe — H4's hazard, surviving in the other stdin reader | ⛔ won't fix |
 | [H7](#h7) | High | cmd | `-e` under a non-TTY launches an editor that cannot run, discarding the piped body | ✅ fixed |
 | [M1](#m1) | Medium | event | Body-tag sync silently deletes operator-added meta | ✅ fixed |
-| [M2](#m2) | Medium | event | Parent cycle → two non-terminating loops + a silent total data blackout | open |
+| [M2](#m2) | Medium | event | Parent cycle → two non-terminating loops + a silent total data blackout | ✅ fixed |
 | [M3](#m3) | Medium | event | Nothing enforces a single `author`; display picks whichever sorts first | ✅ fixed |
 | [M4](#m4) | Medium | parse | Email addresses mint bogus `people` tags | ✅ fixed |
 | [M5](#m5) | Medium | timefmt | `"1 month ago"` on the 31st lands in the wrong month; int64 overflow yields a *future* time | ✅ fixed |
@@ -1132,6 +1132,72 @@ the event count, returning a "corrupt parent chain" error; add a depth column
 `roots` is empty but `events` is not, promote all events to roots so data can
 never silently disappear.
 
+**Resolved,** all three, behind a new `ErrCorruptTree` sentinel kept distinct
+from `ErrCycle`: one says the operation was refused, the other says the file
+was already broken before anyone asked for anything.
+
+- **`Reparent`** carries a `seen` set, *seeded with the starting node* so the
+  one-event self-parent cycle is caught on its first hop. The nuance recorded
+  above is exactly right and is now written into the code comment, because the
+  walk reads as safe until you notice that the `parent == id` check only fires
+  for a cycle the moving event is *in*.
+- **`GetSubtree`** switches its recursive term from `UNION ALL` to `UNION`,
+  which is SQLite's own answer to recursion over a cyclic graph: a row already
+  in the result is discarded, so a second lap adds nothing and the queue
+  drains. On a well-formed tree the two are identical — `id` is the primary
+  key, so no two rows can collide — and the dedup index costs ~15% (0.175 s vs
+  0.152 s over a 200 000-event subtree).
+
+  The report's suggested `WHERE depth < N` was implemented first and then
+  replaced. It works, but it terminates by *exhaustion* rather than by
+  noticing the loop: measured on a 5 000-row table with a 3-cycle and 300
+  events hanging below it, the bounded `UNION ALL` materialises 505 104 rows
+  where `UNION` returns 303 — and every one of those rows becomes a Go struct
+  and goes through `loadMetaBatch` before anything checks for the cycle. The
+  cost curve is O(N × subtree), the same shape as the bug. It also needed a
+  second, unsynchronised `SELECT COUNT(*)`, whose stale-low result would
+  silently truncate a legitimate deep subtree — the one outcome the fix was
+  supposed to make impossible.
+
+  So the report is right that "a depth cap is the wrong fix", and more broadly
+  right than first credited: with `UNION` there is no cap to get wrong.
+  Detection is separate and exact. A cycle is reachable only when the queried
+  root is itself a member — every member's parent is another member, so no
+  descent from outside can enter one — which reduces the whole test to whether
+  the root's own parent came back among its descendants. (The first draft of
+  the test got this wrong and built an unreachable case.) Terminating is not
+  answering: a "subtree" of a cyclic graph is not a well-defined thing, so it
+  returns `ErrCorruptTree` rather than a plausible deduped loop.
+- **`render.Tree`** no longer has a root-less blackout. `treeWriter.visited`
+  skips a node already drawn — impossible in a real tree, one parent each —
+  so the recursion cannot follow a cycle round forever, and a sweep over
+  `events` after the root walk draws anything it never reached as an orphan.
+  That is the same claim the orphan marker already makes ("this has a parent
+  you cannot see from here") rather than a special case for `len(roots) == 0`.
+  `visited` is a `[]bool` indexed through the existing `byID`, not a map: a map
+  put 148 KB/op back on the 5 000-deep benchmark that [H2](#h2) exists to hold
+  down, and the slice gives that back (1 490 469 B/op against a pre-fix
+  1 485 048).
+
+The one thing the report did not ask for and the fix needs: a way out.
+`withRepairHint` in `cmd/fngr/event.go` — mirroring the existing
+`withGrammarHint` — appends `fngr event detach <id>` to any `ErrCorruptTree`.
+Every such message names an event on the loop, and detaching one breaks it;
+`Reparent`'s nil branch clears `parent_id` without walking anything, so the
+repair works on exactly the database the traversal could not survive. Without
+it the user is left holding a journal they cannot read and no next move. No
+`fngr doctor` command: `detach` already is one.
+
+Guarded by `TestReparent_CorruptAncestryTerminates` (two shapes, both under a
+deadline context so a regression reports the wrong error in seconds instead of
+hanging the package for ten minutes), `TestGetSubtree_CorruptChainTerminates`
+(three shapes), `TestGetSubtree_DeepChainIsNotTruncated` (a whole table in one
+chain — the deepest recursion the row count allows),
+`TestTree_CycleStillRendersEveryEvent`, `TestTree_CycleBesideRealRoots`,
+`TestTree_CycleWriteError`, and `TestKongDispatch_CorruptParentChain`, which
+reproduces all three original symptoms end to end and asserts the hint reaches
+the user.
+
 <a name="m3"></a>
 ### M3 — Nothing enforces a single `author`
 
@@ -1690,10 +1756,10 @@ Grouped; each is small and independently actionable.
   header row, md prints nothing. Fine for scripting; currently undiscoverable.
 - `fngr meta` column alignment flips with `-S`: unfiltered pads the key
   (`author  =nico`), filtered doesn't (`tag=bugfix`). Same renderer, two looks.
-- `render.Tree` on a limit-orphaned or cycle-broken set prints nothing at exit
-  0 — see [M2](#m2) and [M8](#m8) for the underlying causes. (The
-  limit-orphaned half is fixed: those events now render, marked. A cycle still
-  blanks the output — that is [M2](#m2).)
+- ~~`render.Tree` on a limit-orphaned or cycle-broken set prints nothing at
+  exit 0~~ — both halves fixed. Limit-orphaned events render with the marker
+  ([M8](#m8)); cycle members are swept up as orphans rather than silently
+  dropped ([M2](#m2)).
 
 **Errors and exit codes**
 
@@ -2130,7 +2196,7 @@ below the table). Each entry states why so we don't re-propose it.
 | Unify confirm-prompt defaults across delete/meta verbs | Deliberate asymmetry: destructive verbs default `[y/N]`; rename defaults `[Y/n]`. **Note:** [H5](#h5) is a *different* issue — EOF being read as consent — and is not covered by this entry. |
 | Show before/after diff before `event text` commits | `event N` is the canonical inspection tool. The user explicitly chose "no prompts on event verbs" during the S2 brainstorm. |
 | `deleteMetaTuples` / `insertMetaTuples` vs `RemoveTags`/`AddTags` | The private helpers run inside an existing `tx`; the public functions own the tx + existence check + FTS rebuild. Sharing them would leak `*sql.Tx` into the public API. |
-| Recursive-CTE rewrite of `event.Reparent`'s ancestry loop | SQLite is in-process; per-row `SELECT parent_id` calls are microseconds. The loop is clearer for the cycle-detection semantics. **Note:** [M2](#m2) asks for a *bound* on that loop, not a rewrite. |
+| Recursive-CTE rewrite of `event.Reparent`'s ancestry loop | SQLite is in-process; per-row `SELECT parent_id` calls are microseconds. The loop is clearer for the cycle-detection semantics. **Note:** [M2](#m2) asked for a *bound* on that loop, not a rewrite, and got one — a `seen` set. Still no CTE. |
 | Comment-strip `git commit`-style editor template | Deliberately rejected during brainstorming (Q4 of body-input modes). Adds parsing surface for marginal gain. |
 | Hardcoded editor fallback (`vi`/`nano`) | Minimal containers / CI may lack the chosen fallback; better to fail loudly than wedge the user into an unfamiliar editor. |
 | Drop `t.Parallel()` from add-editor dispatch case | Race detector clean across 10+ iterations; the swap window is narrow and `TestResolveBody` inner subtests are sequential. |
