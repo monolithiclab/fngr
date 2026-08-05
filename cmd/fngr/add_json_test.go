@@ -148,7 +148,7 @@ func TestJSONInputToAddInput(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := jsonInputToAddInput(tc.in, tc.defaults, tc.author, 0, nil)
+			got, _, err := jsonInputToAddInput(tc.in, tc.defaults, tc.author, 0, nil)
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 					t.Fatalf("err = %v, want substring %q", err, tc.wantErr)

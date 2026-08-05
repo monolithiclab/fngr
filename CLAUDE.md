@@ -37,7 +37,13 @@ make ci             # codefix + format + lint + test
   `fngr add` in a TTY auto-launches `$VISUAL`/`$EDITOR`. In text mode, when `--time` is absent, a leading
   time/date token in the title delimited by `": "` (colon+space, so times like `9:30` survive)
   is parsed via `timefmt.SplitTimePrefix` and stripped — `fngr add "9:30: had coffee"` stores
-  title `had coffee` at 09:30 today; `--time` overrides and leaves the title verbatim. With
+  title `had coffee` at 09:30 today; `--time` overrides and leaves the title verbatim. `list`
+  accepts the same grammar on `--from`/`--to` (`cmd/fngr/list.go::parseBound` delegates to
+  `timefmt.ParsePartial`, so an RFC 3339 stamp copied out of `--format=json` pastes straight
+  back in). `ListOpts.To` is exclusive, so `--to` is turned into the first instant *past* what
+  was named — next second for a clock, next midnight for a bare date — which is what makes it
+  read as inclusive at both granularities; `--from >= --to` warns on stderr rather than
+  returning nothing at exit 0. With
   `--format=json` the body is parsed as a
   JSON event record (or array) by `cmd/fngr/add_json.go`; per-record defaults flow JSON value
   > CLI flag > built-in. `event` hosts a sub-command tree: `fngr event N`
@@ -55,6 +61,16 @@ make ci             # codefix + format + lint + test
   stdin has no answer to give (see `cmd/fngr/prompt.go`).
 - `cmd/fngr/store.go` — Defines the narrow `eventStore` interface that commands depend on plus the
   injectable `ioStreams` (`In io.Reader`, `Out io.Writer`, `Err io.Writer`, `IsTTY bool`).
+- `cmd/fngr/clock.go` — `warnSkippedClock(w, exists, asked, stored)`, the single formatter for the
+  DST-gap warning described under `internal/timefmt`. Called by `add` (both `--time` and the title
+  prefix), by `event time` / `event date`, and by the `--format=json` import (`buildCLIDefaults`
+  for the shared `--time`, `runJSON` for each record's `created_at`) — every path that turns a
+  wall clock the user typed into a stored timestamp. A warning on stderr, never a refusal: the
+  shifted instant is a real one and almost certainly the intended entry, so failing would leave
+  nothing useful to type instead. A caller that cannot be contradicted (no timestamp given, or an
+  RFC 3339 stamp, which names an instant rather than a local clock) passes `exists = true` and it
+  is a no-op. The import quotes only the *first* offending record and appends a count for the
+  rest: a batch runs to 10 000 records and one line each would bury the result.
 - `cmd/fngr/prompt.go` — `confirm(in, out, prompt, defaultVal) (bool, error)` shared yes/no helper.
   An empty answer takes `defaultVal`, but end-of-input with *nothing typed* returns `errNoAnswer`
   instead: a closed or empty stdin (cron, CI, `</dev/null`) is silence, not consent, and the
@@ -155,14 +171,33 @@ make ci             # codefix + format + lint + test
 - `internal/timefmt/timefmt.go` — Single source of truth for accepted time inputs. `Parse` returns
   just the parsed timestamp; `ParsePartial` also reports whether the input had a date and/or time
   component, so `event time` / `event date` can splice into an existing timestamp instead of
-  replacing it. `ParsePartial` first tries `parseRelative` (now/today/yesterday, `N
+  replacing it, plus whether the clock it resolved actually `exists` (below). `ParsePartial` first
+  tries `parseRelative` (now/today/yesterday, `N
   {minute|hour|day|week|month}s ago`, `<day> at <time>`; `a`/`an` count as 1) anchored on a passed-in
   `now` for testability; sub-day offsets and `now` are date+time, bare relative days carry now's
   time-of-day but report date-only so splicing still works. Then it falls back to the absolute
   `fullFormats` / time-only layouts (`parseClock` shared with the relative path). Splice via
   `SpliceTime` / `SpliceDate` (mirror-image helpers that mix orig/new
   date+time around the existing timezone). `SplitTimePrefix(s)` extracts a leading timestamp from
-  free text delimited by `": "` (used by `fngr add` title parsing), delegating to `Parse`.
+  free text delimited by `": "` (used by `fngr add` title parsing), delegating to `ParsePartial`;
+  it returns the consumed token as well as the rest, so the caller can name in a warning the very
+  text the user typed.
+  Every wall clock is assembled through `localClock`, which reports whether that clock exists —
+  a DST spring-forward skips an hour and both `time.Date` and `time.ParseInLocation` resolve a
+  clock inside the gap to the hour before it with no error, so `fngr event time N 2:30` stored a
+  timestamp an hour off and reported success. `localClock` being the single gate is what makes the
+  answer exhaustive: `parsePartial` reads the absolute layouts in UTC — which has no transitions,
+  so the clock comes back exactly as written — and rebuilds those fields through it, and the
+  `<day> at <time>` relative branch goes through it too. That last one is why `exists` is a return
+  value of `ParsePartial` rather than the separate string predicate it started as: a predicate
+  re-parsing the text is a second parser to keep in step, and it silently missed
+  `yesterday at 2:30`. `layoutHasOffset` short-circuits RFC 3339 to true (an offset names an
+  instant, not a local clock) and `layoutHasTime` does the same for the date-only layout (a bare
+  date names no clock, and some zones shift DST at 00:00). Every other relative form takes its
+  clock from `now`, a real instant. Fall-back ambiguity counts as existing. Tests need a real zone
+  (`time.FixedZone` has no transitions): they swap
+  `time.Local` in a **non-parallel** test with `t.Cleanup` restore, and `_ "time/tzdata"` embeds
+  the zone database.
   `FormatRelative(t, now)` returns the compact list-line
   stamp via the layout constants `LayoutToday` / `LayoutThisYear` / `LayoutOlder`. Canonical
   `DateFormat` / `DateTimeFormat` layouts used for storage and event-detail display.
@@ -220,7 +255,13 @@ make ci             # codefix + format + lint + test
   only that promotion rewrites a row, and the added count comes from a pre-read because
   `RowsAffected` cannot tell the promotion from an insert) / `RemoveTags` (event-scoped meta CRUD with FTS
   resync; both refuse `protectedMetaKeys`), `Delete`, `HasChildren`, `List` / `ListSeq` (FTS5 filter + date range + `Limit` +
-  `Ascending`), `GetSubtree` (recursive CTE whose recursive term is `UNION`, not `UNION ALL` — on
+  `Ascending`, both built by the shared `buildListQuery`. A `Limit` always keeps the newest N and
+  `Ascending` decides display order only, so the limited query sorts `DESC` and the ascending case
+  wraps it — `SELECT * FROM (… ORDER BY e.created_at DESC LIMIT ?) ORDER BY created_at ASC`. One
+  statement would apply `ORDER BY` before `LIMIT` and let the sort direction pick *which* rows
+  survive, so `fngr -n 20 -r` returned the 20 oldest events in the database. `SELECT *` rather
+  than restating the columns: the subquery already fixes them),
+  `GetSubtree` (recursive CTE whose recursive term is `UNION`, not `UNION ALL` — on
   a cyclic chain an `UNION ALL` does not recurse deeply, it never returns at all: no output, no
   error, one core pinned. `UNION` discards a row already in the result, so a second lap adds
   nothing and the queue drains; on a well-formed tree the two are identical because `id` is the

@@ -190,6 +190,41 @@ func TestEventCmd_DateRejectsTimeOnly(t *testing.T) {
 	}
 }
 
+// TestEventCmd_ClockVerbsRejectUnparseableValues covers the parse failure both
+// verbs share, distinct from the component-mismatch errors above: the value is
+// not a timestamp in any accepted layout.
+func TestEventCmd_ClockVerbsRejectUnparseableValues(t *testing.T) {
+	t.Parallel()
+	// The command is built inside the subtest, which is where the id its own
+	// store handed back is known.
+	tests := []struct {
+		name  string
+		value string
+		want  string
+		verb  func(s eventStore, io ioStreams, id int64, value string) error
+	}{
+		{"time", "half past nope", "event time:", func(s eventStore, io ioStreams, id int64, v string) error {
+			return (&EventTimeCmd{ID: id, Value: v}).Run(s, io)
+		}},
+		{"date", "the 32nd of Maytember", "event date:", func(s eventStore, io ioStreams, id int64, v string) error {
+			return (&EventDateCmd{ID: id, Value: v}).Run(s, io)
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			s := newTestStore(t)
+			io, _ := newTestIO("")
+
+			id, _ := s.Add(context.Background(), event.AddInput{Title: "x"})
+			err := tt.verb(s, io, id, tt.value)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("err = %v, want it prefixed %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestEventCmd_AttachAndDetach(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)

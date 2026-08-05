@@ -59,13 +59,15 @@ func (c *AddCmd) runText(s eventStore, io ioStreams, text string) error {
 	var createdAt *time.Time
 	switch {
 	case c.Time != "":
-		t, err := timefmt.Parse(c.Time)
+		t, _, _, exists, err := timefmt.ParsePartial(c.Time)
 		if err != nil {
 			return fmt.Errorf("invalid --time value: %w", err)
 		}
+		warnSkippedClock(io.Err, exists, c.Time, t)
 		createdAt = &t
 	default:
-		if t, rest, ok := timefmt.SplitTimePrefix(title); ok {
+		if t, prefix, rest, exists, ok := timefmt.SplitTimePrefix(title); ok {
+			warnSkippedClock(io.Err, exists, prefix, t)
 			createdAt = &t
 			title = rest
 		}

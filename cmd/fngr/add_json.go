@@ -78,7 +78,7 @@ func (c *AddCmd) runJSON(s eventStore, io ioStreams, raw string) error {
 		return err
 	}
 
-	defaults, err := buildCLIDefaults(c)
+	defaults, err := buildCLIDefaults(c, io)
 	if err != nil {
 		return err
 	}
@@ -89,12 +89,25 @@ func (c *AddCmd) runJSON(s eventStore, io ioStreams, raw string) error {
 	}
 
 	addInputs := make([]event.AddInput, 0, len(inputs))
+	// A record naming a clock its zone skips gets the same warning `fngr add`
+	// gives, but only the first one does: a batch is capped at 10 000 records
+	// and one line each would bury whatever the import was meant to say.
+	skipped := 0
 	for i, in := range inputs {
-		ai, err := jsonInputToAddInput(in, defaults, c.Author, i, byIndex)
+		ai, clockExists, err := jsonInputToAddInput(in, defaults, c.Author, i, byIndex)
 		if err != nil {
 			return err
 		}
+		if !clockExists {
+			if skipped == 0 {
+				warnSkippedClock(io.Err, false, *in.CreatedAt, *ai.CreatedAt)
+			}
+			skipped++
+		}
 		addInputs = append(addInputs, ai)
+	}
+	if skipped > 1 {
+		fmt.Fprintf(io.Err, "warning: %d more record(s) in this batch name a clock that does not exist\n", skipped-1)
 	}
 
 	ids, err := s.AddMany(context.Background(), addInputs)
@@ -109,13 +122,16 @@ func (c *AddCmd) runJSON(s eventStore, io ioStreams, raw string) error {
 	return nil
 }
 
-func buildCLIDefaults(c *AddCmd) (cliDefaults, error) {
+func buildCLIDefaults(c *AddCmd, io ioStreams) (cliDefaults, error) {
 	d := cliDefaults{parent: c.Parent}
 	if c.Time != "" {
-		t, err := timefmt.Parse(c.Time)
+		t, _, _, exists, err := timefmt.ParsePartial(c.Time)
 		if err != nil {
 			return cliDefaults{}, fmt.Errorf("invalid --time value: %w", err)
 		}
+		// Warned here rather than per record: --time is one value the user
+		// typed once, however many records fall back to it.
+		warnSkippedClock(io.Err, exists, c.Time, t)
 		d.time = &t
 	}
 	if len(c.Meta) > 0 {
@@ -152,12 +168,17 @@ func indexBySourceID(inputs []jsonAddInput) (map[int64]int, error) {
 	return byIndex, nil
 }
 
+// jsonInputToAddInput converts one wire record. clockExists reports whether the
+// record's own created_at names a wall clock the local zone has; it is true
+// whenever the record said nothing about the time, since the CLI default it then
+// inherits is warned about once by buildCLIDefaults. So a false here always
+// means in.CreatedAt is non-nil, which is what lets runJSON quote it.
 func jsonInputToAddInput(
 	in jsonAddInput, defaults cliDefaults, defaultAuthor string, index int, byIndex map[int64]int,
-) (event.AddInput, error) {
+) (ai event.AddInput, clockExists bool, err error) {
 	title := strings.TrimSpace(in.Title)
 	if title == "" {
-		return event.AddInput{}, fmt.Errorf("--format=json: record %d: title is required", index)
+		return event.AddInput{}, false, fmt.Errorf("--format=json: record %d: title is required", index)
 	}
 	body := strings.TrimSpace(in.Body)
 
@@ -179,15 +200,16 @@ func jsonInputToAddInput(
 	}
 
 	var createdAt *time.Time
+	clockExists = true
 	if in.CreatedAt != nil {
-		// timefmt.Parse accepts RFC3339 — what `--format=json` emits — plus
-		// every layout --time takes, so hand-written import files can use the
-		// same stamps as the rest of the CLI.
-		t, err := timefmt.Parse(*in.CreatedAt)
+		// timefmt.ParsePartial accepts RFC3339 — what `--format=json` emits —
+		// plus every layout --time takes, so hand-written import files can use
+		// the same stamps as the rest of the CLI.
+		t, _, _, exists, err := timefmt.ParsePartial(*in.CreatedAt)
 		if err != nil {
-			return event.AddInput{}, fmt.Errorf("--format=json: record %d: created_at: %w", index, err)
+			return event.AddInput{}, false, fmt.Errorf("--format=json: record %d: created_at: %w", index, err)
 		}
-		createdAt = &t
+		createdAt, clockExists = &t, exists
 	} else {
 		createdAt = defaults.time
 	}
@@ -199,7 +221,7 @@ func jsonInputToAddInput(
 		explicit = make([]parse.Meta, 0, len(in.Meta))
 		for j, pair := range in.Meta {
 			if pair[0] == "" {
-				return event.AddInput{}, fmt.Errorf("--format=json: record %d: meta[%d]: empty key", index, j)
+				return event.AddInput{}, false, fmt.Errorf("--format=json: record %d: meta[%d]: empty key", index, j)
 			}
 			explicit = append(explicit, parse.Meta{Key: pair[0], Value: pair[1]})
 		}
@@ -212,11 +234,11 @@ func jsonInputToAddInput(
 	// title+body so tags from either are picked up.
 	merged, err := event.MergeMeta(parse.EventText(title, body), explicit, defaultAuthor)
 	if err != nil {
-		return event.AddInput{}, fmt.Errorf("--format=json: record %d: %w", index, err)
+		return event.AddInput{}, false, fmt.Errorf("--format=json: record %d: %w", index, err)
 	}
 
 	if event.AuthorOf(merged) == "" {
-		return event.AddInput{}, fmt.Errorf("--format=json: record %d: author is required (set meta.author, --author, FNGR_AUTHOR, or $USER)", index)
+		return event.AddInput{}, false, fmt.Errorf("--format=json: record %d: author is required (set meta.author, --author, FNGR_AUTHOR, or $USER)", index)
 	}
 
 	return event.AddInput{
@@ -226,5 +248,5 @@ func jsonInputToAddInput(
 		ParentIndex: parentIndex,
 		Meta:        merged,
 		CreatedAt:   createdAt,
-	}, nil
+	}, clockExists, nil
 }

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"io"
 	"maps"
 	"strings"
 	"testing"
@@ -103,13 +102,23 @@ func newDispatcher(t *testing.T) func(argv []string) (string, error) {
 // `newDispatcher` are wrappers around it.
 func newDispatcherIO(t *testing.T, stdin string, isTTY bool) func(argv []string) (string, error) {
 	t.Helper()
+	run, _ := newDispatcherOn(t, newTestStore(t), stdin, isTTY)
+	return run
+}
+
+// newDispatcherErr is newDispatcherIO with stderr kept instead of discarded,
+// for the warnings fngr writes there rather than failing on.
+func newDispatcherErr(t *testing.T, stdin string, isTTY bool) (func(argv []string) (string, error), *bytes.Buffer) {
+	t.Helper()
 	return newDispatcherOn(t, newTestStore(t), stdin, isTTY)
 }
 
 // newDispatcherOn is newDispatcherIO over a caller-supplied store, for tests
 // that also have to reach past the CLI to the database — forging a corrupt
 // parent chain, say, which no fngr command can produce.
-func newDispatcherOn(t *testing.T, store *event.Store, stdin string, isTTY bool) func(argv []string) (string, error) {
+// It returns the run function and the buffer stderr is bound to, which
+// accumulates across runs.
+func newDispatcherOn(t *testing.T, store *event.Store, stdin string, isTTY bool) (func(argv []string) (string, error), *bytes.Buffer) {
 	t.Helper()
 
 	var cli CLI
@@ -124,6 +133,7 @@ func newDispatcherOn(t *testing.T, store *event.Store, stdin string, isTTY bool)
 		t.Fatalf("kong.New: %v", err)
 	}
 
+	errBuf := &bytes.Buffer{}
 	return func(argv []string) (string, error) {
 		kctx, err := parser.Parse(argv)
 		if err != nil {
@@ -134,12 +144,12 @@ func newDispatcherOn(t *testing.T, store *event.Store, stdin string, isTTY bool)
 		kctx.Bind(ioStreams{
 			In:    strings.NewReader(stdin),
 			Out:   out,
-			Err:   io.Discard,
+			Err:   errBuf,
 			IsTTY: isTTY,
 		})
 		err = kctx.Run()
 		return out.String(), err
-	}
+	}, errBuf
 }
 
 // TestKongDispatch_PromptsRefuseEmptyStdin is the H5 regression guard. A
@@ -527,7 +537,7 @@ func TestKongDispatch_SearchFilter(t *testing.T) {
 func TestKongDispatch_CorruptParentChain(t *testing.T) {
 	t.Parallel()
 	store := newTestStore(t)
-	run := newDispatcherOn(t, store, "", true)
+	run, _ := newDispatcherOn(t, store, "", true)
 
 	for _, argv := range [][]string{
 		{"add", "first half"},

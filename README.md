@@ -169,6 +169,13 @@ fngr add "3pm: lunch with @sam"          # title "lunch with @sam" at 15:00 toda
 fngr add "2026-04-15: trip"              # title "trip" on that date
 fngr add "yesterday at 9am: backfill"    # title "backfill", yesterday 09:00
 
+# A clock your timezone skips — the hour a daylight-saving change removes —
+# is stored as the instant it resolves to, with a warning on stderr naming
+# both. The event is never refused; only you can say what you meant.
+fngr add "standup" --time "2026-03-08 02:30"
+# warning: "2026-03-08 02:30" does not exist in America/New_York
+# (skipped by a daylight-saving change); stored 2026-03-08 01:30:00
+
 # Bulk import a single event from JSON (title + optional body)
 echo '{"title":"hi","body":"","meta":[["tag","ops"]]}' | fngr add --format=json
 
@@ -192,12 +199,18 @@ fngr -S '@sarah & #ops'
 fngr -S 'deploy | rollback'
 fngr -S '!#bugfix'
 
-# Date ranges
+# Date ranges. Both bounds are inclusive and accept everything --time does:
+# a date, a full timestamp, a bare clock, or a relative form. A bare date
+# covers the whole day; a timestamp covers through that second.
 fngr --from 2026-04-01 --to 2026-04-15
+fngr --from yesterday
+fngr --from "2026-04-01 09:00" --to "2026-04-01 17:00"
+fngr --from 2026-04-01T09:00:00Z          # paste a created_at back in
 
 # Pagination and sort order
-fngr -n 20             # at most 20 events
+fngr -n 20             # the 20 newest events
 fngr -r                # oldest first (default is newest first)
+fngr -n 20 -r          # still the 20 newest, shown oldest first
 fngr --no-pager        # don't pipe through $PAGER even on a TTY
 
 # Output formats. JSON is the only round-trip format

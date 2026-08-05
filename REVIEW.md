@@ -48,9 +48,9 @@ under concurrent writes, and the README states the opposite.**
 | [M9](#m9) | Medium | cmd | `fngr meta` output amplification: 1 MB stored → 202 MB printed | open |
 | [M10](#m10) | Medium | parse | `". "` split eats abbreviations — `Dr. Smith` → title `Dr` | open |
 | [M11](#m11) | Medium | db | `fngr add` never creates a project-local `.fngr.db`; first add lands in `~/.fngr.db` | open |
-| [M12](#m12) | Medium | timefmt | `--from`/`--to` reject both relative forms and fngr's own emitted timestamps | open |
-| [M13](#m13) | Medium | timefmt | DST spring-forward silently shifts `event time` to the prior hour | open |
-| [M14](#m14) | Medium | event | `-n N -r` returns the N **oldest** events | open |
+| [M12](#m12) | Medium | timefmt | `--from`/`--to` reject both relative forms and fngr's own emitted timestamps | ✅ fixed |
+| [M13](#m13) | Medium | timefmt | DST spring-forward silently shifts `event time` to the prior hour | ✅ fixed |
+| [M14](#m14) | Medium | event | `-n N -r` returns the N **oldest** events | ✅ fixed |
 | [M15](#m15) | Medium | perf | Unbuffered stdout — one `write(2)` per event; 11-19% on large lists | open |
 | [M16](#m16) | Medium | supply-chain | Release workflow: broad privileges on seven mutable-tag actions | open |
 
@@ -1626,6 +1626,29 @@ remain.)*
 and ceilinging `--to` to 23:59:59 when the input is date-only. Add an
 inverted-range warning on stderr.
 
+**Resolved** as proposed, with the upper bound expressed as an exclusive
+instant rather than `23:59:59`. `parseBound` in `cmd/fngr/list.go` delegates to
+`timefmt.ParsePartial`, so both flags now accept everything `--time` does —
+relative forms, bare dates, bare clocks, and the RFC 3339 stamp `--format=json`
+emits. `--from` floors a date-only input to 00:00 via `startOfDay`.
+
+`--to` is the interesting half. `ListOpts.To` is an *exclusive* upper bound
+compared against stored text, so `--to` becomes the first instant past what the
+user named: the next midnight for a bare date, the next second for a clock.
+`23:59:59` would have been off by the sub-second remainder — a stamp of
+`23:59:59.4` sorts after it and would drop out of a range the user wrote to
+include the whole day. Rounding up instead of down makes `--to` mean "through
+the end of what you named" at both granularities, which is what
+`--to 2026-07-27` and `--to "2026-07-27 09:30"` are each read as.
+
+The inverted-range warning is on stderr and fires on `From >= To`, equality
+included: an equal pair is empty too, because the bound is exclusive, and a run
+that returns nothing at exit 0 is the failure mode this warning exists for.
+
+`ParseDate` is gone with its last caller. Keeping it would have left a second
+accepted-input grammar in a package whose whole reason to exist is that there
+is only one.
+
 *Verified NOT broken while testing this area:* `--from`/`--to` timezone
 handling is correct. With `TZ=Pacific/Auckland`, an 08:00-local event stored as
 `2026-06-14 20:00:00` UTC and a 23:30-local event stored as
@@ -1650,6 +1673,53 @@ EDT without comment — acceptable, but undisclosed.
 **Fix:** after `time.Date`, compare `.Hour()/.Minute()` to the requested clock
 and warn on mismatch.
 
+**Resolved** by that comparison, factored into `timefmt.localClock` and applied
+at every door rather than only at the two this entry names.
+
+*Scope.* `SpliceTime`/`SpliceDate` are two of the paths that turn a wall clock
+the user typed into a stored timestamp; the others are `add --time`, `add`'s
+`"9:30: had coffee"` title prefix, and the `--format=json` import (both its
+shared `--time` default and each record's `created_at`). Fixing only the
+splices would have left `fngr event time N 2:30` warning while
+`fngr add "2:30: coffee"` stayed silent about the identical shift.
+`ParsePartial` reports `exists` for everything that arrives as text; the
+splices return it beside their result because they assemble a clock out of two
+timestamps and there is no string to parse. `cmd/fngr/clock.go::warnSkippedClock`
+is the single formatter. The import quotes only the first offending record and
+appends a count for the rest, since a batch runs to 10 000 records.
+
+*Detection.* Comparing against the requested clock needs the requested clock,
+and after the fact it is gone — `time.Date` and `time.ParseInLocation` both
+normalize a nonexistent wall clock silently and return an entirely ordinary
+timestamp with no error. `parsePartial` therefore reads the absolute layouts in
+UTC, which has no transitions and so yields the clock exactly as written, then
+rebuilds those fields in `time.Local` through `localClock` and compares.
+`layoutHasOffset` short-circuits RFC 3339 to true — an offset names an instant,
+not a local clock — and `layoutHasTime` does the same for the date-only layout,
+because a bare date names no clock and some zones shift DST at 00:00.
+
+This started as a separate `ClockExists(s)` predicate, on the reasoning that
+only the commands storing a typed clock care and everyone else would thread a
+bool they ignore. That was wrong twice over: a predicate that re-parses the
+text is a second parser to keep in step with the first, and it quietly missed
+`yesterday at 2:30` — `parseRelative`'s `<day> at <time>` branch builds a wall
+clock from a day the offset picked and an hour the user typed, and the
+predicate treated every relative form as an instant. Folding `exists` into
+`ParsePartial` puts `localClock` on the single path every wall clock in the
+package is assembled through, which is what makes the answer exhaustive rather
+than a list of cases someone remembered.
+
+*A warning, not a refusal.* The shifted instant is a real one and almost
+certainly the intended entry, so the event is still stored — refusing would
+leave the user nothing useful to type instead. Fall-back ambiguity stays
+silent, as the entry allows: a clock that happens twice resolves to the first
+of the two offsets and the user gets the stamp they typed.
+
+Tests swap `time.Local` for `America/New_York` in non-parallel tests with
+`t.Cleanup` restore, and `_ "time/tzdata"` embeds the zone database so they run
+without system zoneinfo. `time.FixedZone` has no transitions, so a real zone is
+the only way to produce a skipped clock at all.
+
 <a name="m14"></a>
 ### M14 — `-n N -r` returns the N oldest events
 
@@ -1668,6 +1738,26 @@ database.
 
 **Fix:** select newest-N in a subquery and re-sort ascending in the outer
 query, or document the interaction in `--limit`'s help.
+
+**Resolved** with the subquery, not the documentation. `-r` is a display-order
+toggle everywhere else it appears, and a help line explaining that it also
+reselects the rows would be documenting a trap rather than removing one.
+
+`buildListQuery` now emits `ORDER BY e.created_at DESC LIMIT ?` and, when
+ascending, wraps it: `SELECT * FROM (<that>) ORDER BY created_at ASC`. `SELECT
+*` rather than restating the column list, since the subquery already fixes both
+the columns and their order and a second copy is a second place to update. The
+unlimited path is unchanged — with no `LIMIT` there is nothing for the sort to
+select, so it still sorts in place.
+
+The rule is now stated on `ListOpts` itself: a limit always keeps the newest N,
+and `Ascending` decides display order only. Two existing tests had pinned the
+old behavior (`TestListCmd_Reverse` with `Limit: 1`, and `TestList_LimitAndSort`
+expecting `evt 0` first) and were corrected to the new contract rather than the
+fix being weakened around them. A new test drives `Filter` + `Limit` +
+`Ascending` together through both `List` and `ListSeq`, since the wrapper has to
+compose with the compiled `-S` condition and both entry points share
+`buildListQuery`.
 
 <a name="m15"></a>
 ### M15 — Unbuffered stdout: one `write(2)` per event
