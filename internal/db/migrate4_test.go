@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"slices"
 	"testing"
 
 	"github.com/monolithiclab/fngr/internal/parse"
@@ -260,23 +261,57 @@ func TestMigrate4_RebuildsFTSFromGo(t *testing.T) {
 		t.Fatalf("scan meta: %v", err)
 	}
 
-	var content string
-	if err := db.QueryRow("SELECT content FROM events_fts WHERE rowid = 1").Scan(&content); err != nil {
+	// Migration 6 splits the index in two, so what migration 4 rebuilt is
+	// read back through the same pair the running code writes.
+	var content, metaTokens string
+	if err := db.QueryRow(
+		"SELECT content, meta FROM events_fts WHERE rowid = 1",
+	).Scan(&content, &metaTokens); err != nil {
 		t.Fatalf("select fts: %v", err)
 	}
-	if want := parse.FTSContent(title, body, meta); content != want {
-		t.Errorf("fts content = %q, want %q", content, want)
+	wantContent, wantMeta := parse.FTSColumns(title, body, meta)
+	if content != wantContent || metaTokens != wantMeta {
+		t.Errorf("fts row = (%q, %q), want (%q, %q)", content, metaTokens, wantContent, wantMeta)
 	}
 
 	// The repaired name has to be findable, which is the user-visible point.
-	var n int
-	if err := db.QueryRow(
-		"SELECT COUNT(*) FROM events_fts WHERE events_fts MATCH ?", `"people=josé"`,
-	).Scan(&n); err != nil {
-		t.Fatalf("fts match: %v", err)
+	if got := ftsMatches(t, db, `meta:"people=josé"`); !slices.Equal(got, []int64{1}) {
+		t.Errorf("searching for the restored name matched %v, want [1]", got)
 	}
-	if n != 1 {
-		t.Errorf("searching for the restored name matched %d rows, want 1", n)
+}
+
+// TestLegacyFTSContent pins the frozen single-column formula migration 4
+// writes. It has no observable effect on a database that finishes migrating —
+// migration 6 drops the index it fills — so nothing else can catch it
+// drifting from what the migration was written to produce.
+func TestLegacyFTSContent(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		title string
+		body  string
+		meta  []parse.Meta
+		want  string
+	}{
+		{"empty", "", "", nil, ""},
+		{"title only", "hello", "", nil, "hello"},
+		{"body only", "", "world", nil, "world"},
+		{"meta only", "", "", []parse.Meta{{Key: "author", Value: "nico"}}, "author=nico"},
+		{
+			"everything, meta last and in order",
+			"hello", "world",
+			[]parse.Meta{{Key: "tag", Value: "ops"}, {Key: "people", Value: "sarah"}},
+			"hello world tag=ops people=sarah",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := legacyFTSContent(tt.title, tt.body, tt.meta); got != tt.want {
+				t.Errorf("legacyFTSContent(%q, %q, %v) = %q, want %q",
+					tt.title, tt.body, tt.meta, got, tt.want)
+			}
+		})
 	}
 }
 

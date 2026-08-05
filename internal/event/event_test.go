@@ -826,11 +826,7 @@ func TestGetSubtree(t *testing.T) {
 		t.Fatalf("len(events) = %d, want 3", len(events))
 	}
 
-	ids := make([]int64, len(events))
-	for i, e := range events {
-		ids[i] = e.ID
-	}
-
+	ids := idsOf(events)
 	if ids[0] != root || ids[1] != child || ids[2] != grandchild {
 		t.Errorf("subtree IDs = %v, want [%d %d %d]", ids, root, child, grandchild)
 	}
@@ -1026,6 +1022,56 @@ func TestFTSIsolation_BodyWordsNotMatchedByMetaFilter(t *testing.T) {
 	}
 }
 
+// TestFTSIsolation_TextCannotForgeAMetaMatch covers M7. Content and metadata
+// shared one FTS column, so a note *saying* `secret=classified` produced the
+// same token as the event *tagged* that way: any import could write itself
+// into a tag view, and `!` could write itself out of one.
+func TestFTSIsolation_TextCannotForgeAMetaMatch(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	tagged, err := Add(ctx, database, AddInput{Title: "real note", Meta: []parse.Meta{
+		{Key: MetaKeyAuthor, Value: "alice"},
+		{Key: "secret", Value: "classified"},
+	}})
+	if err != nil {
+		t.Fatalf("Add tagged: %v", err)
+	}
+	forged, err := Add(ctx, database, AddInput{
+		Title: "fake note",
+		Body:  "mentions secret=classified and tag=ops literally",
+		Meta:  []parse.Meta{{Key: MetaKeyAuthor, Value: "alice"}},
+	})
+	if err != nil {
+		t.Fatalf("Add forged: %v", err)
+	}
+
+	for _, tt := range []struct {
+		name   string
+		filter string
+		want   []int64
+	}{
+		{"key=value matches only the tagged event", "secret=classified", []int64{tagged}},
+		{"shorthand matches nothing at all", "#ops", nil},
+		{"negation cannot be forged either", "!secret=classified", []int64{forged}},
+		// The text is still findable as text — the fix scopes the search, it
+		// does not stop indexing the body.
+		{"the words stay searchable as content", "literally", []int64{forged}},
+		{"so does the forged token", "secret=classified literally", nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			events, err := List(ctx, database, ListOpts{Filter: tt.filter})
+			if err != nil {
+				t.Fatalf("List %q: %v", tt.filter, err)
+			}
+			if got := idsOf(events); !slices.Equal(got, tt.want) {
+				t.Errorf("List(%q) = %v, want %v", tt.filter, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestListSeq_PropagatesDBError(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
@@ -1148,6 +1194,15 @@ func titlesOf(events []Event) []string {
 	out := make([]string, len(events))
 	for i, ev := range events {
 		out[i] = ev.Title
+	}
+	return out
+}
+
+// idsOf is titlesOf for the tests that compare topology or filter results.
+func idsOf(events []Event) []int64 {
+	out := make([]int64, len(events))
+	for i, ev := range events {
+		out[i] = ev.ID
 	}
 	return out
 }

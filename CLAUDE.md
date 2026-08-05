@@ -161,8 +161,13 @@ make ci             # codefix + format + lint + test
   body tags through the real `parse.BodyTags` and drops the truncated stubs the pre-Unicode
   extractor wrote — but only a value exactly equal to what the frozen `legacyMetaNameRe` would
   have produced, so a hand-added `#work` beside a derived `#workflow` survives. `rebuildAllFTS`
-  then rewrites every `events_fts` row through `parse.FTSContent` unconditionally, because
-  migration 3's index rebuild was a second SQL transliteration of that same helper. The SQL half
+  then rewrites every `events_fts` row through `legacyFTSContent` unconditionally, because
+  migration 3's index rebuild was a second SQL transliteration of that same helper.
+  `legacyFTSContent` is the one-column formula spelled out in this file rather than called from
+  `parse`, for the same reason `legacyMetaNameRe` is: a migration has to keep writing what it
+  wrote, and live code moved on at migration 6. (Migration 6 always runs in the same pass and
+  drops the index this fills, so the value never reaches a query — which is not a licence to let
+  it drift, and `TestLegacyFTSContent` is the only thing that would notice.) The SQL half
   (`4.sql`) is a single `ANALYZE event_meta`, refreshing statistics migration 2 left describing a
   dropped index.
 - `internal/db/migrate5.go` — The Go half of migration 5, which adds `event_meta.source`
@@ -175,10 +180,21 @@ make ci             # codefix + format + lint + test
   `CHECK (source IN ('body','explicit'))` because both values are written as bare literals from
   Go and SQL alike, and no index — every statement filtering on `source` also gives
   `(key, value, event_id)`, which migration 2's unique index already serves.
+- `internal/db/migrate6.go` — The Go half of migration 6, which splits `events_fts` into a
+  `content` column (the event's own text) and a `meta` one (its `key=value` tokens). Sharing one
+  column made a body that *said* `tag=ops` indistinguishable from an event *tagged* that way, so
+  any note could write itself into a tag view or (with `!`) out of one. A virtual table takes no
+  `ALTER TABLE ADD COLUMN`, so `6.sql` drops and recreates the index and `splitFTSIndex`
+  re-populates it through `parse.FTSColumns` — a Go step, not SQL, for the reason migration 4
+  exists at all. `6.sql` does not recreate `trg_events_fts_delete`: the trigger is `ON events`,
+  so the drop leaves it alone and its body still matches the new table.
 - `internal/parse/parse.go` — `Meta` type, `BodyTags` for body-tag extraction (`@person` → people,
   `#tag` → tag), `KeyValue` helper for `key=value` strings, `FlagMeta` for `--meta` flag arrays
   (delegates to `KeyValue`), `MetaArg` for individual CLI tag args (`@person`, `#tag`, or
-  `key=value`; used by `event tag` / `event untag`), `FTSContent` for FTS index content building,
+  `key=value`; used by `event tag` / `event untag`), `FTSColumns` for the two `events_fts` column
+  values (both stated in one function so a caller cannot write one and forget the other; the
+  pre-migration-6 single-column join is *not* here — it is frozen as `db.legacyFTSContent`
+  beside the migration that still writes it),
   `SplitTitleBody` for the `". "` title/body split, and `EventText` for the title+body join every
   body-tag derivation runs over — `addInTx`, `Update`'s sync and migration 5's back-fill each
   decide provenance from it, so a join that differs by a space would have them disagree about a
@@ -334,7 +350,19 @@ make ci             # codefix + format + lint + test
   operators over id sets rather than FTS5 syntax — FTS5 has no unary NOT, which is why the
   string-rewriting preprocessor this replaced could not express `!a & b`. Terms are always
   quoted on emit, so punctuation (hyphens, stray quotes) is text, not syntax; a trailing `*`
-  stays outside the quotes as a prefix search. Malformed input fails at parse time with an
+  stays outside the quotes as a prefix search. Each term also carries an FTS5 column filter
+  (`meta:` or `content:`) so the two halves of the index migration 6 split cannot be searched as
+  one haystack — unscoped, an event whose body *said* `secret=classified` answered a filter for
+  that tag as squarely as the event tagged with it. The trade is that a body *quoting* a
+  `key=value` string is no longer reachable by searching for it; the words around it still are.
+  `ftsTerm` routes a `@person` / `#tag` shorthand to `meta:` via `parse.MetaArg`, and any term
+  that splits on `=` into a non-empty key to `meta:` — that is exactly what `parse.MetaArg` /
+  `parse.FlagMeta` accept as a key, and testing anything narrower here (`parse.MetaNameRe`, say)
+  routes a key those paths happily store, `-m ticket.id=PROJ-42`, to a column that cannot answer
+  for it, leaving it findable by nothing. Only `=oops` and terms with no `=` are `content:`. The
+  value half is deliberately unchecked, so `-S 'tag=*'` (text `tag=` plus a prefix star) stays the
+  "everything tagged" query it reads as.
+  Malformed input fails at parse time with an
   `ErrFilter`-wrapped message naming the rune position, never at SQLite.
 - `internal/render/render.go` — Output rendering to `io.Writer`. `Events(w, format, events)`,
   `SingleEvent(w, format, ev)`, and `EventsStream(w, format, seq)` are the dispatchers commands

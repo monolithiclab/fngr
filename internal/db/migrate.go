@@ -31,6 +31,7 @@ type migration struct {
 var goMigrations = map[int]func(*sql.Tx) error{
 	4: repairLegacyText,
 	5: classifyMetaSource,
+	6: splitFTSIndex,
 }
 
 // dbExec accepts either *sql.DB or *sql.Tx.

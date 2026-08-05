@@ -145,7 +145,7 @@ func loadEventText(tx *sql.Tx) ([]eventText, error) {
 	return out, nil
 }
 
-// rebuildAllFTS regenerates every events_fts row through parse.FTSContent.
+// rebuildAllFTS regenerates every events_fts row through legacyFTSContent.
 // Unconditional rather than limited to the rows this migration touched:
 // migration 3's SQL rebuild reimplemented the same formula, so every row it
 // wrote is suspect, and one pass over the events table restores the
@@ -174,11 +174,35 @@ func rebuildAllFTS(tx *sql.Tx) error {
 	defer func() { _ = insert.Close() }()
 
 	for _, e := range events {
-		if _, err := insert.Exec(e.id, parse.FTSContent(e.title, e.body, meta[e.id])); err != nil {
+		if _, err := insert.Exec(e.id, legacyFTSContent(e.title, e.body, meta[e.id])); err != nil {
 			return fmt.Errorf("index event %d: %w", e.id, err)
 		}
 	}
 	return nil
+}
+
+// legacyFTSContent is the single-column FTS formula as it stood when this
+// migration was written: title, body and "key=value" tokens in one string.
+//
+// It is spelled out here rather than called from parse for the same reason
+// legacyMetaNameRe is — a migration has to keep writing what it wrote. Live
+// code moved on at migration 6, which splits events_fts into two columns and
+// re-indexes everything through parse.FTSColumns, so sharing a helper would
+// let a future edit of the live formula silently change this one. (Migration
+// 6 always follows 4 in the same pass, so what this writes is overwritten
+// before any query sees it; that is not a licence to let it drift.)
+func legacyFTSContent(title, body string, meta []parse.Meta) string {
+	parts := make([]string, 0, 2+len(meta))
+	if title != "" {
+		parts = append(parts, title)
+	}
+	if body != "" {
+		parts = append(parts, body)
+	}
+	for _, m := range meta {
+		parts = append(parts, m.Token())
+	}
+	return strings.Join(parts, " ")
 }
 
 func loadAllMeta(tx *sql.Tx) (map[int64][]parse.Meta, error) {

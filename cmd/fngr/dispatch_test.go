@@ -527,6 +527,42 @@ func TestKongDispatch_SearchFilter(t *testing.T) {
 	})
 }
 
+// TestKongDispatch_ForgedTagInBody is the M7 guard at the CLI: a note that
+// merely spells out `#ops` as `tag=ops` used to answer a tag search as
+// squarely as a tagged event, so an imported note could put itself into any
+// tag view. Body and metadata are separate FTS columns now.
+func TestKongDispatch_ForgedTagInBody(t *testing.T) {
+	t.Parallel()
+	run := newDispatcher(t)
+
+	if _, err := run([]string{"add", "real note #ops"}); err != nil {
+		t.Fatalf("add tagged: %v", err)
+	}
+	if _, err := run([]string{"add", "fake note. mentions tag=ops literally"}); err != nil {
+		t.Fatalf("add forged: %v", err)
+	}
+
+	out, err := run([]string{"list", "--format", "flat", "-S", "#ops"})
+	if err != nil {
+		t.Fatalf("list -S #ops: %v", err)
+	}
+	if !strings.Contains(out, "real note") {
+		t.Errorf("-S '#ops' missed the tagged event:\n%s", out)
+	}
+	if strings.Contains(out, "fake note") {
+		t.Errorf("-S '#ops' matched a body that only says so:\n%s", out)
+	}
+
+	// The words are still findable as words.
+	out, err = run([]string{"list", "--format", "flat", "-S", "literally"})
+	if err != nil {
+		t.Fatalf("list -S literally: %v", err)
+	}
+	if !strings.Contains(out, "fake note") {
+		t.Errorf("-S 'literally' missed the event that says it:\n%s", out)
+	}
+}
+
 // TestKongDispatch_CorruptParentChain is the M2 guard at the CLI. A cyclic
 // parent chain — which fngr cannot write, but which `db.ResolvePath` will
 // happily pick up from someone else's `.fngr.db` in the current directory —

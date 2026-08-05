@@ -132,7 +132,7 @@ func addInTx(ctx context.Context, tx *sql.Tx, inputs []AddInput) ([]int64, error
 	defer insertMeta.Close()
 
 	insertFTS, err := tx.PrepareContext(ctx,
-		"INSERT INTO events_fts (rowid, content) VALUES (?, ?)",
+		"INSERT INTO events_fts (rowid, content, meta) VALUES (?, ?, ?)",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("prepare FTS insert: %w", err)
@@ -203,7 +203,8 @@ func addInTx(ctx context.Context, tx *sql.Tx, inputs []AddInput) ([]int64, error
 			}
 		}
 
-		if _, err := insertFTS.ExecContext(ctx, id, parse.FTSContent(in.Title, in.Body, in.Meta)); err != nil {
+		content, metaTokens := parse.FTSColumns(in.Title, in.Body, in.Meta)
+		if _, err := insertFTS.ExecContext(ctx, id, content, metaTokens); err != nil {
 			return nil, fmt.Errorf("insert FTS content: %w", err)
 		}
 
@@ -662,7 +663,7 @@ func requireEventExists(ctx context.Context, tx *sql.Tx, id int64) error {
 }
 
 // rebuildEventFTS reads the event's current title + body + meta inside
-// tx and writes parse.FTSContent into events_fts.
+// tx and writes parse.FTSColumns into events_fts.
 func rebuildEventFTS(ctx context.Context, tx *sql.Tx, id int64) error {
 	var title, body string
 	if err := tx.QueryRowContext(ctx,
@@ -674,9 +675,10 @@ func rebuildEventFTS(ctx context.Context, tx *sql.Tx, id int64) error {
 	if err != nil {
 		return err
 	}
+	content, metaTokens := parse.FTSColumns(title, body, meta)
 	if _, err := tx.ExecContext(ctx,
-		"UPDATE events_fts SET content = ? WHERE rowid = ?",
-		parse.FTSContent(title, body, meta), id,
+		"UPDATE events_fts SET content = ?, meta = ? WHERE rowid = ?",
+		content, metaTokens, id,
 	); err != nil {
 		return fmt.Errorf("update FTS: %w", err)
 	}

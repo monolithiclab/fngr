@@ -188,6 +188,19 @@ Fixes for real friction surfaced by using the tool, not new features.
   `fngr meta` and `fngr event N -t` still write one line per syscall —
   giving them the same wrapper switches paging on for them too, so that
   is a product decision rather than a perf fix. Review issue M15.
+- **Search index separates text from metadata** — `events_fts` held both
+  in one column, so an event whose body spelled out `tag=ops` produced a
+  token no query could tell from a real tag: a note could write itself
+  into any tag view, or with `!` out of one. Migration 6 splits the index
+  into `content` and `meta` (a virtual table takes no `ALTER TABLE ADD
+  COLUMN`, so it is a drop, a recreate and a Go re-populate through
+  `parse.FTSColumns`), and every `-S` term now carries an FTS5 column
+  filter. A term is metadata when it splits on `=` into a non-empty key,
+  which is what the write path accepts as a key — a narrower test left
+  `-m ticket.id=PROJ-42` storable but findable by nothing. The value
+  half is unchecked so `-S 'tag=*'` stays the "everything tagged" query
+  it reads as. The accepted cost: a body *quoting* a `key=value` string
+  is no longer reachable by searching for it. Review issue M7.
 
 ## Publishing pipeline polish
 

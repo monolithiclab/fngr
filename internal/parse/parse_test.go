@@ -286,38 +286,57 @@ func TestFlagMeta(t *testing.T) {
 	}
 }
 
-func TestFTSContent(t *testing.T) {
+// TestFTSColumns pins the two strings the running code indexes. The
+// pre-migration-6 join of them is db.legacyFTSContent's business now, and is
+// tested there.
+func TestFTSColumns(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name  string
-		title string
-		body  string
-		meta  []Meta
-		want  string
+		name        string
+		title       string
+		body        string
+		meta        []Meta
+		wantContent string
+		wantMeta    string
 	}{
-		{"empty", "", "", nil, ""},
-		{"title only", "hello", "", nil, "hello"},
-		{"body only", "", "world", nil, "world"},
-		{"title + body", "hello", "world", nil, "hello world"},
+		{"empty", "", "", nil, "", ""},
+		{"title only", "hello", "", nil, "hello", ""},
+		{"body only", "", "world", nil, "world", ""},
+		{"title + body", "hello", "world", nil, "hello world", ""},
 		{
 			"title + body + meta",
 			"hello", "world",
 			[]Meta{{Key: "tag", Value: "ops"}, {Key: "people", Value: "sarah"}},
-			"hello world tag=ops people=sarah",
+			"hello world", "tag=ops people=sarah",
 		},
 		{
 			"empty title with meta",
 			"", "world",
 			[]Meta{{Key: "tag", Value: "ops"}},
-			"world tag=ops",
+			"world", "tag=ops",
+		},
+		{
+			// The M7 case: the text says what a tag would, and the two must
+			// still land in different columns.
+			"body quoting a meta token",
+			"note", "mentions tag=ops literally",
+			nil,
+			"note mentions tag=ops literally", "",
+		},
+		{
+			"meta with no text at all",
+			"", "",
+			[]Meta{{Key: "author", Value: "nico"}},
+			"", "author=nico",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := FTSContent(tt.title, tt.body, tt.meta); got != tt.want {
-				t.Errorf("FTSContent(%q, %q, %v) = %q, want %q",
-					tt.title, tt.body, tt.meta, got, tt.want)
+			content, meta := FTSColumns(tt.title, tt.body, tt.meta)
+			if content != tt.wantContent || meta != tt.wantMeta {
+				t.Errorf("FTSColumns(%q, %q, %v) = (%q, %q), want (%q, %q)",
+					tt.title, tt.body, tt.meta, content, meta, tt.wantContent, tt.wantMeta)
 			}
 		})
 	}

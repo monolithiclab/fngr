@@ -43,7 +43,7 @@ under concurrent writes, and the README states the opposite.**
 | [M4](#m4) | Medium | parse | Email addresses mint bogus `people` tags | ✅ fixed |
 | [M5](#m5) | Medium | timefmt | `"1 month ago"` on the 31st lands in the wrong month; int64 overflow yields a *future* time | ✅ fixed |
 | [M6](#m6) | Medium | render | Newlines and ANSI/OSC escapes in titles forge output rows | ✅ fixed |
-| [M7](#m7) | Medium | event | FTS conflates content with metadata → body text forges tag matches | open |
+| [M7](#m7) | Medium | event | FTS conflates content with metadata → body text forges tag matches | ✅ fixed |
 | [M8](#m8) | Medium | render | `--limit` on tree format promotes orphaned children to roots, unmarked | ✅ fixed |
 | [M9](#m9) | Medium | cmd | `fngr meta` output amplification: 1 MB stored → 202 MB printed | ✅ fixed |
 | [M10](#m10) | Medium | parse | `". "` split eats abbreviations — `Dr. Smith` → title `Dr` | open |
@@ -1490,6 +1490,38 @@ A crafted import can inject itself into any tag view, or (with `!`) evade one.
 shorthand / `key=value` terms use an FTS5 column filter `meta:"tag=ops"` while
 bare words stay on `content`. Needs a migration — schedule it rather than
 rushing it.
+
+**Resolved** as proposed. `parse.FTSColumns` now returns both column values from
+one function, so a caller cannot write one and forget the other. The pre-split
+one-column formula did not stay in `parse` as a second export: migration 4 still
+indexes a database that has not reached the split, so the formula is frozen as
+`db.legacyFTSContent` beside that migration, the way `legacyMetaNameRe` already
+is. A virtual table takes no
+`ALTER TABLE ADD COLUMN`, so `migrations/6.sql` drops and recreates `events_fts`
+and `migrate6.go::splitFTSIndex` re-populates it — a Go step rather than SQL for
+the reason [migration 4](#h1) exists at all. `6.sql` does not recreate
+`trg_events_fts_delete`: that trigger is `AFTER DELETE ON events`, not on the
+index, so the drop leaves it alone and its body still matches the new table
+(`TestMigrate6_DeleteTriggerSurvivesTheDrop` pins it, since getting it wrong
+would leave every deleted event searchable).
+
+Routing in `ftsTerm` turns on the *key* half, and asks the same question the
+write path asks: `@person` / `#tag` go to `meta:` through `parse.MetaArg`, and
+so does any term that splits on `=` into a non-empty key, because non-empty is
+precisely what `parse.MetaArg` / `parse.FlagMeta` require of a key. A narrower
+test here — `parse.MetaNameRe`, the first thing tried — routed
+`-S 'ticket.id=PROJ-42'` to `content:` for a key `-m ticket.id=PROJ-42` stores
+without complaint, so the tag was findable by nothing at all. Only `=oops` and
+terms with no `=` are content. The value half is not checked on purpose, so
+`-S 'tag=*'` (text `tag=` plus a prefix star) remains the "everything tagged"
+query it looks like.
+
+The cost of the scoping, accepted: a body that *quotes* a `key=value` string is
+no longer reachable by searching for that string. Making it reachable is the
+whole bug. The words around it still match.
+
+The four queries in the reproduction above now answer 1, nothing, 2 and 2
+respectively.
 
 <a name="m8"></a>
 ### M8 — `--limit` on tree format promotes orphans to roots
