@@ -164,6 +164,30 @@ Fixes for real friction surfaced by using the tool, not new features.
   survivors outside it. `-r` is a display-order toggle everywhere else
   it appears; documenting the interaction instead would have documented
   a trap rather than removed one. Review issue M14.
+- **`fngr meta` cannot print more than it stores** — both columns pad to
+  the widest cell in the listing, so a single oversized value padded
+  every other row out to its length: 200 events with short meta beside
+  one 1 MB value printed 202 MB, ~200x what was on disk. Meta is
+  content-controlled — body tags, `--meta`, `--format=json` — so the cap
+  is a constant (60 runes, ellipsis on the cut) rather than a function
+  of the data; `fngr -S key=value --format=json` still prints a clamped
+  value in full. The value is cut one rune past the cap *before* it is
+  escaped, which takes the 1 MB case from ~2 ms and ~1 MB of allocation
+  per row down to ~260 ns and none — the output amplification was only
+  half of the cost. Widths are counted in runes, which is what `%-*s`
+  pads to; counting bytes over-padded any cell holding a multibyte rune
+  and stepped every row below it right. Review issue M9.
+- **List output is buffered** — rendering wrote one line per syscall,
+  250 000 of them for a 250k list and 10-19% of the wall clock (every
+  format but CSV, which buffers on its own). `Out` now goes through a
+  16 KiB `bufio.Writer` on every path, not just the paged one: the
+  redirect-and-pipe case is where the cost was measured and it is
+  exactly the case the pager wrapper used to skip. 16 KiB rather than 64
+  keeps `fngr | head -3` imperceptible. A failed flush is the command's
+  error, since the tail of a listing is written there and nowhere else.
+  `fngr meta` and `fngr event N -t` still write one line per syscall —
+  giving them the same wrapper switches paging on for them too, so that
+  is a product decision rather than a perf fix. Review issue M15.
 
 ## Publishing pipeline polish
 

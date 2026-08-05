@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -23,7 +22,7 @@ type ListCmd struct {
 	Search  string `help:"Filter expression (#tag, @person, key=value, word, word*). Operators by precedence: ! (NOT), & (AND, also implied between adjacent terms), | (OR); no grouping parentheses." short:"S"`
 }
 
-func (c *ListCmd) Run(s eventStore, io ioStreams) error {
+func (c *ListCmd) Run(s eventStore, io ioStreams) (err error) {
 	ctx := context.Background()
 
 	// Validate before spawning a pager: nothing should start a $PAGER process
@@ -40,10 +39,13 @@ func (c *ListCmd) Run(s eventStore, io ioStreams) error {
 			c.From, c.To)
 	}
 
-	io, closePager := withPager(io, c.NoPager)
+	io, closeOut := withPager(io, c.NoPager)
 	defer func() {
-		if err := closePager(); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: pager exited with error: %v\n", err)
+		// Out is buffered, so the tail of a listing is written only here:
+		// reporting a failed flush as anything but an error would exit 0 over
+		// truncated output. An error already on its way out says more, though.
+		if cerr := closeOut(); cerr != nil && err == nil {
+			err = cerr
 		}
 	}()
 

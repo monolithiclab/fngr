@@ -58,7 +58,16 @@ make ci             # codefix + format + lint + test
   shorthand). None of the event verbs prompt; meta verbs prompt with the destructive-vs-additive
   defaults (rename `[Y/n]`, delete `[y/N]`); `-f`/`--force` skips the prompt on both, and is
   *required* in a non-interactive run — every prompt errors rather than assume its default when
-  stdin has no answer to give (see `cmd/fngr/prompt.go`).
+  stdin has no answer to give (see `cmd/fngr/prompt.go`). The `meta` listing pads both columns to
+  the widest cell, so each one goes through `displayCell` first: escaped, then clamped to
+  `maxMetaCell` (60) runes with the last spent on an ellipsis where it cut. The bound is a
+  constant because meta is content-controlled — 200 short rows beside one 1 MB value printed
+  202 MB, ~200x what was stored. `displayCell` cuts the *raw* value to one rune past the cap
+  before escaping it, because `render.SanitizeLine` walks every byte it is handed and copies the
+  lot when anything needs escaping; the extra rune is what makes that free of consequence, since
+  escaping never shrinks a string. Widths are counted with `utf8.RuneCountInString`, which is
+  what `fmt`'s `%-*s` pads to; `len` over-padded any cell holding a multibyte rune and stepped
+  every row below it right.
 - `cmd/fngr/store.go` — Defines the narrow `eventStore` interface that commands depend on plus the
   injectable `ioStreams` (`In io.Reader`, `Out io.Writer`, `Err io.Writer`, `IsTTY bool`).
 - `cmd/fngr/clock.go` — `warnSkippedClock(w, exists, asked, stored)`, the single formatter for the
@@ -115,8 +124,20 @@ make ci             # codefix + format + lint + test
   (a target-database id) when it misses — the `--parent` CLI default is always the latter.
   `created_at` goes through `timefmt.Parse`, a superset of the RFC 3339 that
   `--format=json` emits, so import files accept the same stamps as `--time`.
-- `cmd/fngr/pager.go` — `withPager(io, disabled) (ioStreams, closer)` wraps `Out` in a pipe to
-  `$PAGER` (fallback `less -FRX`) when stdout is a TTY. Used by `list`.
+- `cmd/fngr/pager.go` — `withPager(io, disabled) (ioStreams, closer)` wraps `Out` in a 16 KiB
+  `bufio.Writer` over whatever `pagerWriter` hands back: a pipe to `$PAGER` (fallback
+  `less -FRX`) when stdout is a TTY, else `Out` itself. Used by `list`. The buffer is *outside*
+  the pager branch on purpose — rendering wrote one line per syscall, 250 000 of them for a 250k
+  list and 10-19% of the wall clock (every format but CSV, whose `csv.Writer` buffers on its
+  own), and the redirect/pipe path that pays that is exactly the one the old function
+  early-returned on. 16 KiB rather than 64 because the buffer is also the
+  latency floor for `fngr | head -3`. The closer *returns* its flush error, and `ListCmd.Run`
+  promotes it to the command's error through a named return (without masking an error already on
+  its way out): with `Out` buffered the tail of a listing is written there and nowhere else, so
+  logging past it would exit 0 over output the user never received. The pager's own exit status
+  stays a stderr warning — a pager quit early is a decision, not a lost write. `isTerminal` is a
+  `var` for test stubbing (like `launchEditor`): it is the only gate on the pager branch and no
+  test process has a terminal on stdout, so stubbing it is what lets the branch be tested at all.
 - `internal/db/db.go` — DB path resolution (explicit > `.fngr.db` in cwd > `~/.fngr.db`) and
   connection setup. The FK + WAL + busy_timeout + synchronous=NORMAL pragmas ride in the DSN
   (`file:<path>?_pragma=...`, built with `net/url`) rather than post-open `db.Exec` calls —
