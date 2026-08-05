@@ -59,43 +59,53 @@ func TestCompileFilter(t *testing.T) {
 		wantSQL  string
 		wantArgs []any
 	}{
-		{"bare word", "project", "M", []any{`"project"`}},
-		{"hash shorthand", "#ops", "M", []any{`"tag=ops"`}},
-		{"at shorthand", "@sarah", "M", []any{`"people=sarah"`}},
-		{"key=value", "tag=deploy", "M", []any{`"tag=deploy"`}},
-		{"hierarchical tag", "#work/project-x", "M", []any{`"tag=work/project-x"`}},
+		{"bare word", "project", "M", []any{`content:"project"`}},
+		{"hash shorthand", "#ops", "M", []any{`meta:"tag=ops"`}},
+		{"at shorthand", "@sarah", "M", []any{`meta:"people=sarah"`}},
+		{"key=value", "tag=deploy", "M", []any{`meta:"tag=deploy"`}},
+		{"hierarchical tag", "#work/project-x", "M", []any{`meta:"tag=work/project-x"`}},
+
+		// M7: a term is scoped to the column that can answer it. "Could this
+		// have been stored as metadata?" is the same question the write paths
+		// ask, so a key they accept must route to meta — a narrower rule here
+		// would leave `-m ticket.id=PROJ-42` findable by nothing.
+		{"a key the write path accepts is a meta term", "ticket.id=PROJ-42", "M",
+			[]any{`meta:"ticket.id=PROJ-42"`}},
+		{"leading = has no key, so it is content", "=oops", "M", []any{`content:"=oops"`}},
+		{"empty value is still a meta term", "tag=", "M", []any{`meta:"tag="`}},
+		{"prefix over every value of a key", "tag=*", "M", []any{`meta:"tag="*`}},
 
 		// Terms are quoted on emit, so FTS5 never sees the punctuation as
 		// syntax. Both of these used to reach SQLite as raw MATCH text: the
 		// hyphen parsed as a column filter ("no such column: handler") and the
 		// lone quote as an unterminated string.
-		{"hyphen is text", "session-handler", "M", []any{`"session-handler"`}},
-		{"lone double quote is text", `"`, "M", []any{`""""`}},
-		{"embedded double quote", `tag=val"ue`, "M", []any{`"tag=val""ue"`}},
-		{"trailing bang is text", "wow!", "M", []any{`"wow!"`}},
+		{"hyphen is text", "session-handler", "M", []any{`content:"session-handler"`}},
+		{"lone double quote is text", `"`, "M", []any{`content:""""`}},
+		{"embedded double quote", `tag=val"ue`, "M", []any{`meta:"tag=val""ue"`}},
+		{"trailing bang is text", "wow!", "M", []any{`content:"wow!"`}},
 
-		{"prefix search survives quoting", "sess*", "M", []any{`"sess"*`}},
-		{"lone star is a term", "*", "M", []any{`"*"`}},
+		{"prefix search survives quoting", "sess*", "M", []any{`content:"sess"*`}},
+		{"lone star is a term", "*", "M", []any{`content:"*"`}},
 
-		{"explicit AND", "a & b", "(M AND M)", []any{`"a"`, `"b"`}},
-		{"adjacent terms are AND", "deploy staging", "(M AND M)", []any{`"deploy"`, `"staging"`}},
-		{"OR", "#ops | #deploy", "(M OR M)", []any{`"tag=ops"`, `"tag=deploy"`}},
-		{"NOT", "!daily", "(NOT M)", []any{`"daily"`}},
-		{"double NOT", "!!daily", "(NOT (NOT M))", []any{`"daily"`}},
-		{"NOT with key=value", "!tag=deploy", "(NOT M)", []any{`"tag=deploy"`}},
+		{"explicit AND", "a & b", "(M AND M)", []any{`content:"a"`, `content:"b"`}},
+		{"adjacent terms are AND", "deploy staging", "(M AND M)", []any{`content:"deploy"`, `content:"staging"`}},
+		{"OR", "#ops | #deploy", "(M OR M)", []any{`meta:"tag=ops"`, `meta:"tag=deploy"`}},
+		{"NOT", "!daily", "(NOT M)", []any{`content:"daily"`}},
+		{"double NOT", "!!daily", "(NOT (NOT M))", []any{`content:"daily"`}},
+		{"NOT with key=value", "!tag=deploy", "(NOT M)", []any{`meta:"tag=deploy"`}},
 
 		// The C5 regression: negation used to be a leading "NOT " on the whole
 		// MATCH string, which the query builder stripped and applied to
 		// everything, so `!a & b` silently meant `!(a & b)`. Order must not
 		// change the meaning.
 		{"leading NOT binds to its own term", "!alpha & gamma",
-			"((NOT M) AND M)", []any{`"alpha"`, `"gamma"`}},
+			"((NOT M) AND M)", []any{`content:"alpha"`, `content:"gamma"`}},
 		{"trailing NOT binds to its own term", "gamma & !alpha",
-			"(M AND (NOT M))", []any{`"gamma"`, `"alpha"`}},
+			"(M AND (NOT M))", []any{`content:"gamma"`, `content:"alpha"`}},
 
-		{"AND binds tighter than OR", "a | b & c", "(M OR (M AND M))", []any{`"a"`, `"b"`, `"c"`}},
-		{"OR chains left", "a | b | c", "((M OR M) OR M)", []any{`"a"`, `"b"`, `"c"`}},
-		{"NOT binds tighter than AND", "!a & !b", "((NOT M) AND (NOT M))", []any{`"a"`, `"b"`}},
+		{"AND binds tighter than OR", "a | b & c", "(M OR (M AND M))", []any{`content:"a"`, `content:"b"`, `content:"c"`}},
+		{"OR chains left", "a | b | c", "((M OR M) OR M)", []any{`content:"a"`, `content:"b"`, `content:"c"`}},
+		{"NOT binds tighter than AND", "!a & !b", "((NOT M) AND (NOT M))", []any{`content:"a"`, `content:"b"`}},
 	}
 
 	for _, tt := range tests {

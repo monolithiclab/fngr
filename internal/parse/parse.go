@@ -146,27 +146,45 @@ func FlagMeta(flags []string) ([]Meta, error) {
 	return result, nil
 }
 
-// FTSContent builds the searchable string indexed in events_fts. Empty
-// title or body contribute nothing (no leading/trailing or doubled
-// spaces). Meta entries render as "key=value" tokens — the FTS
-// tokenizer treats '=' as a token char, so a -S '#ops' filter matches
-// the literal "tag=ops" emitted here.
+// FTSColumns builds the two searchable strings indexed in events_fts: the
+// event's own text, and its metadata as "key=value" tokens.
 //
-// This is the only definition of the formula. migrations/3.sql once carried
-// a SQL transliteration of it, free to drift; migration 4 overwrites every
-// row that produced and rebuilds through this function instead.
-func FTSContent(title, body string, meta []Meta) string {
-	parts := make([]string, 0, 2+len(meta))
-	if title != "" {
-		parts = append(parts, title)
+// They are separate columns because they used to be one, and a body is not
+// trustworthy input: `fngr add "mentions secret=classified"` wrote a token
+// indistinguishable from the row `-m secret=classified` writes, so a note
+// could put itself into any tag view or (with `!`) out of one. The filter
+// parser scopes every term to one column or the other, which is what makes
+// the two kinds of match tell apart.
+//
+// Empty title or body contribute nothing (no leading/trailing or doubled
+// spaces). The FTS tokenizer treats '=' as a token char, so `tag=ops` is one
+// token and a -S '#ops' filter matches it whole.
+//
+// This is the only definition of the live formula, and both columns are
+// stated here rather than in two functions so a caller cannot write one and
+// forget the other. migrations/3.sql once carried a SQL transliteration of the
+// single-column form it replaced, free to drift; migration 4 overwrote every
+// row that produced, and migration 6 rebuilds every row again through this.
+// The pre-6 one-column formula lives on in db.legacyFTSContent, frozen beside
+// the migration that still writes it.
+func FTSColumns(title, body string, meta []Meta) (content, metaTokens string) {
+	tokens := make([]string, len(meta))
+	for i, m := range meta {
+		tokens[i] = m.Token()
 	}
-	if body != "" {
-		parts = append(parts, body)
+	return joinNonEmpty(title, body), strings.Join(tokens, " ")
+}
+
+// joinNonEmpty joins the two parts with a single space, skipping an empty one
+// so the result never carries a leading, trailing or doubled space.
+func joinNonEmpty(a, b string) string {
+	switch {
+	case a == "":
+		return b
+	case b == "":
+		return a
 	}
-	for _, m := range meta {
-		parts = append(parts, m.Token())
-	}
-	return strings.Join(parts, " ")
+	return a + " " + b
 }
 
 // SplitTitleBody splits text on the first occurrence of ". " (dot

@@ -178,6 +178,11 @@ func TestCascadeDelete_RemovesChildrenAndMeta(t *testing.T) {
 	}
 }
 
+// TestFTSDeleteTrigger runs against a fully migrated schema, which makes it
+// the guard on something migration 6 could have broken: 6.sql drops and
+// recreates events_fts, and trg_events_fts_delete is AFTER DELETE ON events
+// rather than on the index, so it survives the drop and its body still matches
+// the new table. Were that wrong, every deleted event would stay searchable.
 func TestFTSDeleteTrigger(t *testing.T) {
 	t.Parallel()
 	db := testDBWithSchema(t)
@@ -419,13 +424,19 @@ func TestMigrate_LegacyTextSplit(t *testing.T) {
 		}
 	}
 
-	var ftsContent string
-	if err := db.QueryRow("SELECT content FROM events_fts WHERE rowid = 2").Scan(&ftsContent); err != nil {
+	// Meta lives in its own column from migration 6 on, so a body that spells
+	// out a tag cannot pass for one.
+	var ftsContent, ftsMeta string
+	if err := db.QueryRow(
+		"SELECT content, meta FROM events_fts WHERE rowid = 2",
+	).Scan(&ftsContent, &ftsMeta); err != nil {
 		t.Fatalf("select fts row 2: %v", err)
 	}
-	want := "v1.2 done Hotfix tag=ops"
-	if ftsContent != want {
+	if want := "v1.2 done Hotfix"; ftsContent != want {
 		t.Errorf("FTS content for row 2 = %q, want %q", ftsContent, want)
+	}
+	if want := "tag=ops"; ftsMeta != want {
+		t.Errorf("FTS meta for row 2 = %q, want %q", ftsMeta, want)
 	}
 
 	var emptyFTS string

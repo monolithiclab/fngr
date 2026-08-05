@@ -322,7 +322,12 @@ genuinely starts with `!` cannot be searched for: `-S '!important'` excludes
 
 Metadata from `@person` and `#tag` in an event's title or body is extracted
 automatically and stored separately from the text, so `#deploy` only matches the
-tag, not the word "deploy" in the body.
+tag, not the word "deploy" in the body. The search index keeps the two apart as
+well: `#tag`, `@person` and `key=value` terms match metadata only, and every
+other term matches title and body only. So an event whose body merely spells out
+`tag=deploy` is not matched by `-S '#deploy'` or `-S 'tag=deploy'` — only an
+event actually tagged that way is. The flip side is that a `key=value` string
+written *in* a body cannot be searched for as text; search the words around it.
 
 Names may contain any Unicode letter or digit plus `_`, `/` and `-`, so `@josé`,
 `@田中` and `#déploiement` are stored whole. A sigil only opens a tag at the
