@@ -45,14 +45,7 @@ func formatLocalDateTime(t time.Time) string {
 	return t.Local().Format(timefmt.DateTimeFormat)
 }
 
-func eventAuthor(ev event.Event) string {
-	for _, m := range ev.Meta {
-		if m.Key == event.MetaKeyAuthor {
-			return m.Value
-		}
-	}
-	return ""
-}
+func eventAuthor(ev event.Event) string { return event.AuthorOf(ev.Meta) }
 
 // formatEventLine renders the one-line form shared by tree, flat and their
 // streaming variants. author and text are sanitized here rather than at each

@@ -74,7 +74,7 @@ func (c *AddCmd) runText(s eventStore, io ioStreams, text string) error {
 	if title == "" {
 		return fmt.Errorf("event title cannot be empty")
 	}
-	meta, err := event.CollectMeta(title+" "+body, c.Meta, c.Author)
+	meta, err := event.CollectMeta(parse.EventText(title, body), c.Meta, c.Author)
 	if err != nil {
 		return err
 	}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -419,35 +420,83 @@ func TestCountMeta(t *testing.T) {
 	}
 }
 
-func TestUpdateMeta_RejectsWellKnownKey(t *testing.T) {
+// TestProtectedMetaKey_RefusedByEveryVerb is the M3 guard. `author` is
+// single-valued and written only by Add, so every verb that could add a
+// second one, remove the only one, or rename another key onto it must
+// refuse. Each subtest asserts the event still carries exactly one
+// unchanged author afterwards — an error return that still mutated would
+// be the worse failure.
+func TestProtectedMetaKey_RefusedByEveryVerb(t *testing.T) {
 	t.Parallel()
-	database := testDB(t)
 
-	if _, err := Add(ctx, database, AddInput{Title: "x", Meta: []parse.Meta{
-		{Key: MetaKeyAuthor, Value: "alice"},
-	}}); err != nil {
-		t.Fatalf("Add: %v", err)
+	cases := []struct {
+		name string
+		call func(ctx context.Context, db *sql.DB, id int64) error
+	}{
+		{"update-meta-source", func(ctx context.Context, db *sql.DB, id int64) error {
+			_, err := UpdateMeta(ctx, db, MetaKeyAuthor, "alice", "k", "v")
+			return err
+		}},
+		{"update-meta-target", func(ctx context.Context, db *sql.DB, id int64) error {
+			// The pre-M3 guard read oldKey only, so this minted a second
+			// author on every event carrying project=fngr.
+			_, err := UpdateMeta(ctx, db, "project", "fngr", MetaKeyAuthor, "evil")
+			return err
+		}},
+		{"delete-meta", func(ctx context.Context, db *sql.DB, id int64) error {
+			_, err := DeleteMeta(ctx, db, MetaKeyAuthor, "alice")
+			return err
+		}},
+		{"add-tags", func(ctx context.Context, db *sql.DB, id int64) error {
+			_, err := AddTags(ctx, db, id, []parse.Meta{{Key: MetaKeyAuthor, Value: "zzz"}})
+			return err
+		}},
+		{"add-tags-alongside-a-legal-one", func(ctx context.Context, db *sql.DB, id int64) error {
+			// Rejected as a whole: a partial apply would be worse than
+			// either outcome.
+			_, err := AddTags(ctx, db, id, []parse.Meta{
+				{Key: MetaKeyTag, Value: "ok"},
+				{Key: MetaKeyAuthor, Value: "zzz"},
+			})
+			return err
+		}},
+		{"remove-tags", func(ctx context.Context, db *sql.DB, id int64) error {
+			_, err := RemoveTags(ctx, db, id, []parse.Meta{{Key: MetaKeyAuthor, Value: "alice"}})
+			return err
+		}},
 	}
 
-	_, err := UpdateMeta(ctx, database, MetaKeyAuthor, "alice", MetaKeyAuthor, "bob")
-	if err == nil || !strings.Contains(err.Error(), "well-known") {
-		t.Errorf("err = %v, want well-known key rejection", err)
-	}
-}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			database := testDB(t)
+			id, err := Add(ctx, database, AddInput{Title: "x", Meta: []parse.Meta{
+				{Key: MetaKeyAuthor, Value: "alice"},
+				{Key: "project", Value: "fngr"},
+			}})
+			if err != nil {
+				t.Fatalf("Add: %v", err)
+			}
 
-func TestDeleteMeta_RejectsWellKnownKey(t *testing.T) {
-	t.Parallel()
-	database := testDB(t)
+			if err := tc.call(ctx, database, id); err == nil ||
+				!strings.Contains(err.Error(), "single-valued") {
+				t.Fatalf("err = %v, want a protected-key rejection", err)
+			}
 
-	if _, err := Add(ctx, database, AddInput{Title: "x", Meta: []parse.Meta{
-		{Key: MetaKeyAuthor, Value: "alice"},
-	}}); err != nil {
-		t.Fatalf("Add: %v", err)
-	}
-
-	_, err := DeleteMeta(ctx, database, MetaKeyAuthor, "alice")
-	if err == nil || !strings.Contains(err.Error(), "well-known") {
-		t.Errorf("err = %v, want well-known key rejection", err)
+			ev, err := Get(ctx, database, id)
+			if err != nil {
+				t.Fatalf("Get: %v", err)
+			}
+			var authors []string
+			for _, m := range ev.Meta {
+				if m.Key == MetaKeyAuthor {
+					authors = append(authors, m.Value)
+				}
+			}
+			if len(authors) != 1 || authors[0] != "alice" {
+				t.Errorf("authors = %v, want exactly [alice]", authors)
+			}
+		})
 	}
 }
 
@@ -1394,6 +1443,225 @@ func TestUpdate_TextDedupsRepeatedBodyTags(t *testing.T) {
 	}
 	if n != 1 {
 		t.Errorf("tag=ops count = %d, want 1", n)
+	}
+}
+
+// TestUpdate_RetractsOnlyBodyDerivedTags is the M1 guard. `people=bob` from
+// an inline `@bob` and `people=bob` from `event tag` are the same row, so
+// before event_meta carried provenance the sync — delete every tag in the old
+// text, insert every tag in the new — destroyed the operator's tag the moment
+// an edit dropped a mention of the same handle. Untrusted notes contain
+// `@handle` all the time, so this needed no unusual usage to hit.
+//
+// Each case ends with the mention edited away; only the tag nothing but the
+// body ever claimed should go with it.
+func TestUpdate_RetractsOnlyBodyDerivedTags(t *testing.T) {
+	t.Parallel()
+
+	bob := parse.Meta{Key: MetaKeyPeople, Value: "bob"}
+	tagIt := func(t *testing.T, database *sql.DB, id int64) {
+		if _, err := AddTags(ctx, database, id, []parse.Meta{bob}); err != nil {
+			t.Fatalf("AddTags: %v", err)
+		}
+	}
+	cases := []struct {
+		name string
+		// claim asserts the tag as the operator's — or, for the baseline,
+		// does not. It runs between the two edits unless claimFirst.
+		claim func(t *testing.T, database *sql.DB, id int64)
+		// claimFirst runs claim before the mention is ever added, which is
+		// the order the bug was reported in: the tag row then predates any
+		// body that yields it, so the mention's insert is the conflicting one.
+		claimFirst bool
+		wantKept   bool
+	}{
+		{
+			name:     "body only",
+			claim:    func(*testing.T, *sql.DB, int64) {},
+			wantKept: false,
+		},
+		{
+			name:     "event tag",
+			claim:    tagIt,
+			wantKept: true,
+		},
+		{
+			name:       "event tag before the mention",
+			claim:      tagIt,
+			claimFirst: true,
+			wantKept:   true,
+		},
+		{
+			name: "meta rename onto it",
+			claim: func(t *testing.T, database *sql.DB, id int64) {
+				if _, err := UpdateMeta(ctx, database, MetaKeyPeople, "bob", MetaKeyPeople, "bob"); err != nil {
+					t.Fatalf("UpdateMeta: %v", err)
+				}
+			},
+			wantKept: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			database := testDB(t)
+
+			id, err := Add(ctx, database, AddInput{Title: "plain note", Meta: []parse.Meta{
+				{Key: MetaKeyAuthor, Value: "nicolas"},
+			}})
+			if err != nil {
+				t.Fatalf("Add: %v", err)
+			}
+
+			if tc.claimFirst {
+				tc.claim(t, database, id)
+			}
+			mention := "now mentions @bob inline"
+			if err := Update(ctx, database, id, nil, &mention, nil); err != nil {
+				t.Fatalf("Update(%q): %v", mention, err)
+			}
+			if !tc.claimFirst {
+				tc.claim(t, database, id)
+			}
+			gone := "no more mention"
+			if err := Update(ctx, database, id, nil, &gone, nil); err != nil {
+				t.Fatalf("Update(%q): %v", gone, err)
+			}
+
+			ev, err := Get(ctx, database, id)
+			if err != nil {
+				t.Fatalf("Get: %v", err)
+			}
+			if got := slices.Contains(ev.Meta, bob); got != tc.wantKept {
+				t.Errorf("people=bob present = %v, want %v; meta = %v", got, tc.wantKept, ev.Meta)
+			}
+		})
+	}
+}
+
+// TestAddTags_CountsPromotionAsAlreadyPresent pins the reporting side of the
+// promotion in AddTags. Tagging a handle the body already mentions rewrites
+// the row's provenance, which RowsAffected counts as a change — so the count
+// has to come from the pre-read instead, or `fngr event tag` claims to have
+// added a tag that was on screen before the command ran.
+func TestAddTags_CountsPromotionAsAlreadyPresent(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	id, err := Add(ctx, database, AddInput{Title: "standup with @bob", Meta: []parse.Meta{
+		{Key: MetaKeyAuthor, Value: "nicolas"},
+		{Key: MetaKeyPeople, Value: "bob"},
+	}})
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	added, err := AddTags(ctx, database, id, []parse.Meta{
+		{Key: MetaKeyPeople, Value: "bob"},
+		{Key: MetaKeyTag, Value: "standup"},
+	})
+	if err != nil {
+		t.Fatalf("AddTags: %v", err)
+	}
+	if added != 1 {
+		t.Errorf("added = %d, want 1 (people=bob was already there)", added)
+	}
+}
+
+// TestAdd_RejectsBadAuthorMeta pins the single-author invariant at the writer
+// rather than only in MergeMeta. The data layer refuses every attempt to
+// repair an event's author, so it has to refuse to create the states that
+// would need repairing — including from an AddInput built directly, which is
+// the one path MergeMeta does not sit in front of.
+func TestAdd_RejectsBadAuthorMeta(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		meta    []parse.Meta
+		wantErr string
+	}{
+		{
+			name: "two distinct authors",
+			meta: []parse.Meta{
+				{Key: MetaKeyAuthor, Value: "nicolas"},
+				{Key: MetaKeyAuthor, Value: "bob"},
+			},
+			wantErr: "exactly one author",
+		},
+		{
+			name:    "blank author",
+			meta:    []parse.Meta{{Key: MetaKeyAuthor, Value: ""}},
+			wantErr: "author cannot be empty",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			database := testDB(t)
+
+			_, err := Add(ctx, database, AddInput{Title: "note", Meta: tt.meta})
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Add err = %v, want one containing %q", err, tt.wantErr)
+			}
+
+			var count int
+			if err := database.QueryRow("SELECT COUNT(*) FROM events").Scan(&count); err != nil {
+				t.Fatalf("count: %v", err)
+			}
+			if count != 0 {
+				t.Errorf("created %d events, want 0", count)
+			}
+		})
+	}
+}
+
+// TestUpdateMeta_AuthorValueIsCorrectable is the other half of the protected
+// key rule. `author` is refused as the target of every meta verb so no event
+// can end up with zero or two of them — but a rename that keeps the key only
+// rewrites the value, so every event keeps exactly the one row it had. Without
+// the exception a typo in --author was permanent: no verb could touch it.
+func TestUpdateMeta_AuthorValueIsCorrectable(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	for _, title := range []string{"first", "second"} {
+		if _, err := Add(ctx, database, AddInput{Title: title, Meta: []parse.Meta{
+			{Key: MetaKeyAuthor, Value: "nicolass"},
+		}}); err != nil {
+			t.Fatalf("Add(%q): %v", title, err)
+		}
+	}
+
+	n, err := UpdateMeta(ctx, database, MetaKeyAuthor, "nicolass", MetaKeyAuthor, "nicolas")
+	if err != nil {
+		t.Fatalf("UpdateMeta: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("renamed %d rows, want 2", n)
+	}
+
+	ev, err := Get(ctx, database, 1)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got := AuthorOf(ev.Meta); got != "nicolas" {
+		t.Errorf("author = %q, want %q; meta = %v", got, "nicolas", ev.Meta)
+	}
+
+	// The escape hatch is only for the value. Renaming author to an empty
+	// value, or across keys in either direction, still breaks the count.
+	blocked := []struct{ oldKey, oldValue, newKey, newValue string }{
+		{MetaKeyAuthor, "nicolas", MetaKeyAuthor, ""},
+		{MetaKeyAuthor, "nicolas", MetaKeyPeople, "nicolas"},
+		{MetaKeyPeople, "bob", MetaKeyAuthor, "bob"},
+	}
+	for _, b := range blocked {
+		if _, err := UpdateMeta(ctx, database, b.oldKey, b.oldValue, b.newKey, b.newValue); err == nil {
+			t.Errorf("UpdateMeta(%s=%s -> %s=%s) succeeded, want refusal",
+				b.oldKey, b.oldValue, b.newKey, b.newValue)
+		}
 	}
 }
 

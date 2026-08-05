@@ -118,7 +118,7 @@ func addInTx(ctx context.Context, tx *sql.Tx, inputs []AddInput) ([]int64, error
 	}
 
 	insertMeta, err := tx.PrepareContext(ctx,
-		"INSERT INTO event_meta (event_id, key, value) VALUES (?, ?, ?)",
+		"INSERT INTO event_meta (event_id, key, value, source) VALUES (?, ?, ?, ?)",
 	)
 	if err != nil {
 		return nil, fmt.Errorf("prepare meta insert: %w", err)
@@ -149,6 +149,9 @@ func addInTx(ctx context.Context, tx *sql.Tx, inputs []AddInput) ([]int64, error
 		if in.Title == "" {
 			return nil, fmt.Errorf("title cannot be empty")
 		}
+		if err := requireOneAuthor(in.Meta); err != nil {
+			return nil, err
+		}
 
 		var res sql.Result
 		if in.CreatedAt != nil {
@@ -175,8 +178,21 @@ func addInTx(ctx context.Context, tx *sql.Tx, inputs []AddInput) ([]int64, error
 			return nil, fmt.Errorf("last insert id: %w", err)
 		}
 
+		// in.Meta arrives already merged, so provenance is recovered by
+		// re-deriving the body tags rather than carried alongside it. A tuple
+		// the text yields is recorded as body-derived even when `--meta` named
+		// it too: the two sources agreed, and the live one is the text. That
+		// is the same tie-break migration 5's back-fill makes, and it keeps a
+		// `fngr --format=json | fngr add -f json` round trip from freezing
+		// every body tag as explicit — `event tag` promotes any tuple whose
+		// claim should outlive the mention.
+		fromBody := metaSet(parse.BodyTags(parse.EventText(in.Title, in.Body)))
 		for _, m := range in.Meta {
-			if _, err := insertMeta.ExecContext(ctx, id, m.Key, m.Value); err != nil {
+			source := metaSourceExplicit
+			if _, ok := fromBody[m]; ok {
+				source = metaSourceBody
+			}
+			if _, err := insertMeta.ExecContext(ctx, id, m.Key, m.Value, source); err != nil {
 				return nil, fmt.Errorf("insert meta: %w", err)
 			}
 		}
@@ -295,9 +311,9 @@ func Delete(ctx context.Context, db *sql.DB, id int64) error {
 // Update mutates an existing event's title, body, and/or createdAt
 // timestamp. Any field with a nil pointer is left untouched. When
 // either title or body changes, body-derived tags (`@person`,
-// `#tag`) are synced — the old set (extracted from title+body
-// joined) is removed, the new set is inserted via ON CONFLICT DO
-// NOTHING — and the FTS row is rebuilt. Empty title is rejected;
+// `#tag`) are synced — tags present in the old text but not the new
+// are removed, the new set is inserted via ON CONFLICT DO NOTHING —
+// and the FTS row is rebuilt. Empty title is rejected;
 // empty body clears it. Returns ErrNotFound when no such event
 // exists.
 func Update(ctx context.Context, db *sql.DB, id int64, title, body *string, createdAt *time.Time) error {
@@ -327,6 +343,13 @@ func Update(ctx context.Context, db *sql.DB, id int64, title, body *string, crea
 
 	textChanged := title != nil || body != nil
 
+	// The source = 'body' filter on the delete is what carries the semantics:
+	// it stops `event tag @bob` from being collateral damage the first time an
+	// edit drops an inline @bob. Deleting only the delta against the old text
+	// is an optimisation on top — end state is the same either way, since a
+	// surviving tuple would just be re-inserted — worth it because most edits
+	// touch none of the tags and would otherwise rewrite every row.
+	var removedTags, newBodyTags []parse.Meta
 	if textChanged {
 		var oldTitle, oldBody string
 		if err := tx.QueryRowContext(ctx,
@@ -334,10 +357,15 @@ func Update(ctx context.Context, db *sql.DB, id int64, title, body *string, crea
 		).Scan(&oldTitle, &oldBody); err != nil {
 			return fmt.Errorf("query event title/body: %w", err)
 		}
-		oldBodyTags := parse.BodyTags(oldTitle + " " + oldBody)
-		if err := deleteMetaTuples(ctx, tx, id, oldBodyTags); err != nil {
-			return err
+		newTitle, newBody := oldTitle, oldBody
+		if title != nil {
+			newTitle = *title
 		}
+		if body != nil {
+			newBody = *body
+		}
+		newBodyTags = parse.BodyTags(parse.EventText(newTitle, newBody))
+		removedTags = subtractMeta(parse.BodyTags(parse.EventText(oldTitle, oldBody)), newBodyTags)
 	}
 
 	sets := make([]string, 0, 3)
@@ -360,14 +388,10 @@ func Update(ctx context.Context, db *sql.DB, id int64, title, body *string, crea
 	}
 
 	if textChanged {
-		var newTitle, newBody string
-		if err := tx.QueryRowContext(ctx,
-			"SELECT title, body FROM events WHERE id = ?", id,
-		).Scan(&newTitle, &newBody); err != nil {
-			return fmt.Errorf("query event title/body after update: %w", err)
+		if err := execBodyMetaTuples(ctx, tx, deleteBodyMetaSQL, "delete", id, removedTags); err != nil {
+			return err
 		}
-		newBodyTags := parse.BodyTags(newTitle + " " + newBody)
-		if err := insertMetaTuples(ctx, tx, id, newBodyTags); err != nil {
+		if err := execBodyMetaTuples(ctx, tx, insertBodyMetaSQL, "insert", id, newBodyTags); err != nil {
 			return err
 		}
 		if err := rebuildEventFTS(ctx, tx, id); err != nil {
@@ -437,16 +461,22 @@ func Reparent(ctx context.Context, db *sql.DB, id int64, newParent *int64) error
 	return tx.Commit()
 }
 
-// AddTags inserts the given meta entries for event id. Duplicates are
-// dropped at the database via INSERT ... ON CONFLICT DO NOTHING (the
-// UNIQUE index on (key, value, event_id) added in migration 2). Returns
-// the number of rows actually inserted — len(tags) minus database-side
-// dedup hits — so callers can report "M added, K already present". FTS
-// is rebuilt in the same transaction. Returns ErrNotFound if the event
-// is missing. Empty `tags` is a no-op returning (0, nil).
+// AddTags inserts the given meta entries for event id as explicit metadata:
+// a tag named on the command line is the operator's, and a later body edit
+// that happens to drop the same `@name` must not retract it, so a row already
+// present as body-derived is promoted rather than left alone. Returns the
+// number of rows that did not already exist, so callers can report "M added,
+// K already present" — counted from a pre-read rather than RowsAffected,
+// which cannot tell an insert from that promotion. FTS is rebuilt in the same
+// transaction. Returns ErrNotFound if the event is missing. Empty `tags` is a
+// no-op returning (0, nil). Protected keys (`author`) are refused outright —
+// see protectedMetaKeys.
 func AddTags(ctx context.Context, db *sql.DB, id int64, tags []parse.Meta) (int64, error) {
 	if len(tags) == 0 {
 		return 0, nil
+	}
+	if err := requireUnprotectedTags("add", tags); err != nil {
+		return 0, err
 	}
 
 	tx, err := db.BeginTx(ctx, nil)
@@ -459,8 +489,19 @@ func AddTags(ctx context.Context, db *sql.DB, id int64, tags []parse.Meta) (int6
 		return 0, err
 	}
 
+	existing, err := readMetaTx(ctx, tx, id)
+	if err != nil {
+		return 0, err
+	}
+	present := metaSet(existing)
+
 	stmt, err := tx.PrepareContext(ctx,
-		"INSERT INTO event_meta (event_id, key, value) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
+		// The DO UPDATE is guarded so it fires only for the promotion it
+		// exists for; an already-explicit row is left untouched rather than
+		// rewritten to the value it already holds.
+		"INSERT INTO event_meta (event_id, key, value, source) VALUES (?, ?, ?, ?)"+
+			" ON CONFLICT DO UPDATE SET source = excluded.source"+
+			" WHERE event_meta.source <> excluded.source",
 	)
 	if err != nil {
 		return 0, fmt.Errorf("prepare insert: %w", err)
@@ -469,15 +510,13 @@ func AddTags(ctx context.Context, db *sql.DB, id int64, tags []parse.Meta) (int6
 
 	var added int64
 	for _, m := range tags {
-		res, err := stmt.ExecContext(ctx, id, m.Key, m.Value)
-		if err != nil {
+		if _, dup := present[m]; !dup {
+			present[m] = struct{}{}
+			added++
+		}
+		if _, err := stmt.ExecContext(ctx, id, m.Key, m.Value, metaSourceExplicit); err != nil {
 			return 0, fmt.Errorf("insert tag: %w", err)
 		}
-		n, err := res.RowsAffected()
-		if err != nil {
-			return 0, fmt.Errorf("rows affected: %w", err)
-		}
-		added += n
 	}
 
 	if err := rebuildEventFTS(ctx, tx, id); err != nil {
@@ -491,9 +530,14 @@ func AddTags(ctx context.Context, db *sql.DB, id int64, tags []parse.Meta) (int6
 // the number of rows removed. FTS rebuilt in the same transaction.
 // Returns ErrNotFound if the event is missing; (0, nil) is a valid
 // outcome when none of the tags were present. Empty tags is a no-op.
+// Protected keys (`author`) are refused outright, matching DeleteMeta —
+// an event with no author renders a blank column everywhere.
 func RemoveTags(ctx context.Context, db *sql.DB, id int64, tags []parse.Meta) (int64, error) {
 	if len(tags) == 0 {
 		return 0, nil
+	}
+	if err := requireUnprotectedTags("remove", tags); err != nil {
+		return 0, err
 	}
 
 	tx, err := db.BeginTx(ctx, nil)
@@ -555,43 +599,31 @@ func readMetaTx(ctx context.Context, tx *sql.Tx, id int64) ([]parse.Meta, error)
 	return meta, rows.Err()
 }
 
-// deleteMetaTuples removes (id, key, value) rows for the given tags. Empty
-// tags is a no-op.
-func deleteMetaTuples(ctx context.Context, tx *sql.Tx, id int64, tags []parse.Meta) error {
-	if len(tags) == 0 {
-		return nil
-	}
-	stmt, err := tx.PrepareContext(ctx,
-		"DELETE FROM event_meta WHERE event_id = ? AND key = ? AND value = ?",
-	)
-	if err != nil {
-		return fmt.Errorf("prepare delete: %w", err)
-	}
-	defer stmt.Close()
-	for _, m := range tags {
-		if _, err := stmt.ExecContext(ctx, id, m.Key, m.Value); err != nil {
-			return fmt.Errorf("delete meta: %w", err)
-		}
-	}
-	return nil
-}
+// The two halves of Update's body-tag sync. Both are scoped to
+// metaSourceBody, which is the point: the delete leaves an operator-added
+// tuple of the same key and value standing, and the insert's DO NOTHING
+// leaves it explicit rather than demoting it to a mention.
+const (
+	deleteBodyMetaSQL = "DELETE FROM event_meta" +
+		" WHERE event_id = ? AND key = ? AND value = ? AND source = ?"
+	insertBodyMetaSQL = "INSERT INTO event_meta (event_id, key, value, source)" +
+		" VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING"
+)
 
-// insertMetaTuples inserts (id, key, value) rows for the given tags using
-// ON CONFLICT DO NOTHING. Empty tags is a no-op.
-func insertMetaTuples(ctx context.Context, tx *sql.Tx, id int64, tags []parse.Meta) error {
+// execBodyMetaTuples runs query once per tag with (id, key, value, 'body')
+// bound. verb names the operation in any error. Empty tags is a no-op.
+func execBodyMetaTuples(ctx context.Context, tx *sql.Tx, query, verb string, id int64, tags []parse.Meta) error {
 	if len(tags) == 0 {
 		return nil
 	}
-	stmt, err := tx.PrepareContext(ctx,
-		"INSERT INTO event_meta (event_id, key, value) VALUES (?, ?, ?) ON CONFLICT DO NOTHING",
-	)
+	stmt, err := tx.PrepareContext(ctx, query)
 	if err != nil {
-		return fmt.Errorf("prepare insert: %w", err)
+		return fmt.Errorf("prepare %s: %w", verb, err)
 	}
 	defer stmt.Close()
 	for _, m := range tags {
-		if _, err := stmt.ExecContext(ctx, id, m.Key, m.Value); err != nil {
-			return fmt.Errorf("insert meta: %w", err)
+		if _, err := stmt.ExecContext(ctx, id, m.Key, m.Value, metaSourceBody); err != nil {
+			return fmt.Errorf("%s meta: %w", verb, err)
 		}
 	}
 	return nil
@@ -645,20 +677,72 @@ func HasChildren(ctx context.Context, db *sql.DB, id int64) (bool, error) {
 	return count > 0, nil
 }
 
-var wellKnownMetaKeys = map[string]bool{
+// protectedMetaKeys are single-valued and fixed at insert time. Every meta
+// verb refuses them as a *target* — adding a second one, removing the only
+// one, or renaming another key onto them all leave the event in a state no
+// insert path can produce, and renderers that look the key up by name
+// (event.AuthorOf) then pick whichever tuple sorts first or print a blank
+// column. `Add` is the sole writer, and requireOneAuthor is what keeps it to
+// one — the data layer refuses to repair only an invariant it also enforces.
+var protectedMetaKeys = map[string]bool{
 	MetaKeyAuthor: true,
+}
+
+// requireUnprotectedMeta rejects a protected key as the target of verb.
+func requireUnprotectedMeta(verb, key string) error {
+	if protectedMetaKeys[key] {
+		return fmt.Errorf("cannot %s meta key %q: it is single-valued and set when the event is created", verb, key)
+	}
+	return nil
+}
+
+// requireUnprotectedTags applies requireUnprotectedMeta across a tag slice.
+func requireUnprotectedTags(verb string, tags []parse.Meta) error {
+	for _, m := range tags {
+		if err := requireUnprotectedMeta(verb, m.Key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// requireRenamableMeta is the protected-key gate for UpdateMeta, which is
+// looser than the other verbs' by one case. What protection buys is the count:
+// exactly one `author` row per event. A rename that changes the key breaks it
+// in one direction or the other — `author=x` → `k=v` strips the author off
+// every event that had it, `k=v` → `author=evil` mints a second one — and is
+// refused at both ends. A rename that keeps the key only rewrites the value,
+// leaving every event with the single row it already had, so a mistyped
+// `--author` stays correctable: refusing it too made the one field no verb can
+// touch also the one field no verb can fix, and the workaround was re-adding
+// the event under a new id. An empty new value is still refused, since that
+// blank is exactly the unrepairable state.
+func requireRenamableMeta(oldKey, newKey, newValue string) error {
+	if oldKey == newKey {
+		if protectedMetaKeys[newKey] && newValue == "" {
+			return fmt.Errorf("cannot rename meta key %q to an empty value: it is single-valued and every event must carry one", newKey)
+		}
+		return nil
+	}
+	if err := requireUnprotectedMeta("rename", oldKey); err != nil {
+		return err
+	}
+	// The target matters as much as the source: without this, `meta rename
+	// k=v author=evil` minted a second author on every event carrying k=v.
+	return requireUnprotectedMeta("rename onto", newKey)
 }
 
 // UpdateMeta renames every (oldKey, oldValue) tuple across all events to
 // (newKey, newValue) and returns the number of tuples it renamed. A rename
 // onto a tuple that already exists is a merge, not an error: an event
 // carrying both ends up with one, and the row it absorbed is gone (so the
-// count is rows renamed, not rows the database gained). Refuses to touch
-// well-known meta keys (currently `author`) so accidental renames don't
-// break renderers that look them up by name.
+// count is rows renamed, not rows the database gained). Refuses a protected
+// key (currently `author`) on either end of a rename that *changes* the key,
+// so no rename can break the renderers that look it up by name; correcting a
+// protected key's value in place is allowed — see requireRenamableMeta.
 func UpdateMeta(ctx context.Context, db *sql.DB, oldKey, oldValue, newKey, newValue string) (int64, error) {
-	if wellKnownMetaKeys[oldKey] {
-		return 0, fmt.Errorf("cannot rename well-known meta key %q", oldKey)
+	if err := requireRenamableMeta(oldKey, newKey, newValue); err != nil {
+		return 0, err
 	}
 
 	tx, err := db.BeginTx(ctx, nil)
@@ -683,9 +767,14 @@ func UpdateMeta(ctx context.Context, db *sql.DB, oldKey, oldValue, newKey, newVa
 	// merge. Renaming a tuple to itself needs no special case: SQLite checks
 	// uniqueness against the *other* rows, so the row is simply rewritten
 	// with the values it already had.
+	//
+	// The renamed row becomes explicit whatever it was before: the new value
+	// is one the operator chose and no event's text yields it, so leaving it
+	// body-derived would let the next edit of any renamed event delete the
+	// rename along with the mention it no longer matches.
 	res, err := tx.ExecContext(ctx,
-		"UPDATE OR REPLACE event_meta SET key = ?, value = ? WHERE key = ? AND value = ?",
-		newKey, newValue, oldKey, oldValue,
+		"UPDATE OR REPLACE event_meta SET key = ?, value = ?, source = ? WHERE key = ? AND value = ?",
+		newKey, newValue, metaSourceExplicit, oldKey, oldValue,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("update meta: %w", err)
@@ -709,11 +798,11 @@ func UpdateMeta(ctx context.Context, db *sql.DB, oldKey, oldValue, newKey, newVa
 }
 
 // DeleteMeta removes every (key, value) tuple across all events and
-// returns the number of rows deleted. Refuses to touch well-known meta
-// keys for the same reason as UpdateMeta.
+// returns the number of rows deleted. Refuses protected keys for the same
+// reason as UpdateMeta.
 func DeleteMeta(ctx context.Context, db *sql.DB, key, value string) (int64, error) {
-	if wellKnownMetaKeys[key] {
-		return 0, fmt.Errorf("cannot delete well-known meta key %q", key)
+	if err := requireUnprotectedMeta("delete", key); err != nil {
+		return 0, err
 	}
 
 	tx, err := db.BeginTx(ctx, nil)

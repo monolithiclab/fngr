@@ -125,11 +125,24 @@ make ci             # codefix + format + lint + test
   migration 3's index rebuild was a second SQL transliteration of that same helper. The SQL half
   (`4.sql`) is a single `ANALYZE event_meta`, refreshing statistics migration 2 left describing a
   dropped index.
+- `internal/db/migrate5.go` — The Go half of migration 5, which adds `event_meta.source`
+  (`'body'` | `'explicit'`) so `Update`'s body-tag sync can retract only what a body mention
+  minted. `5.sql` defaults every existing row to `'explicit'`; `classifyMetaSource` then demotes
+  the ones the event's own title+body still yield via `parse.BodyTags`. That is a reconstruction,
+  not a lookup — provenance was never recorded — and it is lossy for exactly one case: a tuple
+  added *both* ways is a single row, and it comes out `'body'`, the same tie-break `addInTx`
+  makes for a new event. `event tag` promotes such a row back. `5.sql` carries a
+  `CHECK (source IN ('body','explicit'))` because both values are written as bare literals from
+  Go and SQL alike, and no index — every statement filtering on `source` also gives
+  `(key, value, event_id)`, which migration 2's unique index already serves.
 - `internal/parse/parse.go` — `Meta` type, `BodyTags` for body-tag extraction (`@person` → people,
   `#tag` → tag), `KeyValue` helper for `key=value` strings, `FlagMeta` for `--meta` flag arrays
   (delegates to `KeyValue`), `MetaArg` for individual CLI tag args (`@person`, `#tag`, or
   `key=value`; used by `event tag` / `event untag`), `FTSContent` for FTS index content building,
-  `SplitTitleBody` for the `". "` title/body split.
+  `SplitTitleBody` for the `". "` title/body split, and `EventText` for the title+body join every
+  body-tag derivation runs over — `addInTx`, `Update`'s sync and migration 5's back-fill each
+  decide provenance from it, so a join that differs by a space would have them disagree about a
+  tag at the boundary.
   Tag and meta-name regexes share the private `metaNamePattern` constant; the anchored form is
   exported as `MetaNameRe` for reuse by `cmd/fngr/meta.go::parseMetaFilter`. That pattern is
   Unicode-class based (`\p{L}\p{N}_/-`), not `\w` — Go's `\w` is ASCII-only, so it truncated
@@ -160,8 +173,17 @@ make ci             # codefix + format + lint + test
   into a string SQLite stores but the driver cannot scan back — one such row broke every read of
   the table. Month arithmetic goes through `addMonths`, which clamps the day to the target month's
   last day; plain `AddDate` normalizes Feb 31 forward to Mar 3.
-- `internal/event/meta.go` — Domain meta key constants (`MetaKeyAuthor`, etc.), `CollectMeta`
-  merges all meta sources (author, body tags, flags) with dedup.
+- `internal/event/meta.go` — Domain meta key constants (`MetaKeyAuthor`, etc.), the
+  `metaSourceBody` / `metaSourceExplicit` values of `event_meta.source`, and `MergeMeta`, which
+  merges all meta sources for a new event (author, body tags, explicit entries) with dedup.
+  `CollectMeta` is `MergeMeta` over `--meta key=value` strings. An explicit `author` *replaces*
+  the default rather than joining it; two distinct explicit authors are an error, and so is an
+  empty one (`-m author=` used to both blank the author and discard the real one). `author` is
+  single-valued because `AuthorOf` — the one lookup, used by `render` and the JSON import —
+  returns the first match in `ORDER BY key, value`, so a second row means the displayed author
+  is alphabetical rather than true. `requireOneAuthor` restates that at the writer, so an
+  `AddInput` built directly cannot create the state no meta verb is allowed to repair. Also
+  `metaSet` and `subtractMeta`, the tuple-set helpers `addInTx` and `Update` use.
 - `internal/event/event.go` — Data access functions: `Add` (transactional event + meta + FTS),
   `AddMany` (batched same shape, atomic), `AddInput` value type. Both `Add` and `AddMany`
   delegate to a private `addInTx` that runs the per-record INSERT loop using a caller-owned
@@ -172,23 +194,49 @@ make ci             # codefix + format + lint + test
   parent (`fngr --format=json` emits newest-first); `validateParentIndexes` rejects
   out-of-range indexes and cycles up front, because SQLite's FK check only proves the parent
   row exists and would happily commit a cycle unreachable from any root.
+  `addInTx` also enforces `requireOneAuthor` and stamps each meta row's `source`, re-deriving
+  `parse.BodyTags(parse.EventText(...))` because `AddInput.Meta` arrives already merged; a tuple
+  the text yields is recorded as body-derived even when `--meta` named it too — the same
+  tie-break migration 5 makes, which also keeps a `--format=json` round trip from freezing every
+  body tag as explicit.
   `Get`, `Update` (title, body, and/or timestamp; on title or body change body-derived tags are
-  *synced* — `parse.BodyTags(oldTitle+" "+oldBody)` deleted then
-  `parse.BodyTags(newTitle+" "+newBody)` inserted via
-  `ON CONFLICT DO NOTHING`; FTS rebuilt), `Reparent` (set/clear `parent_id`; rejects self and
-  ancestry cycles via `ErrCycle`), `AddTags` / `RemoveTags` (event-scoped meta CRUD with FTS
-  resync), `Delete`, `HasChildren`, `List` / `ListSeq` (FTS5 filter + date range + `Limit` +
+  *synced* — `parse.BodyTags(old) \ parse.BodyTags(new)` deleted via `execBodyMetaTuples` with
+  `deleteBodyMetaSQL`, which matches `source = 'body'` only, then `parse.BodyTags(new)` inserted
+  with `insertBodyMetaSQL`'s `ON CONFLICT DO NOTHING` so an explicit row keeps its provenance;
+  FTS rebuilt. The source filter is what carries the semantics — without it an edit that drops an
+  inline `@bob` also deletes the `people=bob` an operator added by hand, the two being the same
+  row. Subtracting the delta is an optimisation on top, same end state either way, worth it
+  because most edits touch no tags and would otherwise rewrite every row), `Reparent` (set/clear
+  `parent_id`; rejects self and ancestry cycles via `ErrCycle`), `AddTags` (inserts as
+  `'explicit'`, *promoting* an existing body-derived row, since a tag named on the command line
+  must survive the next body edit; the `DO UPDATE` is guarded on `source <> excluded.source` so
+  only that promotion rewrites a row, and the added count comes from a pre-read because
+  `RowsAffected` cannot tell the promotion from an insert) / `RemoveTags` (event-scoped meta CRUD with FTS
+  resync; both refuse `protectedMetaKeys`), `Delete`, `HasChildren`, `List` / `ListSeq` (FTS5 filter + date range + `Limit` +
   `Ascending`), `GetSubtree` (recursive CTE), `ListMeta` (filtered via `ListMetaOpts{Key, Value}`),
   `CountMeta`, `UpdateMeta` (a *merge*, not a plain rename — `UPDATE OR REPLACE` drops the row
   colliding with migration 2's `UNIQUE(key, value, event_id)`, so an event carrying both tags ends
   up with one. Plain `UPDATE` aborts the whole transaction there and renames nothing; any
   two-statement formulation instead needs an `old == new` guard, because its delete half would
-  take out the rows the update half just wrote), `DeleteMeta`. All functions accept
+  take out the rows the update half just wrote; the renamed row is also stamped
+  `source = 'explicit'`, since no event's text yields the new value and a body-derived row would
+  be deleted by the next edit of any renamed event), `DeleteMeta`. `UpdateMeta` and `DeleteMeta`
+  refuse `protectedMetaKeys` too. `UpdateMeta` goes through `requireRenamableMeta`, which is
+  looser by one case: a rename that *changes* the key is refused at both ends (`author=x` →
+  `k=v` strips the author off every event, `k=v` → `author=evil` mints a second one), but a
+  same-key value rewrite leaves every event with the single row it had, so a mistyped
+  `--author` stays correctable — protecting it against that too made `author` the one field
+  nothing could repair. An empty new value is still refused.
+  All functions accept
   `context.Context`. `ErrNotFound`, `ErrCycle` and `ErrTimeRange` sentinels.
   `loadMetaBatch` chunks the IN clause to stay under SQLite's parameter limit. Private helpers:
   `requireEventExists` (existence check used by every mutation function), `rebuildEventFTS`
-  (used by Update/AddTags/RemoveTags to resync `events_fts`), `deleteMetaTuples` /
-  `insertMetaTuples` (used by Update's body-tag sync path), `formatTimestamp` (the only writer of
+  (used by Update/AddTags/RemoveTags to resync `events_fts`), `execBodyMetaTuples` (both halves
+  of Update's body-tag sync, driven by `deleteBodyMetaSQL` / `insertBodyMetaSQL`),
+  `requireUnprotectedMeta` / `requireUnprotectedTags` / `requireRenamableMeta` (the
+  `protectedMetaKeys` gate — currently just `author`, refused as the target of every meta verb
+  because no insert path can produce zero or two of them),
+  `formatTimestamp` (the only writer of
   `created_at`; re-checks `timefmt.InRange` because a timestamp can bypass the CLI parser via
   `--format=json` or a directly-built `AddInput`), and `scanEventRow` (the only reader — shared by
   `scanEvents` and `ListSeq`). `created_at` is read through a `timeScanner` rather than scanned
