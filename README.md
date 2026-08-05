@@ -277,6 +277,11 @@ fngr meta -S '@sarah'       # filter: shorthand for people=sarah
 fngr meta -S '#ops'         # filter: shorthand for tag=ops
 fngr meta rename tag=wip tag=done   # or '#wip' '#done'; merges if the target exists
 fngr meta delete tag=obsolete       # or '#obsolete'
+# Keys and values wider than 60 characters are shown truncated with an
+# ellipsis — the listing pads every row to the widest cell, so one long
+# value would otherwise indent all the others out to its length. To read
+# one in full: fngr -S 'key=value' --format=json
+
 
 # Show help (alias for --help; takes a command path, including verb trees)
 fngr help

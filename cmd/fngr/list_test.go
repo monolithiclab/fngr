@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -343,6 +344,28 @@ func TestListCmd_NoPagerStillRendersToBuffer(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "evt") {
 		t.Errorf("expected 'evt' in output, got %q", out.String())
+	}
+}
+
+// TestListCmd_ReportsAFailedFlush is the other half of M15: Out is buffered
+// now, so the tail of a listing is written when Run returns and nowhere else.
+// Swallowing that error would exit 0 over output the user never received.
+func TestListCmd_ReportsAFailedFlush(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+
+	if _, err := s.Add(context.Background(), event.AddInput{Title: "evt", Meta: []parse.Meta{
+		{Key: "author", Value: "alice"},
+	}}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	wantErr := errors.New("disk full")
+	streams := ioStreams{In: strings.NewReader(""), Out: errWriter{err: wantErr}, Err: io.Discard}
+
+	cmd := &ListCmd{Format: "flat", NoPager: true}
+	if err := cmd.Run(s, streams); !errors.Is(err, wantErr) {
+		t.Errorf("Run err = %v, want %v", err, wantErr)
 	}
 }
 

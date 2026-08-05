@@ -45,13 +45,13 @@ under concurrent writes, and the README states the opposite.**
 | [M6](#m6) | Medium | render | Newlines and ANSI/OSC escapes in titles forge output rows | ✅ fixed |
 | [M7](#m7) | Medium | event | FTS conflates content with metadata → body text forges tag matches | open |
 | [M8](#m8) | Medium | render | `--limit` on tree format promotes orphaned children to roots, unmarked | ✅ fixed |
-| [M9](#m9) | Medium | cmd | `fngr meta` output amplification: 1 MB stored → 202 MB printed | open |
+| [M9](#m9) | Medium | cmd | `fngr meta` output amplification: 1 MB stored → 202 MB printed | ✅ fixed |
 | [M10](#m10) | Medium | parse | `". "` split eats abbreviations — `Dr. Smith` → title `Dr` | open |
 | [M11](#m11) | Medium | db | `fngr add` never creates a project-local `.fngr.db`; first add lands in `~/.fngr.db` | open |
 | [M12](#m12) | Medium | timefmt | `--from`/`--to` reject both relative forms and fngr's own emitted timestamps | ✅ fixed |
 | [M13](#m13) | Medium | timefmt | DST spring-forward silently shifts `event time` to the prior hour | ✅ fixed |
 | [M14](#m14) | Medium | event | `-n N -r` returns the N **oldest** events | ✅ fixed |
-| [M15](#m15) | Medium | perf | Unbuffered stdout — one `write(2)` per event; 11-19% on large lists | open |
+| [M15](#m15) | Medium | perf | Unbuffered stdout — one `write(2)` per event; 11-19% on large lists | ✅ fixed |
 | [M16](#m16) | Medium | supply-chain | Release workflow: broad privileges on seven mutable-tag actions | open |
 
 Plus 18 low-severity items, an architecture section, and a measured
@@ -1543,6 +1543,35 @@ $ fngr meta | wc -c
 values with an ellipsis. Also switch to rune/display width rather than `len()`
 bytes, which currently mis-aligns multibyte values.
 
+**Resolved** — `cmd/fngr/meta.go` now runs every cell through `displayCell`
+before measuring it: escaped, then clamped to `maxMetaCell` (60) runes with the
+last spent on an ellipsis where it cut. The clamp is a constant rather than a
+function of the data because meta is content-controlled — body tags, `--meta`,
+`--format=json` — so `min(maxVal, 60)` and a hard 60 differ only in whether the
+bound is a hope. `fngr -S key=value --format=json` prints a clamped value in
+full; the README says so.
+
+The output amplification turned out to be only half of it. `render.SanitizeLine`
+walks every byte it is handed and allocates a copy of the lot when anything
+needs escaping, so a 1 MB value cost ~2 ms and ~1 MB *per row* to print sixty
+characters. `displayCell` therefore cuts the raw value to `maxMetaCell+1` runes
+before escaping it — 1 MB clean goes 2.09 ms → 260 ns, and a value with one
+`\x1b` in it drops 1,056,842 B of allocation to 144 B, with no regression on
+short cells. One rune past the cap is what makes the shortcut free of
+consequence: escaping never shrinks a string, so a prefix that long still
+sanitizes past the cap and still gets clamped, and escaping is per-rune, so the
+runes that survive are the same either way. `TestDisplayCell_PreCutMatchesTheFullWalk`
+pins that equivalence against the unshortened composition.
+
+The alignment half went the other way from what the finding assumed: `fmt`'s
+`%-*s` pads to a width in **runes**, so measuring the cells with `len()` was
+*over*-padding a multibyte cell and stepping every row below it to the right,
+not left. The fix is one call — `utf8.RuneCountInString` where `len` was — and
+no width arithmetic at the format call at all. Rune count is still not terminal
+cells: a double-width CJK value pads short, which needs a width table nothing
+else in fngr wants and leaves a ragged column at worst, where the unclamped
+width was a 200x amplification.
+
 <a name="m10"></a>
 ### M10 — The `". "` split eats abbreviations
 
@@ -1781,6 +1810,30 @@ Corroborated externally: `flat 250k` shows 0.20 s sys out of 1.39 s.
 the wrapping and the closer, so the flush has a natural home. Caveat: TTFB for
 `| head -3` would wait for the first buffer — use 16 KB rather than 64 KB to
 keep that imperceptible.
+
+**Resolved** — `withPager` now always buffers, 16 KiB. The pager decision moved
+into a `pagerWriter` helper that returns the writer output should ultimately
+reach plus a closer for it; `withPager` wraps *that* in the `bufio.Writer`.
+Splitting them is the whole point: the old function early-returned `io`
+unchanged on every non-TTY path, which is exactly the redirect-and-pipe path a
+250k listing takes, so a buffer added inside the pager branch would have missed
+the case that was measured.
+
+The closer's flush error is now the command's error rather than a stderr
+warning — with `Out` buffered the tail of a listing is written there and
+nowhere else, so swallowing it would exit 0 over output the user never
+received. `ListCmd.Run` takes it through a named return that does not mask an
+error already on its way out. The pager's own exit status stays a warning: a
+pager closed early is a user decision, not a lost write.
+
+Two corrections to the finding as written. The per-line syscall cost applies to
+tree, flat, markdown and JSON but *not* CSV — `csv.Writer` wraps its output in
+a 4 KiB `bufio.Writer` of its own, so that format was already batching and now
+pays one extra memcpy for a 4x syscall reduction. And the same one-write-per-row
+shape is still there in `fngr meta` (measured 18.5 ms vs 2.0 ms for 10 001 rows)
+and `fngr event N -t`; both are left alone here because handing them `withPager`
+also switches paging on for them, which is a product decision rather than a
+perf fix. Tracked as follow-up, not as part of M15.
 
 <a name="m16"></a>
 ### M16 — Release workflow: broad privileges on mutable action tags

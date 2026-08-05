@@ -4,9 +4,11 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/monolithiclab/fngr/internal/event"
 	"github.com/monolithiclab/fngr/internal/parse"
+	"github.com/monolithiclab/fngr/internal/render"
 )
 
 func TestMetaListCmd_Empty(t *testing.T) {
@@ -41,6 +43,182 @@ func TestMetaListCmd_Format(t *testing.T) {
 	got := out.String()
 	if !strings.Contains(got, "tag=ops") || !strings.Contains(got, "(1)") {
 		t.Errorf("output = %q, want tag=ops with count", got)
+	}
+}
+
+// TestMetaListCmd_ClampsWideColumns covers M9: the column width is the longest
+// cell and applies to every row, so one oversized value used to pad all the
+// others out to its length — 200 short rows beside a 1 MB one rendered 202 MB.
+func TestMetaListCmd_ClampsWideColumns(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, out := newTestIO("")
+
+	huge := strings.Repeat("x", 5000)
+	if _, err := s.Add(context.Background(), event.AddInput{Title: "x", Meta: []parse.Meta{
+		{Key: "tag", Value: "ops"},
+		{Key: "tag", Value: huge},
+	}}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	cmd := &MetaListCmd{}
+	if err := cmd.Run(s, io); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	got := out.String()
+
+	// Every column is bounded, so the whole listing is: two rows of at most a
+	// key and a value cell plus "=" and the count. The unclamped version wrote
+	// ~10 KB for these same two rows.
+	if len(got) > 2*(2*maxMetaCell+16) {
+		t.Errorf("output is %d bytes for 2 rows, want it bounded by the clamp:\n%s", len(got), got)
+	}
+	if !strings.Contains(got, metaEllipsis) {
+		t.Errorf("output = %q, want the cut value marked with %q", got, metaEllipsis)
+	}
+	// The short row keeps its value intact — clamping bounds the column, it
+	// does not reformat everything to it.
+	if !strings.Contains(got, "tag=ops") {
+		t.Errorf("output = %q, want the short row unchanged", got)
+	}
+}
+
+func TestClampCell(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"short", "ops", "ops"},
+		{"exactly at the cap", strings.Repeat("x", maxMetaCell), strings.Repeat("x", maxMetaCell)},
+		{"one past the cap", strings.Repeat("x", maxMetaCell+1), strings.Repeat("x", maxMetaCell-1) + metaEllipsis},
+		{"far past the cap", strings.Repeat("x", 5000), strings.Repeat("x", maxMetaCell-1) + metaEllipsis},
+		// The cut lands mid-rune if it counts bytes: 60 é are 120 bytes.
+		{"multibyte cut on a rune boundary", strings.Repeat("é", maxMetaCell+1), strings.Repeat("é", maxMetaCell-1) + metaEllipsis},
+		{"empty", "", ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := clampCell(tt.in)
+			if got != tt.want {
+				t.Errorf("clampCell(%d runes) = %q, want %q", utf8.RuneCountInString(tt.in), got, tt.want)
+			}
+			if n := utf8.RuneCountInString(got); n > maxMetaCell {
+				t.Errorf("result is %d runes, want at most %d", n, maxMetaCell)
+			}
+			if !utf8.ValidString(got) {
+				t.Errorf("result %q is not valid UTF-8", got)
+			}
+		})
+	}
+}
+
+// TestDisplayCell pins the composition clampCell alone cannot: escaping
+// happens first and expands (`\x1b` is four columns for one byte), so a value
+// that fits raw can still need cutting, and the raw pre-cut displayCell does
+// for speed must not change what comes out.
+func TestDisplayCell(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"plain", "ops", "ops"},
+		{"escapes control characters", "a\x1bb", `a\x1bb`},
+		{
+			// 30 raw bytes are 120 escaped columns. The cut is by column, so it
+			// can land inside an escape and print a partial `\x1` — accepted:
+			// the alternative is a second notion of "cell" for a value that had
+			// a control character in it to begin with.
+			"escaping can push a fitting value past the cap",
+			strings.Repeat("\x1b", maxMetaCell/2),
+			strings.Repeat(`\x1b`, (maxMetaCell-1)/4) + `\x1b`[:(maxMetaCell-1)%4] + metaEllipsis,
+		},
+		{
+			"pre-cut does not change the result",
+			strings.Repeat("a", 5000),
+			strings.Repeat("a", maxMetaCell-1) + metaEllipsis,
+		},
+		{
+			"pre-cut lands on a rune boundary",
+			strings.Repeat("é", 5000),
+			strings.Repeat("é", maxMetaCell-1) + metaEllipsis,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := displayCell(tt.in); got != tt.want {
+				t.Errorf("displayCell() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestDisplayCell_PreCutMatchesTheFullWalk is the equivalence the pre-cut rests
+// on: cutting the raw value to maxMetaCell+1 runes before escaping it must give
+// the same answer as escaping the whole thing and clamping that.
+func TestDisplayCell_PreCutMatchesTheFullWalk(t *testing.T) {
+	t.Parallel()
+
+	for _, in := range []string{
+		"",
+		"ops",
+		strings.Repeat("x", maxMetaCell),
+		strings.Repeat("x", maxMetaCell+1),
+		strings.Repeat("é", 500),
+		strings.Repeat("\x1b", 500),
+		strings.Repeat("x", maxMetaCell-1) + "\x1b" + strings.Repeat("x", 500),
+		"\x9b" + strings.Repeat("x", 500),
+		"\xff" + strings.Repeat("x", 500),
+		strings.Repeat("日", 500),
+	} {
+		if got, want := displayCell(in), clampCell(render.SanitizeLine(in)); got != want {
+			t.Errorf("displayCell(%q…) = %q, want %q", in[:min(len(in), 8)], got, want)
+		}
+	}
+}
+
+// TestMetaListCmd_AlignsByRunesNotBytes pins the other half of M9: `%-*s` pads
+// to a width in runes, so measuring the cells in bytes over-padded any that had
+// a multibyte rune in it and stepped every row below it to the right.
+func TestMetaListCmd_AlignsByRunesNotBytes(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, out := newTestIO("")
+
+	// "josé" is 4 runes in 5 bytes, "josie" 5 in 5: measured in bytes the two
+	// look equally wide, and the é then buys an extra column of padding.
+	if _, err := s.Add(context.Background(), event.AddInput{Title: "x", Meta: []parse.Meta{
+		{Key: "people", Value: "josé"},
+		{Key: "people", Value: "josie"},
+	}}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	cmd := &MetaListCmd{}
+	if err := cmd.Run(s, io); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("got %d lines, want 2:\n%s", len(lines), out.String())
+	}
+	widths := make([]int, len(lines))
+	for i, line := range lines {
+		before, _, ok := strings.Cut(line, "  (")
+		if !ok {
+			t.Fatalf("line %q has no count column", line)
+		}
+		widths[i] = utf8.RuneCountInString(before)
+	}
+	if widths[0] != widths[1] {
+		t.Errorf("counts start at columns %v, want them aligned:\n%s", widths, out.String())
 	}
 }
 
