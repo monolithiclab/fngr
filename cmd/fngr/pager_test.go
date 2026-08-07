@@ -133,11 +133,7 @@ func TestPagerWriter_PipesToPagerProcess(t *testing.T) {
 	captured := filepath.Join(dir, "captured.txt")
 
 	// Fake pager: dump stdin to a file we can read.
-	script := filepath.Join(dir, "fake-pager.sh")
-	body := "#!/bin/sh\ncat > " + captured + "\n"
-	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
-		t.Fatalf("write fake pager: %v", err)
-	}
+	script := writeShellStub(t, "fake-pager.sh", "cat > "+captured+"\n")
 	t.Setenv("PAGER", script)
 	stubTerminal(t)
 
@@ -161,10 +157,7 @@ func TestPagerWriter_PipesToPagerProcess(t *testing.T) {
 // closer's contract: a pager that quit is the user's decision, so it is a
 // warning on stderr and not the command's exit status.
 func TestWithPager_WarnsWhenThePagerExitsNonZero(t *testing.T) {
-	script := filepath.Join(t.TempDir(), "quitting-pager.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 3\n"), 0o755); err != nil {
-		t.Fatalf("write fake pager: %v", err)
-	}
+	script := writeShellStub(t, "quitting-pager.sh", "exit 3\n")
 	t.Setenv("PAGER", script)
 	stubTerminal(t)
 

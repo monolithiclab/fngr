@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -57,6 +59,26 @@ func forbidEditor(t *testing.T) {
 		t.Error("editor launched although there is no terminal to run it in")
 		return "", nil
 	})
+}
+
+// writeShellStub writes an executable /bin/sh script into a fresh temp dir and
+// returns its path, skipping the test where there is no shell to run it.
+//
+// Six tests across body_test.go and pager_test.go stand a fake $EDITOR or
+// $PAGER up this way, and they had drifted: the editor ones skipped on Windows
+// and the pager ones did not, so a Windows run failed the pager tests instead
+// of skipping them. The gosec exemption for the 0o755 mode also lived at each
+// site, five copies of one annotation.
+func writeShellStub(t *testing.T, name, script string) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script stub is POSIX-only")
+	}
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+script), 0o755); err != nil { // #nosec G306 -- a test-only stub must be executable
+		t.Fatalf("write %s: %v", name, err)
+	}
+	return path
 }
 
 // assertNoEvents fails the test unless the store is empty. A rejected `add`

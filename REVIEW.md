@@ -2192,14 +2192,47 @@ Grouped; each is small and independently actionable.
   `author=Ada Lovelace` is what people mean to write and `-S author=Ada`
   reaches the row, a term ending at the space being no obstacle when the key
   survives whole.
-- `$PAGER` is tokenized with `strings.Fields` (`cmd/fngr/pager.go:71`) but
+- ~~`$PAGER` is tokenized with `strings.Fields` (`cmd/fngr/pager.go:71`) but
   `$EDITOR` is not (`cmd/fngr/body.go:126`), so `PAGER="less -R"` works while
   `EDITOR="code -w"` fails with `fork/exec …/code -w: no such file or
   directory`. The roadmap lists `$EDITOR` tokenization under "considered, not
-  pursued" — but the *asymmetry* with `$PAGER` is new information.
-- Editor temp file leaks on signal (`cmd/fngr/body.go:114`) — `defer
+  pursued" — but the *asymmetry* with `$PAGER` is new information.~~
+  **Fixed.** The asymmetry is what settles it: the roadmap deferred this as a
+  feature nobody had asked for, but there was never a decision that the two
+  variables should behave differently — one caller split and the other did
+  not. So the fix is not `strings.Fields` copied into a second place, it is
+  one `envCommand` (`cmd/fngr/envcmd.go`) that both call, which is also the
+  only form of the fix that cannot drift back apart. Splitting is on
+  whitespace only, deliberately: honouring `EDITOR='emacsclient -a ""'`
+  means running a shell, and handing a shell an environment variable is a
+  larger decision than this one.
+- ~~Editor temp file leaks on signal (`cmd/fngr/body.go:114`) — `defer
   os.Remove` doesn't run when fngr is killed mid-edit (Ctrl-C is the common
-  case). Mitigated: mode `0600` in the per-user `$TMPDIR`.
+  case). Mitigated: mode `0600` in the per-user `$TMPDIR`.~~ **Fixed**, but
+  not the way the bullet implies. A signal handler that removes the temp file
+  is the wrong shape: Ctrl-C is delivered to the whole foreground process
+  group, and vim — like most editors — handles SIGINT itself and carries on,
+  so removing the file would yank the buffer out from under a live editor.
+  What actually went wrong is that *fngr* died: `ignoreTerminalSignals` now
+  brackets the temp file, suspending fngr's response to SIGINT/SIGQUIT for its
+  lifetime so the deferred removal always runs. That is what git does around
+  its own editor launch, and it fixes the second half of the symptom too — the
+  editor used to be left owning the terminal with nothing waiting to read its
+  file. SIGKILL is still out of reach and always will be; the
+  0600-in-`$TMPDIR` mitigation stands for that case.
+
+  Worth recording because the obvious spelling is wrong twice over: the
+  bracket is `signal.Notify` onto a buffered channel nobody reads plus
+  `signal.Stop`, not `signal.Ignore`/`signal.Reset`. `Reset` only lifts a
+  `Notify`, so after an `Ignore` the restore is a silent no-op and the process
+  stays deaf to Ctrl-C for good — under the first draft `make test` itself
+  became un-interruptible. And `exec` preserves an *ignored* disposition where
+  it resets a caught one, so under `Ignore` the editor inherits `SIG_IGN` and
+  cannot be interrupted either, the exact opposite of the intent and worst on
+  a wrapper script — which is what `EDITOR="code -w"` is. Both were measured,
+  and both now have a test that fails against the `Ignore` form. The first of
+  those has to re-exec the test binary: in-process, a working restore is
+  indistinguishable from a broken one except by the test binary dying.
 - Search results never show why they matched. `-S kubernetes` on an event whose
   body mentions it displays only the title. FTS5 has `snippet()` built in.
 - `fngr meta` has **no machine-readable output** (`--format` is rejected) — the

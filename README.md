@@ -497,7 +497,21 @@ this wait is by design. Pass `-f` in any unattended run, or redirect from
 
 **`set $EDITOR or $VISUAL` from `fngr add -e`** — the editor mode
 needs an editor binary on `PATH`. `export EDITOR=vim` (or whichever)
-in your shell rc.
+in your shell rc. Flags are fine — `EDITOR="code -w"` and
+`EDITOR="vim -u NONE"` are split on spaces, the same way `$PAGER` is.
+No shell runs, so quoting and metacharacters are not interpreted:
+`EDITOR='emacsclient -a ""'` passes two literal quote marks as an
+argument, and an editor whose *path* contains a space cannot be named
+this way — the same trade `$PAGER` has always had; use a wrapper on
+`PATH`. (Before v0.0.3 the whole value was taken as one filename, so
+anything with a flag failed with `fork/exec …/code -w: no such file
+or directory`.)
+
+While the editor is open, Ctrl-C is the editor's to interpret, not
+fngr's — which is what lets vim handle it and carry on. An editor that
+doesn't handle it exits, and fngr reports `editor exited: signal:
+interrupt` rather than dying alongside it and stranding its temp file.
+Quit the editor to get back; saving an empty buffer cancels the entry.
 
 **`--edit needs a terminal; stdin is not a TTY`** — `-e` opens an
 interactive editor, and there is no terminal for it to open in: you are
