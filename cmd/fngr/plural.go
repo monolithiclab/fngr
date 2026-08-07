@@ -1,6 +1,21 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"io"
+)
+
+// reportNone says that a query matched nothing, in the one wording and on the
+// one stream every listing uses: `No events found.`, `No metadata found.`
+//
+// stderr, not stdout, because it is a note about the result rather than a row
+// of it — `fngr meta -S tag | wc -l` should count entries, not the sentence
+// saying there were none. Shared rather than written per command so that the
+// choice of stream is made once: it is the whole reason the message can be
+// printed unconditionally, even for the formats that already say `[]`.
+func reportNone(w io.Writer, noun string) {
+	fmt.Fprintf(w, "No %s found.\n", noun)
+}
 
 // plural renders a count together with its noun, adding a regular "-s" for
 // anything but one: `plural(1, "occurrence")` is "1 occurrence" and

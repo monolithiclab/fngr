@@ -233,7 +233,17 @@ fngr --no-pager        # don't pipe through $PAGER even on a TTY
 
 # Output formats. JSON is the only round-trip format
 # (`fngr --format=json | fngr add --format=json`); flat / csv / md
-# are output-only and lossy.
+# are output-only and lossy. `markdown` is accepted wherever `md` is.
+#
+# The vocabularies differ by what the renderer needs: a listing can be
+# tree|flat|json|csv|md, a single event text|json|csv|md. `tree` and `flat`
+# need a set of events; `text` is the one-event detail view.
+#
+# An empty result is empty per format, not a shared "nothing": tree, flat
+# and md write nothing at all, json writes `[]`, csv writes its header row.
+# Each is what a consumer of that format expects to parse. Every format also
+# says `No events found.` on stderr, so silence at exit 0 is never ambiguous
+# and a script reading stdout sees the same bytes either way.
 fngr --format flat
 fngr --format json
 fngr --format csv
@@ -247,7 +257,7 @@ fngr --from 2026-04-15 --to 2026-04-22 --format=md > week.md
 # Show a single event (bare form is shorthand for `event show N`)
 fngr event 1
 fngr event 1 --tree         # with children
-fngr event 1 --format json
+fngr event 1 --format json  # one event is one JSON object, so `jq .title` works
 
 # Edit text — re-splits on '. ' into title + body
 # (@person/#tag tags are synced: a tag the edit removed from the text goes

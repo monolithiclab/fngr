@@ -303,7 +303,7 @@ func TestMarkdown_BodyEmpty(t *testing.T) {
 func TestMarkdownStream_Empty(t *testing.T) {
 	t.Parallel()
 	var b bytes.Buffer
-	if err := MarkdownStream(&b, staticSeq(nil)); err != nil {
+	if err := MarkdownStream(&b, slicedSeq(nil)); err != nil {
 		t.Fatalf("MarkdownStream: %v", err)
 	}
 	if got := b.String(); got != "" {
@@ -327,7 +327,7 @@ func TestMarkdownStream_MatchesMarkdown(t *testing.T) {
 	if err := Markdown(&slow, events); err != nil {
 		t.Fatalf("Markdown: %v", err)
 	}
-	if err := MarkdownStream(&fast, staticSeq(events)); err != nil {
+	if err := MarkdownStream(&fast, slicedSeq(events)); err != nil {
 		t.Fatalf("MarkdownStream: %v", err)
 	}
 	if slow.String() != fast.String() {

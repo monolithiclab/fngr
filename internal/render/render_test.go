@@ -8,6 +8,7 @@ import (
 	"io"
 	"iter"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -433,6 +434,7 @@ func TestEvents_Dispatch(t *testing.T) {
 		{"json", func(s string) bool { return strings.HasPrefix(s, "[\n") }},
 		{"csv", func(s string) bool { return strings.HasPrefix(s, "id,parent_id,") }},
 		{"md", func(s string) bool { return strings.HasPrefix(s, "## ") }},
+		{"markdown", func(s string) bool { return strings.HasPrefix(s, "## ") }},
 		{"unknown", func(s string) bool { return strings.Contains(s, "1   Apr 10 2026 12.00am  nicolas  hi") }},
 	}
 
@@ -459,9 +461,12 @@ func TestSingleEvent_Dispatch(t *testing.T) {
 		check  func(string) bool
 	}{
 		{"text", func(s string) bool { return strings.Contains(s, "ID:     1") }},
-		{"json", func(s string) bool { return strings.HasPrefix(s, "[\n") }},
+		// One event is one object, not a one-element array — `jq '.title'`
+		// has to answer.
+		{"json", func(s string) bool { return strings.HasPrefix(s, "{\n") }},
 		{"csv", func(s string) bool { return strings.HasPrefix(s, "id,parent_id,") }},
 		{"md", func(s string) bool { return strings.HasPrefix(s, "## ") }},
+		{"markdown", func(s string) bool { return strings.HasPrefix(s, "## ") }},
 	}
 
 	for _, tt := range tests {
@@ -619,16 +624,6 @@ func TestCSV_SpecialChars(t *testing.T) {
 	}
 }
 
-func staticSeq(events []event.Event) iter.Seq2[event.Event, error] {
-	return func(yield func(event.Event, error) bool) {
-		for _, ev := range events {
-			if !yield(ev, nil) {
-				return
-			}
-		}
-	}
-}
-
 func errorAtSeq(events []event.Event, errAt int, err error) iter.Seq2[event.Event, error] {
 	return func(yield func(event.Event, error) bool) {
 		for i, ev := range events {
@@ -673,7 +668,7 @@ func TestFlatStream_MatchesFlat(t *testing.T) {
 	if err := Flat(&slow, events); err != nil {
 		t.Fatalf("Flat: %v", err)
 	}
-	if err := FlatStream(&fast, staticSeq(events)); err != nil {
+	if err := FlatStream(&fast, slicedSeq(events)); err != nil {
 		t.Fatalf("FlatStream: %v", err)
 	}
 	if slow.String() != fast.String() {
@@ -692,7 +687,7 @@ func TestCSVStream_MatchesCSV(t *testing.T) {
 	if err := CSV(&slow, events); err != nil {
 		t.Fatalf("CSV: %v", err)
 	}
-	if err := CSVStream(&fast, staticSeq(events)); err != nil {
+	if err := CSVStream(&fast, slicedSeq(events)); err != nil {
 		t.Fatalf("CSVStream: %v", err)
 	}
 	if slow.String() != fast.String() {
@@ -708,7 +703,7 @@ func TestJSONStream_ProducesValidJSON(t *testing.T) {
 	}
 
 	var b bytes.Buffer
-	if err := JSONStream(&b, staticSeq(events)); err != nil {
+	if err := JSONStream(&b, slicedSeq(events)); err != nil {
 		t.Fatalf("JSONStream: %v", err)
 	}
 
@@ -727,12 +722,175 @@ func TestJSONStream_ProducesValidJSON(t *testing.T) {
 func TestJSONStream_EmptyProducesEmptyArray(t *testing.T) {
 	t.Parallel()
 	var b bytes.Buffer
-	if err := JSONStream(&b, staticSeq(nil)); err != nil {
+	if err := JSONStream(&b, slicedSeq(nil)); err != nil {
 		t.Fatalf("JSONStream: %v", err)
 	}
 	got := strings.TrimSpace(b.String())
 	if got != "[]" {
 		t.Errorf("empty stream produced %q, want %q", got, "[]")
+	}
+}
+
+// parityCases are the event sets the buffered/streaming parity tests below
+// run over: nothing, one row, and a set with a parent link and two authors.
+func parityCases() map[string][]event.Event {
+	parent := int64(1)
+	return map[string][]event.Event{
+		"empty": nil,
+		"one":   {makeEvent(1, nil, "a", "2026-04-10", "alice")},
+		"many": {
+			makeEvent(1, nil, "a", "2026-04-10", "alice"),
+			makeEvent(2, &parent, "b", "2026-04-11", "alice"),
+			makeEvent(3, nil, "c", "2026-04-12", "bob"),
+		},
+	}
+}
+
+// TestEventsStream_MatchesEvents is the point of there being two dispatchers:
+// which one a command reaches for depends on whether it could stream, not on
+// what the user asked for, so `fngr --format=json` and
+// `fngr event 1 -t --format=json` over the same rows have to diff clean. They
+// did not — the streaming JSON put each `,` on a line of its own and left a
+// blank line before the closing bracket. Every streamable format now delegates
+// to its streaming form, so this holds by construction; the test is what says
+// the delegation is the requirement rather than an implementation detail free
+// to be undone. Tree is absent because it has no streaming form.
+func TestEventsStream_MatchesEvents(t *testing.T) {
+	t.Parallel()
+	for _, format := range []string{FormatFlat, FormatJSON, FormatCSV, FormatMarkdown} {
+		for name, events := range parityCases() {
+			t.Run(format+"/"+name, func(t *testing.T) {
+				t.Parallel()
+				var buffered, streamed bytes.Buffer
+				if err := Events(&buffered, format, events); err != nil {
+					t.Fatalf("Events: %v", err)
+				}
+				if err := EventsStream(&streamed, format, slicedSeq(events)); err != nil {
+					t.Fatalf("EventsStream: %v", err)
+				}
+				if buffered.String() != streamed.String() {
+					t.Errorf("EventsStream differs from Events:\n--- Events ---\n%s\n--- EventsStream ---\n%s",
+						buffered.String(), streamed.String())
+				}
+			})
+		}
+	}
+}
+
+// TestJSONStream_MatchesMarshalIndent pins the array layout JSONStream
+// assembles by hand against the one it has to reproduce. `fngr --format=json`
+// has always emitted MarshalIndent's shape and the import side reads it back,
+// so the separators written around the encoder are a contract rather than a
+// style — and comparing the two dispatchers cannot say so, since JSON *is*
+// JSONStream and agrees with it whatever they both write.
+func TestJSONStream_MatchesMarshalIndent(t *testing.T) {
+	t.Parallel()
+	for name, events := range parityCases() {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			// Non-nil so an empty set marshals to `[]` rather than `null`.
+			records := make([]jsonEvent, 0, len(events))
+			for _, ev := range events {
+				records = append(records, toJSONEvent(ev))
+			}
+			want, err := json.MarshalIndent(records, "", "  ")
+			if err != nil {
+				t.Fatalf("MarshalIndent: %v", err)
+			}
+
+			var got bytes.Buffer
+			if err := JSONStream(&got, slicedSeq(events)); err != nil {
+				t.Fatalf("JSONStream: %v", err)
+			}
+			if got.String() != string(want)+"\n" {
+				t.Errorf("JSONStream:\n--- got ---\n%s\n--- want ---\n%s\n", got.String(), want)
+			}
+		})
+	}
+}
+
+// TestJSON_WriteError covers the slice adapter JSON streams over. A failed
+// write abandons the array, and that has to stop the sequence too rather than
+// keep feeding events to a writer that is finished with them.
+func TestJSON_WriteError(t *testing.T) {
+	t.Parallel()
+	events := []event.Event{
+		makeEvent(1, nil, "a", "2026-04-10", "alice"),
+		makeEvent(2, nil, "b", "2026-04-11", "alice"),
+	}
+	wantErr := errors.New("boom")
+
+	if err := JSON(&failWriter{failOn: 1, err: wantErr}, events); !errors.Is(err, wantErr) {
+		t.Errorf("err = %v, want boom", err)
+	}
+}
+
+// TestJSONEvent_IsAnObject pins the shape `jq '.title'` needs. Against the
+// one-element array this used to emit, every field query returned null.
+func TestJSONEvent_IsAnObject(t *testing.T) {
+	t.Parallel()
+	ev := makeEvent(1, nil, "hi", "2026-04-10", "nicolas")
+
+	var b bytes.Buffer
+	if err := JSONEvent(&b, &ev); err != nil {
+		t.Fatalf("JSONEvent: %v", err)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(b.Bytes(), &parsed); err != nil {
+		t.Fatalf("invalid JSON object: %v\noutput:\n%s", err, b.String())
+	}
+	if parsed["title"] != "hi" {
+		t.Errorf("title = %v, want %q; output:\n%s", parsed["title"], "hi", b.String())
+	}
+	if !strings.HasSuffix(b.String(), "\n") {
+		t.Error("JSONEvent missing trailing newline")
+	}
+}
+
+// TestJSONEvent_WriteError covers the encode path's only failure mode.
+func TestJSONEvent_WriteError(t *testing.T) {
+	t.Parallel()
+	ev := makeEvent(1, nil, "hi", "2026-04-10", "nicolas")
+	wantErr := errors.New("boom")
+
+	if err := JSONEvent(&failWriter{failOn: 1, err: wantErr}, &ev); !errors.Is(err, wantErr) {
+		t.Errorf("err = %v, want boom", err)
+	}
+}
+
+// TestCanonical covers the alias table both dispatchers and the Kong enums
+// read. `md` stays canonical; `markdown` has to resolve to it, and anything
+// else has to pass through untouched so the dispatchers keep their defaults.
+func TestCanonical(t *testing.T) {
+	t.Parallel()
+	tests := []struct{ in, want string }{
+		{FormatMarkdown, FormatMarkdown},
+		{"markdown", FormatMarkdown},
+		{FormatJSON, FormatJSON},
+		{"", ""},
+		{"nonsense", "nonsense"},
+	}
+	for _, tt := range tests {
+		if got := Canonical(tt.in); got != tt.want {
+			t.Errorf("Canonical(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+	// Each vocabulary has to offer an alias exactly when it offers the format
+	// the alias resolves to — not simply every alias, which would push one
+	// into a vocabulary that cannot render it. The two vocabularies are
+	// deliberately different (`tree`/`flat` need a set of events, `text` is the
+	// one-event view), so an alias for `text` in ListFormats would parse,
+	// resolve, miss every case in EventsStream's switch and fall through to
+	// flat: the user asks for one format and gets another at exit 0. The other
+	// direction is the harmless half — a missing alias is refused at parse time
+	// however well Canonical resolves it. withAliases makes both unspellable.
+	for name, vocab := range map[string][]string{"ListFormats": ListFormats, "EventFormats": EventFormats} {
+		for alias, canonical := range formatAliases {
+			if slices.Contains(vocab, alias) != slices.Contains(vocab, canonical) {
+				t.Errorf("%s = %v: %q and its canonical %q must be offered together or not at all",
+					name, vocab, alias, canonical)
+			}
+		}
 	}
 }
 
@@ -744,7 +902,7 @@ func TestFlatStream_WriteError(t *testing.T) {
 	events := []event.Event{makeEvent(1, nil, "x", "2026-04-10", "alice")}
 	wantErr := errors.New("boom")
 
-	err := FlatStream(&failWriter{failOn: 1, err: wantErr}, staticSeq(events))
+	err := FlatStream(&failWriter{failOn: 1, err: wantErr}, slicedSeq(events))
 	if !errors.Is(err, wantErr) {
 		t.Errorf("err = %v, want boom", err)
 	}
@@ -757,7 +915,7 @@ func TestCSVStream_WriteError(t *testing.T) {
 
 	// csv.Writer buffers; the underlying failure surfaces on Flush and is
 	// returned via cw.Error().
-	err := CSVStream(&failWriter{failOn: 1, err: wantErr}, staticSeq(events))
+	err := CSVStream(&failWriter{failOn: 1, err: wantErr}, slicedSeq(events))
 	if !errors.Is(err, wantErr) {
 		t.Errorf("err = %v, want boom", err)
 	}
@@ -788,13 +946,20 @@ func TestJSONStream_WriteError(t *testing.T) {
 	}
 	wantErr := errors.New("boom")
 
-	// Fail on successive writes (open bracket, separators, encodes) — every
-	// one must propagate. The two-event stream makes well over six writes.
-	for failOn := 1; failOn <= 6; failOn++ {
-		err := JSONStream(&failWriter{failOn: failOn, err: wantErr}, staticSeq(events))
+	// A lead and an object per event plus the closing bracket: five writes for
+	// a two-event stream, and every one must propagate. The count is exact
+	// rather than an over-shoot so that the writes-per-event stay pinned —
+	// the failOn=6 case below is what makes an unnoticed extra write fail here
+	// instead of quietly dropping out of the loop's reach.
+	const writes = 5
+	for failOn := 1; failOn <= writes; failOn++ {
+		err := JSONStream(&failWriter{failOn: failOn, err: wantErr}, slicedSeq(events))
 		if !errors.Is(err, wantErr) {
 			t.Errorf("failOn=%d: err = %v, want boom", failOn, err)
 		}
+	}
+	if err := JSONStream(&failWriter{failOn: writes + 1, err: wantErr}, slicedSeq(events)); err != nil {
+		t.Errorf("failOn=%d: err = %v, want nil — the stream makes exactly %d writes", writes+1, err, writes)
 	}
 }
 
@@ -843,12 +1008,13 @@ func TestEventsStream_Dispatch(t *testing.T) {
 		{"json", func(s string) bool { return strings.HasPrefix(s, "[") }},
 		{"csv", func(s string) bool { return strings.HasPrefix(s, "id,parent_id,") }},
 		{"md", func(s string) bool { return strings.HasPrefix(s, "## ") }},
+		{"markdown", func(s string) bool { return strings.HasPrefix(s, "## ") }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.format, func(t *testing.T) {
 			t.Parallel()
 			var b bytes.Buffer
-			if err := EventsStream(&b, tt.format, staticSeq(events)); err != nil {
+			if err := EventsStream(&b, tt.format, slicedSeq(events)); err != nil {
 				t.Fatalf("EventsStream(%q): %v", tt.format, err)
 			}
 			if !tt.check(b.String()) {
@@ -860,7 +1026,7 @@ func TestEventsStream_Dispatch(t *testing.T) {
 
 func TestEventsStream_RejectsTree(t *testing.T) {
 	t.Parallel()
-	if err := EventsStream(io.Discard, "tree", staticSeq(nil)); err == nil {
+	if err := EventsStream(io.Discard, "tree", slicedSeq(nil)); err == nil {
 		t.Error("EventsStream(tree, ...) expected an error")
 	}
 }

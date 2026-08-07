@@ -141,12 +141,12 @@ func TestFormats_EscapeControlBytes(t *testing.T) {
 		{"markdown", func(b *bytes.Buffer) error { return Markdown(b, []event.Event{ev}) }, 7},
 		{
 			"flat stream",
-			func(b *bytes.Buffer) error { return FlatStream(b, staticSeq([]event.Event{ev})) },
+			func(b *bytes.Buffer) error { return FlatStream(b, slicedSeq([]event.Event{ev})) },
 			1,
 		},
 		{
 			"markdown stream",
-			func(b *bytes.Buffer) error { return MarkdownStream(b, staticSeq([]event.Event{ev})) },
+			func(b *bytes.Buffer) error { return MarkdownStream(b, slicedSeq([]event.Event{ev})) },
 			7,
 		},
 	}

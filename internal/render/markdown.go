@@ -16,13 +16,7 @@ import (
 // Section headers (## YYYY-MM-DD) are emitted when the local date changes
 // between consecutive events. Iteration order is preserved.
 func Markdown(w io.Writer, events []event.Event) error {
-	var lastDate string
-	for _, ev := range events {
-		if err := renderMarkdownEvent(w, &lastDate, ev); err != nil {
-			return err
-		}
-	}
-	return nil
+	return MarkdownStream(w, slicedSeq(events))
 }
 
 // renderMarkdownEvent writes one event's bullet (title) followed by body

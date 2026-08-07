@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"iter"
 	"strings"
 	"time"
 
@@ -15,7 +16,7 @@ import (
 type ListCmd struct {
 	From    string `help:"Start of range (inclusive). Date, timestamp, or relative (\"yesterday\")." placeholder:"WHEN"`
 	To      string `help:"End of range (inclusive). Date, timestamp, or relative (\"today\")." placeholder:"WHEN"`
-	Format  string `help:"Output format: tree (default), flat, json, csv, md." enum:"${LIST_FORMATS}" default:"${LIST_FORMAT_DEFAULT}"`
+	Format  string `help:"Output format: one of ${LIST_FORMATS}." enum:"${LIST_FORMATS}" default:"${LIST_FORMAT_DEFAULT}"`
 	Limit   int    `help:"Maximum events to return, newest first (0 = no limit)." short:"n" default:"0"`
 	Reverse bool   `help:"Display oldest first (default is newest first)." short:"r"`
 	NoPager bool   `help:"Disable the pager even when stdout is a TTY."`
@@ -49,18 +50,54 @@ func (c *ListCmd) Run(s eventStore, io ioStreams) (err error) {
 		}
 	}()
 
-	if c.Format == render.FormatTree {
-		events, err := s.List(ctx, opts)
-		if err != nil {
-			return withGrammarHint(err)
+	// Tree is the one format that has to see every row before it can draw a
+	// line, so it takes the buffering dispatcher; everything else streams.
+	// Through Canonical, not raw equality: an alias for tree would otherwise
+	// fall through to EventsStream, which refuses tree outright — a rejection
+	// at render time for a spelling Kong accepted.
+	var found bool
+	if render.Canonical(c.Format) == render.FormatTree {
+		events, listErr := s.List(ctx, opts)
+		if listErr != nil {
+			return withGrammarHint(listErr)
 		}
-		if len(events) == 0 {
-			fmt.Fprintln(io.Err, "No events found.")
-			return nil
-		}
-		return render.Tree(io.Out, events)
+		found = len(events) > 0
+		err = render.Events(io.Out, c.Format, events)
+	} else {
+		err = render.EventsStream(io.Out, c.Format, noteAny(s.ListSeq(ctx, opts), &found))
 	}
-	return withGrammarHint(render.EventsStream(io.Out, c.Format, s.ListSeq(ctx, opts)))
+	if err != nil {
+		return withGrammarHint(err)
+	}
+
+	// Said out loud because no output at exit 0 is indistinguishable from a
+	// journal with no events in the window, and three of the five formats write
+	// nothing at all when empty. The two that do say it themselves — `[]`, a
+	// lone CSV header — get it anyway, because the alternative is a per-format
+	// table of what counts as self-explanatory, kept in step by hand. stderr is
+	// what makes that free: a script reading stdout sees the same bytes either
+	// way.
+	if !found {
+		reportNone(io.Err, "events")
+	}
+	return nil
+}
+
+// noteAny passes a result sequence through unchanged while recording whether
+// any event reached the renderer, so an empty listing can be reported without
+// materializing one that isn't. Errors don't count — a sequence that fails on
+// its first read has produced no events, and the error is the report.
+func noteAny(seq iter.Seq2[event.Event, error], found *bool) iter.Seq2[event.Event, error] {
+	return func(yield func(event.Event, error) bool) {
+		for ev, err := range seq {
+			if err == nil {
+				*found = true
+			}
+			if !yield(ev, err) {
+				return
+			}
+		}
+	}
 }
 
 // withGrammarHint points the user at the -S grammar when the filter itself is

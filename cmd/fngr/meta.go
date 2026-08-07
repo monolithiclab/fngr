@@ -40,30 +40,33 @@ func (c *MetaListCmd) Run(s eventStore, io ioStreams) error {
 	}
 
 	if len(counts) == 0 {
-		fmt.Fprintln(io.Out, "No metadata found.")
+		reportNone(io.Err, "metadata")
 		return nil
 	}
 
-	// Prepare in place before measuring. Meta values come from event bodies, so
-	// `@josé\x1b[2J` is a name someone can type; measuring the raw string and
-	// padding the escaped one would misalign every column below it. Widths are
-	// in runes because that is what `%-*s` pads to — measuring the bytes
-	// over-padded any cell with a multibyte rune in it, stepping every row
-	// below it to the right.
-	maxKey, maxVal := 0, 0
-	for i := range counts {
-		counts[i].Key = displayCell(counts[i].Key)
-		counts[i].Value = displayCell(counts[i].Value)
-		maxKey = max(maxKey, utf8.RuneCountInString(counts[i].Key))
-		maxVal = max(maxVal, utf8.RuneCountInString(counts[i].Value))
+	// One padded cell per row, `key=value` whole: the entry is one string and
+	// only its right edge is a column. Padding the key instead gave the `=` a
+	// column of its own whose width came from whichever rows the query
+	// returned, so a filtered and an unfiltered listing spelled the same entry
+	// two ways.
+	//
+	// Escape before measuring — meta values come from event bodies, so
+	// `@josé\x1b[2J` is a name someone can type — and measure in runes,
+	// because that is what `%-*s` pads to.
+	pairs := make([]string, len(counts))
+	width := 0
+	for i, mc := range counts {
+		pairs[i] = displayCell(mc.Key) + "=" + displayCell(mc.Value)
+		width = max(width, utf8.RuneCountInString(pairs[i]))
 	}
-	for _, mc := range counts {
-		fmt.Fprintf(io.Out, "%-*s=%-*s  (%d)\n", maxKey, mc.Key, maxVal, mc.Value, mc.Count)
+	for i, pair := range pairs {
+		fmt.Fprintf(io.Out, "%-*s  (%d)\n", width, pair, counts[i].Count)
 	}
 	return nil
 }
 
-// maxMetaCell caps how wide either column of `fngr meta` can get. The width is
+// maxMetaCell caps each half of a `fngr meta` entry — the key and the value
+// separately, so a row is at most `2*maxMetaCell+1` wide. The column width is
 // the longest cell in the listing and applies to every row, so a single
 // oversized value used to pad all the others out to its length: 200 events with
 // short meta plus one 1 MB value rendered 202 MB, ~200x what was stored. Meta

@@ -1970,21 +1970,56 @@ Grouped; each is small and independently actionable.
 
 **Output and formatting**
 
-- Streaming JSON emits the separator `,` on its own line and a blank line
-  before `]`. Valid JSON (`jq` parses it), but it looks broken and is
-  un-diffable against the non-streaming form. `internal/render/render.go`.
-- `event show --format=json` emits an **array** for a single event, so
-  `jq '.title'` returns null and `jq '.[0].title'` is required. Consistent with
-  round-trip intent, but nothing signals it.
-- `--format` vocabularies diverge: `list` takes `tree|flat|json|csv|md`,
-  `event show` takes `text|json|csv|md`. `fngr --format=text` and
-  `fngr event 2 --format=flat` both fail with a full usage dump at exit 80.
-  `--format=markdown` is rejected everywhere — only `md`.
-- Empty results differ by format: tree and flat print nothing (tree sends
-  `No events found.` to stderr — correct), json prints `[]`, csv prints a
-  header row, md prints nothing. Fine for scripting; currently undiscoverable.
-- `fngr meta` column alignment flips with `-S`: unfiltered pads the key
-  (`author  =nico`), filtered doesn't (`tag=bugfix`). Same renderer, two looks.
+- ~~Streaming JSON emits the separator `,` on its own line and a blank line
+  before `]`~~ — **Done.** `JSONStream` writes the `[\n  ` / `,\n  ` lead itself
+  and encodes each element at `SetIndent("  ", "  ")`, which is exactly how
+  `MarshalIndent(slice, "", "  ")` renders one; a `json.Encoder` terminates every
+  value with its own newline, which is where both artefacts came from. That
+  layout is now pinned against `json.MarshalIndent` itself rather than against
+  the other dispatcher, which cannot say anything: `JSON` is `JSONStream` over
+  a slice-backed `slicedSeq`, so the two agree whatever they write. `Flat`,
+  `CSV` and `Markdown` delegate the same way — every format but tree, which
+  needs the whole topology before it can draw a line, is written in exactly one
+  place. That also stopped `CSV` discarding the write errors `CSVStream`
+  checked. Measured: delegating cost ~2.5% CPU for ~9x lower peak memory on a
+  250k listing (470 MB of live heap for the whole serialized blob, against
+  54 MB), and encoding each event through a hoisted pointer rather than a fresh
+  interface box took allocations down a further third.
+- ~~`event show --format=json` emits an **array** for a single event~~ —
+  **Done.** New `render.JSONEvent` writes one object and `SingleEvent` dispatches
+  to it. `jq '.title'` answers. The round trip is unaffected:
+  `parseJSONAddInput` already dispatches on the leading `[`.
+- ~~`--format=markdown` is rejected everywhere — only `md`~~ — **Done.**
+  `render.Canonical` resolves a `formatAliases` table (`markdown` → `md`) for
+  all three dispatchers, and `ListFormats` / `EventFormats` — the slices Kong
+  takes as the `enum:` — are *derived* from it by `withAliases`, which adds an
+  alias exactly when the vocabulary already has the format it resolves to.
+  Listing them by hand is what lets an alias into a vocabulary that cannot
+  render it, where it parses, resolves, misses every dispatcher case and falls
+  through to the default at exit 0. `AddFormats` is derived too, and `AddCmd`
+  dispatches through `Canonical`, so the input side cannot acquire that bug by
+  gaining an alias later.
+  The rest of the divergence stands: `tree`/`flat` need a set of events and
+  `text` is the one-event view, so `list` keeps `tree|flat|json|csv|md` and
+  `event show` keeps `text|json|csv|md`. Both are now stated in the README *and*
+  generated into `--format`'s own help text from the same slices, rather than
+  discovered at exit 80.
+- ~~Empty results differ by format~~ — **Done**, both halves. The per-format
+  renderings stay as they are — tree/flat/md write nothing, json writes `[]`,
+  csv writes its header row, each what a consumer of that format expects to
+  parse — and the README now says so. But `No events found.` was printed only in
+  the tree branch, so `fngr --format=flat` over a filter that matched nothing was
+  total silence at exit 0, the very thing the message exists to rule out. It is
+  hoisted out of that branch and reaches every format; the streaming path learns
+  it matched something through `noteAny` rather than materializing the result.
+  `fngr meta`'s `No metadata found.` moved from stdout to stderr to match — it is
+  a remark about the result, not a row of it — and both go through one
+  `reportNone`, so the wording and the choice of stream are made once.
+- ~~`fngr meta` column alignment flips with `-S`~~ — **Done.** The listing pads
+  the joined `key=value` cell rather than the key and value separately. Padding
+  the key made the `=` a column of its own, and its width came from whichever
+  rows the query returned — the entry is one string; only its right edge is a
+  column.
 - ~~`render.Tree` on a limit-orphaned or cycle-broken set prints nothing at
   exit 0~~ — both halves fixed. Limit-orphaned events render with the marker
   ([M8](#m8)); cycle members are swept up as orphans rather than silently
@@ -2156,10 +2191,21 @@ are local.
   (`list.go:64-68`, matching `"fts5"`, `"SQL logic error"`, `"unterminated"`).~~
   Resolved with [C5](#c5): the parser returns `event.ErrFilter` and the cmd
   layer is a one-line `errors.Is` (`withGrammarHint`).
-- **`list.go:30` writes the pager warning to `os.Stderr` directly**, bypassing
-  the injected `io.Err` and defeating the `ioStreams` abstraction in tests.
-- **Inconsistent empty-result messaging in `list.go`** — the tree branch prints
-  `No events found.` to `io.Err` (`:45`); the streaming branch prints nothing.
+- ~~**`list.go:30` writes the pager warning to `os.Stderr` directly**, bypassing
+  the injected `io.Err`.~~ **Not a defect** — re-checked against the source.
+  Both pager warnings go to `errOut`, which *is* the injected `io.Err`
+  (`pager.go:44`, `:66`); the one `os.Stderr` in that file is `:88`, where the
+  pager subprocess inherits the real stderr, which is the point of a pager.
+- ~~**Inconsistent empty-result messaging in `list.go`**~~ — **Done** with the
+  "Output and formatting" batch above: one `reportNone`, both branches, and
+  `fngr meta` too.
+- **The 16 KiB output buffer is bolted into `withPager`, so only `list` has
+  one.** `fngr event N -t --format=json` writes straight to `os.Stdout` — 2N+1
+  syscalls, measured at +19% wall clock over a buffered run of the same 50k
+  rows. Buffering is an `ioStreams` concern, not a pager one; hoisting it to
+  where `ioStreams` is built means no future command has to remember, at the
+  cost of every command needing `list`'s flush-error promotion. Deferred to the
+  `main.go` restructure below, which is already opening that constructor.
 - **`internal/db/db.go` has no per-connection init hook**, which is the root of
   [C1](#c1). Moving to a DSN removes the need for one.
 
