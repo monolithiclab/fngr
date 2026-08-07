@@ -6,16 +6,24 @@ fngr is a CLI tool for logging and tracking events, written in Go. It uses Kong 
 modernc.org/sqlite (pure-Go, CGo-free) for storage. Events support parent-child trees, key-value
 metadata, and FTS5 full-text search.
 
-When touching the release pipeline (`.goreleaser.yaml`, `.github/workflows/release.yml`,
+When touching the release pipeline (`.goreleaser.yaml`, `.github/workflows/{ci,release}.yml`,
 `Dockerfile`, the brew tap, ghcr.io image, cosign signing), see `docs/PUBLISHING.md` for the full
-operational playbook + every gotcha hit shipping v0.0.1.
+operational playbook + every gotcha hit shipping v0.0.1. Everything in there that reaches the
+network is pinned — actions and the images they pull, the base image, GoReleaser, the lint tools
+— so an edit that reintroduces a floating tag is a regression, not a tidy-up; the playbook's
+"Refreshing the pins" section is how they move. `make lint-pins` (a prerequisite of `lint`,
+so both CI and `make ci` run it) guards the two shapes a grep can see: `uses:` lines and the
+Dockerfile `FROM`. The rest are literals — the tool versions in this `Makefile`, GoReleaser's
+`version:` and the two `with:` image digests in `release.yml` — and are on review.
 
 ## Commands
 
 ```bash
 make build          # Build binary to build/fngr
 make test           # Run tests with -race, -cover, coverage report
-make lint           # Run all linters (gofmt, vet, staticcheck, golangci-lint, gosec, gocritic)
+make lint           # Run all linters (gofmt, vet, staticcheck, golangci-lint, gosec, gocritic, pins)
+make lint-tools     # Install the pinned linter versions into GOPATH/bin
+make vuln           # Report known vulnerabilities reachable from this module's code
 make format         # Format source code
 make bench          # Run benchmarks
 make ci             # codefix + format + lint + test

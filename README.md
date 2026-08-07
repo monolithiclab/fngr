@@ -37,6 +37,10 @@ cosign verify-blob \
 sha256sum -c SHA256SUMS
 ```
 
+Each tarball also ships an SPDX SBOM as
+`<tarball>.sbom.json`. The SBOMs are listed in `SHA256SUMS`, so the
+signature above covers them too.
+
 ### Build from source
 
 ```
@@ -49,27 +53,37 @@ make install      # installs to $GOBIN
 A multi-arch (`linux/amd64` + `linux/arm64`) container image is
 published on every release at `ghcr.io/monolithiclab/fngr:<version>`
 and (for stable releases only) `ghcr.io/monolithiclab/fngr:latest`.
-The image is ~6 MB, distroless-static-debian13 base.
+The image is ~6 MB, distroless-static-debian13 base, and runs as
+UID 65532 (`nonroot`).
 
 ### The database is on the host — you must mount it
 
 `fngr` stores everything in a single SQLite file. The container has
 no persistent storage of its own, so without a volume mount **every
-run starts with an empty DB**. Mount your existing DB into the
-container and point `FNGR_DB` at it:
+run starts with an empty DB**. Mount the *directory* holding your
+database — not the file — and point `FNGR_DB` at a path inside it:
 
 ```
 docker run --rm \
-  -v "$HOME/.fngr.db:/data/fngr.db" \
+  --user "$(id -u):$(id -g)" \
+  -v "$HOME/.fngr:/data" \
   -e FNGR_DB=/data/fngr.db \
   ghcr.io/monolithiclab/fngr:latest
 ```
 
-The mount target (`/data/fngr.db` above) is arbitrary — pick anything
-inside the container, just keep `$FNGR_DB` pointed at it. The
-container runs as root by default so the file's host permissions
-must allow root access (UID 0). For non-root host UIDs, pass
-`--user "$(id -u):$(id -g)"`.
+**A single-file bind mount does not work.** SQLite runs in WAL mode
+and creates `fngr.db-wal` and `fngr.db-shm` beside the database, so
+the *directory* has to be writable; mounting only the file leaves the
+directory around it owned by root inside the container, and every
+command fails with `attempt to write a readonly database` — reads
+included, since WAL needs `-shm` to open the database at all. The
+mount target (`/data` above) is otherwise arbitrary.
+
+`--user "$(id -u):$(id -g)"` is what makes the directory mount
+writable in the usual case: a directory you own is mode 0755, which
+UID 65532 cannot write to. Running as yourself also keeps the files
+the container creates yours. Drop the flag only if the directory is
+writable by 65532 in its own right.
 
 ### Timezone
 
@@ -78,8 +92,8 @@ works via `TZ`. If unset, `fngr`'s local-time rendering (markdown
 date headers, event detail) defaults to UTC.
 
 ```
-docker run --rm \
-  -v "$HOME/.fngr.db:/data/fngr.db" \
+docker run --rm --user "$(id -u):$(id -g)" \
+  -v "$HOME/.fngr:/data" \
   -e FNGR_DB=/data/fngr.db \
   -e TZ=America/New_York \
   ghcr.io/monolithiclab/fngr:latest --format=md
@@ -89,18 +103,21 @@ docker run --rm \
 
 ```
 # Add an event
-docker run --rm -v "$HOME/.fngr.db:/data/fngr.db" -e FNGR_DB=/data/fngr.db \
+docker run --rm --user "$(id -u):$(id -g)" \
+  -v "$HOME/.fngr:/data" -e FNGR_DB=/data/fngr.db \
   ghcr.io/monolithiclab/fngr:latest add "deployed v1.2 to staging #ops"
 
 # Bulk import from JSON (read from a host file)
-cat events.json | docker run --rm -i \
-  -v "$HOME/.fngr.db:/data/fngr.db" -e FNGR_DB=/data/fngr.db \
+cat events.json | docker run --rm -i --user "$(id -u):$(id -g)" \
+  -v "$HOME/.fngr:/data" -e FNGR_DB=/data/fngr.db \
   ghcr.io/monolithiclab/fngr:latest add --format=json
 
 # Round-trip between two databases via stdout pipe
-docker run --rm -v "$HOME/src.db:/data/src.db" -e FNGR_DB=/data/src.db \
+docker run --rm --user "$(id -u):$(id -g)" \
+  -v "$HOME/dbs:/data" -e FNGR_DB=/data/src.db \
   ghcr.io/monolithiclab/fngr:latest --format=json \
-  | docker run --rm -i -v "$HOME/dst.db:/data/dst.db" -e FNGR_DB=/data/dst.db \
+  | docker run --rm -i --user "$(id -u):$(id -g)" \
+    -v "$HOME/dbs:/data" -e FNGR_DB=/data/dst.db \
     ghcr.io/monolithiclab/fngr:latest add --format=json
 
 # Verify the image's signature with cosign

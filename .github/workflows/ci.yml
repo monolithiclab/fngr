@@ -9,6 +9,13 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Read-only, workflow-wide: nothing here publishes anything, and a job added
+# later inherits the floor rather than having to remember it. release.yml
+# takes the other shape — deny-by-default, one job granting itself writes —
+# because there it is a real distinction.
+permissions:
+  contents: read
+
 jobs:
   test:
     strategy:
@@ -17,16 +24,45 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
+      # Actions are pinned to commit SHAs for the reason release.yml gives;
+      # docs/PUBLISHING.md has the refresh recipe.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
           cache: true
+      # Versions live in the Makefile so this run and a local one lint with the
+      # same tools; setup-go has already put GOPATH/bin on PATH, which is what
+      # makes common-go.mk's `which` check find them.
+      - run: make lint-tools
       - run: make lint test
       - if: matrix.os == 'ubuntu-latest'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage
           path: cover.out
           if-no-files-found: error
           retention-days: 14
+
+  # Separate job, not a step in the matrix: it needs neither the linters nor a
+  # second OS, and reports a supply-chain problem rather than a code one.
+  vuln:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          # Not cached on purpose. setup-go's key is OS + Go version + go.sum
+          # hash and nothing else, so this job and `test (ubuntu-latest)` want
+          # the same one; whichever finishes first reserves it, and this job is
+          # much the shorter. Losing it would leave the test job rebuilding all
+          # four linters from cold on every run.
+          cache: false
+      # govulncheck reports only vulnerabilities the build actually reaches, so
+      # an advisory in a package we never call does not fail CI.
+      - run: make vuln
