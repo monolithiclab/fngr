@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"strings"
 
 	"golang.org/x/term"
 )
@@ -78,9 +77,9 @@ func pagerWriter(out, errOut io.Writer, disabled bool) (io.Writer, func() error)
 func noopCloser() error { return nil }
 
 // newPagerCmd starts the user's pager and returns the running command plus
-// a writer connected to its stdin. Tokenization of $PAGER is by space; a
-// $PAGER value with spaces inside quotes is not supported (consistent with
-// the spec).
+// a writer connected to its stdin. $PAGER is tokenized by envCommand, which
+// the editor launcher shares — see there for what the split does and does not
+// interpret.
 func newPagerCmd() (*exec.Cmd, io.WriteCloser, error) {
 	parts := pagerCommand()
 	cmd := exec.Command(parts[0], parts[1:]...) // #nosec G204 -- pager comes from $PAGER, an explicit user choice.
@@ -97,8 +96,8 @@ func newPagerCmd() (*exec.Cmd, io.WriteCloser, error) {
 }
 
 func pagerCommand() []string {
-	if s := strings.TrimSpace(os.Getenv("PAGER")); s != "" {
-		return strings.Fields(s)
+	if argv := envCommand("PAGER"); len(argv) > 0 {
+		return argv
 	}
 	return []string{"less", "-FRX"}
 }

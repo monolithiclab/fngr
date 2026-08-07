@@ -281,7 +281,9 @@ only on real demand.
 - **`fngr add -` as explicit stdin form** — auto-detect via non-TTY
   pipe handles every real workflow; explicit form would only force
   stdin in a TTY, no use case today.
-- **Tokenize `$EDITOR` / `$VISUAL` for `vim -u NONE`-style values** —
-  plausible follow-up (matches `pagerCommand`'s tokenization), but
-  not in the body-input modes spec. Most users set `EDITOR=vim`
-  (single token); revisit on real demand.
+- ~~**Tokenize `$EDITOR` / `$VISUAL` for `vim -u NONE`-style values**~~ —
+  **Done in v0.0.3.** Deferred here as a feature ("revisit on real
+  demand"), which read the situation wrong: `pagerCommand` already
+  tokenized, so the two variables answered the same kind of value two
+  ways and `EDITOR="code -w"` failed where `PAGER="less -R"` worked.
+  Both now go through `envCommand`.

@@ -6,7 +6,10 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
+	"slices"
 	"strings"
+	"syscall"
 )
 
 // errCancel signals a deliberate user cancel (empty editor save). AddCmd.Run
@@ -84,13 +87,15 @@ func readStdin(in io.Reader) (string, error) {
 // It inherits os.Stdin, so callers must have established that a terminal
 // exists — resolveBody's first branch is the only such caller.
 func realLaunchEditor(initial string) (string, error) {
-	editor := os.Getenv("VISUAL")
-	if editor == "" {
-		editor = os.Getenv("EDITOR")
-	}
-	if editor == "" {
+	argv := envCommand("VISUAL", "EDITOR")
+	if len(argv) == 0 {
 		return "", fmt.Errorf("no editor configured: set $EDITOR or $VISUAL")
 	}
+
+	// Above the temp file, not just around cmd.Run: defers are LIFO, so a
+	// bracket registered later would be lifted *before* the removal below and
+	// hand the one step this exists to protect back to the default disposition.
+	defer ignoreTerminalSignals()()
 
 	f, err := os.CreateTemp("", "fngr-*.txt")
 	if err != nil {
@@ -109,10 +114,11 @@ func realLaunchEditor(initial string) (string, error) {
 		return "", fmt.Errorf("close temp file: %w", err)
 	}
 
-	cmd := exec.Command(editor, name) // #nosec G204,G702 -- editor comes from $VISUAL/$EDITOR, an explicit user choice.
+	cmd := exec.Command(argv[0], append(slices.Clone(argv[1:]), name)...) // #nosec G204,G702 -- editor comes from $VISUAL/$EDITOR, an explicit user choice.
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("editor exited: %w", err)
 	}
@@ -126,4 +132,47 @@ func realLaunchEditor(initial string) (string, error) {
 		return "", errCancel
 	}
 	return body, nil
+}
+
+// ignoreTerminalSignals suspends fngr's response to the two signals a terminal
+// delivers to the whole foreground process group — Ctrl-C is the one that
+// matters, SIGQUIT rides along because it arrives the same way — and returns
+// the restore. realLaunchEditor is the only caller.
+//
+// The editor is a child in that same group, so Ctrl-C reaches it too — and vim,
+// like most editors, handles SIGINT itself and carries on. fngr's default
+// disposition is to die, which left vim owning the terminal while the process
+// that was going to read its file had already gone, taking the deferred
+// temp-file removal with it. Letting the foreground program decide what the key
+// means is what git does around its own editor launch.
+//
+// What it brackets is that temp file, not the exec: the invariant is "a file
+// exists that only this process will unlink", which is why the caller registers
+// it above os.CreateTemp and why the pager — which holds nothing a dead fngr
+// would strand, and where Ctrl-C is the normal way to abandon a long listing —
+// deliberately does not get the same treatment.
+//
+// Notify onto a buffered channel nobody reads, *not* signal.Ignore, and the two
+// reasons are each disqualifying:
+//
+//   - signal.Reset does not undo signal.Ignore. Reset only lifts a Notify, so
+//     an Ignore leaves the OS disposition at SIG_IGN for the life of the
+//     process — the "restore" is a no-op and fngr never responds to Ctrl-C
+//     again.
+//   - exec preserves an *ignored* disposition where it resets a caught one, so
+//     under Ignore the editor inherits SIG_IGN and cannot itself be
+//     interrupted. That defeats the whole point for anything that does not
+//     handle SIGINT on its own — including a wrapper script, which is exactly
+//     what `EDITOR="code -w"` is.
+//
+// No drain goroutine: Notify never blocks sending, so one buffered slot absorbs
+// the first signal and every later one is dropped on the floor. Dropped rather
+// than deferred is the intent — the keystroke was aimed at the editor.
+//
+// SIGTERM and SIGKILL are still out of reach and always will be; the file they
+// leave behind is mode 0600 in the per-user $TMPDIR.
+func ignoreTerminalSignals() func() {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, os.Interrupt, syscall.SIGQUIT)
+	return func() { signal.Stop(ch) }
 }

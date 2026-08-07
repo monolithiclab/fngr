@@ -157,7 +157,30 @@ make ci             # codefix + format + lint + test
   `fngr add` then reported a cancel at exit 0 while silently dropping the piped body.
   `launchEditor` is a `var` for test stubbing; `realLaunchEditor` execs `$VISUAL`/`$EDITOR` on a
   temp file and inherits `os.Stdin`, so the veto must stay upstream of it; `errCancel` signals
-  empty-save (handled as exit-0 by `AddCmd.Run`). `readStdin`
+  empty-save (handled as exit-0 by `AddCmd.Run`). The argv comes from `envCommand` (see
+  `cmd/fngr/envcmd.go`), which `pagerCommand` shares: the two used to answer the same kind of
+  value two different ways, so `PAGER="less -R"` worked while `EDITOR="code -w"` failed with
+  `fork/exec …/code -w: no such file or directory`, the whole value taken as one filename. One
+  function rather than two conventions is also why the fix is not `strings.Fields` copied into a
+  second place. `ignoreTerminalSignals` brackets the
+  temp file — registered *above* `os.CreateTemp`, since defers are LIFO and a bracket lifted
+  before the `os.Remove` protects nothing — suspending fngr's response to SIGINT/SIGQUIT, the
+  same thing git does around its own editor launch. Ctrl-C reaches the whole foreground process
+  group, and vim handles SIGINT itself and carries on, so fngr's default disposition killed the
+  process that was going to read the file while the editor kept the terminal. Removing the file
+  from a signal handler is the wrong shape for exactly that reason: it would yank the buffer out
+  from under a live editor. The primitive is `signal.Notify` onto a buffered channel nobody
+  reads, plus `signal.Stop` — *not* `signal.Ignore`, which fails twice over: `signal.Reset` only
+  lifts a `Notify`, so the restore is a silent no-op and fngr never answers Ctrl-C again, and
+  `exec` preserves an ignored disposition where it resets a caught one, so the editor inherits
+  `SIG_IGN` and cannot itself be interrupted (least of all `EDITOR="code -w"`, a wrapper script
+  with no SIGINT handling of its own). Both are pinned by tests that fail against the
+  `Ignore`/`Reset` form; the first needs a re-exec of the test binary, because in-process
+  "the restore works" is only observable as the test binary dying. No drain goroutine is
+  needed — `Notify` never blocks sending, so one slot absorbs the first signal and the rest
+  are dropped. The pager execs a child too and deliberately does *not* get this: it strands
+  nothing a dead fngr would have to clean up, and Ctrl-C is how a long listing is meant to be
+  abandoned. SIGKILL still leaks, mode 0600 in the per-user `$TMPDIR`. `readStdin`
   caps reads at `maxStdinBytes` (16 MiB) via `io.LimitReader` so a runaway pipe can't OOM.
 - `cmd/fngr/add_json.go` — `--format=json` import path. `jsonAddInput` is the wire shape
   `{id?, title, body?, parent_id?, created_at?, meta?: [[k,v],...]}`; `parseJSONAddInput` dispatches on the
@@ -177,7 +200,8 @@ make ci             # codefix + format + lint + test
   `--format=json` emits, so import files accept the same stamps as `--time`.
 - `cmd/fngr/pager.go` — `withPager(io, disabled) (ioStreams, closer)` wraps `Out` in a 16 KiB
   `bufio.Writer` over whatever `pagerWriter` hands back: a pipe to `$PAGER` (fallback
-  `less -FRX`) when stdout is a TTY, else `Out` itself. Used by `list`. The buffer is *outside*
+  `less -FRX`, tokenized by the `envCommand` the editor launcher shares) when stdout is a TTY,
+  else `Out` itself. Used by `list`. The buffer is *outside*
   the pager branch on purpose — rendering wrote one line per syscall, 250 000 of them for a 250k
   list and 10-19% of the wall clock (every format but CSV, whose `csv.Writer` buffers on its
   own), and the redirect/pipe path that pays that is exactly the one the old function

@@ -4,10 +4,12 @@ import (
 	"errors"
 	"io"
 	"os"
-	"path/filepath"
+	"os/exec"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestReadStdin(t *testing.T) {
@@ -128,17 +130,8 @@ func TestResolveBody_NeverTouchesStdinWhenBodyIsDecided(t *testing.T) {
 }
 
 func TestRealLaunchEditor_ExecAndReadback(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("shell-script editor stub is POSIX-only")
-	}
-
-	dir := t.TempDir()
-	editor := filepath.Join(dir, "fake-editor.sh")
 	// The fake editor appends "::edited" to whatever's in the file.
-	script := "#!/bin/sh\nprintf '%s::edited' \"$(cat \"$1\")\" > \"$1\"\n"
-	if err := os.WriteFile(editor, []byte(script), 0o755); err != nil { // #nosec G306 -- test-only fake editor must be executable
-		t.Fatalf("write fake editor: %v", err)
-	}
+	editor := writeShellStub(t, "fake-editor.sh", "printf '%s::edited' \"$(cat \"$1\")\" > \"$1\"\n")
 
 	t.Setenv("VISUAL", "")
 	t.Setenv("EDITOR", editor)
@@ -163,17 +156,7 @@ func TestRealLaunchEditor_NoEditorConfigured(t *testing.T) {
 }
 
 func TestRealLaunchEditor_EmptySaveCancels(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("shell-script editor stub is POSIX-only")
-	}
-
-	dir := t.TempDir()
-	editor := filepath.Join(dir, "fake-editor.sh")
-	// Truncate the file to empty.
-	script := "#!/bin/sh\n: > \"$1\"\n"
-	if err := os.WriteFile(editor, []byte(script), 0o755); err != nil { // #nosec G306 -- test-only fake editor must be executable
-		t.Fatalf("write fake editor: %v", err)
-	}
+	editor := writeShellStub(t, "fake-editor.sh", ": > \"$1\"\n") // truncate to empty
 
 	t.Setenv("VISUAL", "")
 	t.Setenv("EDITOR", editor)
@@ -185,19 +168,8 @@ func TestRealLaunchEditor_EmptySaveCancels(t *testing.T) {
 }
 
 func TestRealLaunchEditor_VisualOverridesEditor(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("shell-script editor stub is POSIX-only")
-	}
-
-	dir := t.TempDir()
-	visual := filepath.Join(dir, "visual.sh")
-	editor := filepath.Join(dir, "editor.sh")
-	if err := os.WriteFile(visual, []byte("#!/bin/sh\nprintf 'from-visual' > \"$1\"\n"), 0o755); err != nil { // #nosec G306 -- test-only fake editor must be executable
-		t.Fatalf("write visual: %v", err)
-	}
-	if err := os.WriteFile(editor, []byte("#!/bin/sh\nprintf 'from-editor' > \"$1\"\n"), 0o755); err != nil { // #nosec G306 -- test-only fake editor must be executable
-		t.Fatalf("write editor: %v", err)
-	}
+	visual := writeShellStub(t, "visual.sh", "printf 'from-visual' > \"$1\"\n")
+	editor := writeShellStub(t, "editor.sh", "printf 'from-editor' > \"$1\"\n")
 
 	t.Setenv("VISUAL", visual)
 	t.Setenv("EDITOR", editor)
@@ -208,6 +180,148 @@ func TestRealLaunchEditor_VisualOverridesEditor(t *testing.T) {
 	}
 	if got != "from-visual" {
 		t.Errorf("body = %q, want 'from-visual'", got)
+	}
+}
+
+// TestRealLaunchEditor_NonZeroExitIsAnError covers the path the signal bracket
+// made reachable: an editor that quits on Ctrl-C instead of handling it now
+// leaves fngr alive to report the failure, where before both died together.
+// `signal: interrupt` arrives wrapped this same way.
+func TestRealLaunchEditor_NonZeroExitIsAnError(t *testing.T) {
+	editor := writeShellStub(t, "quitting-editor.sh", "exit 3\n")
+	t.Setenv("VISUAL", "")
+	t.Setenv("EDITOR", editor)
+
+	_, err := realLaunchEditor("seed")
+	if err == nil || !strings.Contains(err.Error(), "editor exited:") {
+		t.Errorf("err = %v, want it to report the editor's own failure", err)
+	}
+}
+
+// TestRealLaunchEditor_TokenizesArgs pins the half that used to differ from
+// $PAGER: an editor value carrying flags. `EDITOR="code -w"` was passed whole
+// as a filename and failed with `fork/exec .../code -w: no such file or
+// directory`, while `PAGER="less -R"` had worked since the pager landed.
+func TestRealLaunchEditor_TokenizesArgs(t *testing.T) {
+	// Writes its own leading arguments, so the test fails if they are lost as
+	// well as if the whole value was taken for a filename.
+	editor := writeShellStub(t, "fake-editor.sh", "printf 'flags:%s,%s' \"$1\" \"$2\" > \"$3\"\n")
+
+	t.Setenv("VISUAL", "")
+	t.Setenv("EDITOR", editor+"  -w --wait")
+
+	got, err := realLaunchEditor("")
+	if err != nil {
+		t.Fatalf("realLaunchEditor: %v", err)
+	}
+	if got != "flags:-w,--wait" {
+		t.Errorf("body = %q, want the editor's own flags to have reached it", got)
+	}
+}
+
+// signalHelperEnv names the mode a re-exec'd test binary should run as the
+// child of TestIgnoreTerminalSignals. Empty means "not the helper".
+const signalHelperEnv = "FNGR_TEST_SIGNAL_HELPER"
+
+// TestIgnoreTerminalSignals checks both halves of the bracket in a subprocess,
+// because both halves are assertions about whether *this process* survives a
+// signal — in-process, "the bracket works" is unobservable (nothing happens)
+// and "the restore works" kills the test binary, taking every other result in
+// the package with it and naming no culprit.
+//
+// The restore half is not ceremony. The first version of ignoreTerminalSignals
+// used signal.Ignore/signal.Reset, whose restore silently does nothing, and an
+// in-process test passed green against it.
+func TestIgnoreTerminalSignals(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX signals only")
+	}
+	if os.Getenv(signalHelperEnv) != "" {
+		runSignalHelper(t)
+		return
+	}
+
+	for _, tt := range []struct {
+		mode     string
+		wantExit int // -1 for "killed by SIGINT"
+	}{
+		{"bracketed", 0},
+		{"restored", -1},
+	} {
+		t.Run(tt.mode, func(t *testing.T) {
+			// Not parallel: each subtest forks the test binary.
+			cmd := exec.Command(os.Args[0], "-test.run=^TestIgnoreTerminalSignals$") // #nosec G204 -- os.Args[0] is this test binary.
+			cmd.Env = append(os.Environ(), signalHelperEnv+"="+tt.mode)
+			out, err := cmd.CombinedOutput()
+
+			killed := false
+			var exitErr *exec.ExitError
+			if errors.As(err, &exitErr) {
+				ws, ok := exitErr.Sys().(syscall.WaitStatus)
+				killed = ok && ws.Signaled() && ws.Signal() == syscall.SIGINT
+			}
+			switch {
+			case tt.wantExit == 0 && err != nil:
+				t.Errorf("helper died (%v), want it to survive SIGINT inside the bracket\n%s", err, out)
+			case tt.wantExit == -1 && !killed:
+				t.Errorf("helper survived (err=%v), want SIGINT to kill it once restored — "+
+					"a restore that does not restore leaves fngr deaf to Ctrl-C for good\n%s", err, out)
+			}
+		})
+	}
+}
+
+// runSignalHelper is the child half of TestIgnoreTerminalSignals: raise SIGINT
+// at ourselves either inside the bracket or after lifting it, and let the exit
+// status carry the answer back.
+func runSignalHelper(t *testing.T) {
+	t.Helper()
+	restore := ignoreTerminalSignals()
+	if os.Getenv(signalHelperEnv) == "restored" {
+		restore()
+	} else {
+		defer restore()
+	}
+
+	self, err := os.FindProcess(os.Getpid())
+	if err != nil {
+		t.Fatalf("FindProcess: %v", err)
+	}
+	if err := self.Signal(os.Interrupt); err != nil {
+		t.Fatalf("raise SIGINT: %v", err)
+	}
+	// Delivery is asynchronous, so give it a window to have killed us in.
+	time.Sleep(200 * time.Millisecond)
+}
+
+// TestIgnoreTerminalSignals_ChildIsStillInterruptible pins the second reason
+// the bracket cannot be signal.Ignore: exec preserves an ignored disposition
+// where it resets a caught one, so an editor launched under Ignore inherits
+// SIG_IGN and cannot be Ctrl-C'd — least of all `EDITOR="code -w"`, a wrapper
+// script with no SIGINT handling of its own.
+func TestIgnoreTerminalSignals_ChildIsStillInterruptible(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX signals only")
+	}
+	defer ignoreTerminalSignals()()
+
+	child := exec.Command("/bin/sh", "-c", "sleep 30")
+	if err := child.Start(); err != nil {
+		t.Fatalf("start child: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- child.Wait() }()
+
+	// Started, not necessarily scheduled; a signal to a live process is
+	// delivered either way, so no wait for readiness is needed.
+	if err := child.Process.Signal(os.Interrupt); err != nil {
+		t.Fatalf("signal child: %v", err)
+	}
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		_ = child.Process.Kill()
+		t.Error("child ignored SIGINT: the bracket leaked SIG_IGN across exec, so the editor cannot be interrupted")
 	}
 }
 
