@@ -39,15 +39,21 @@ func currentUser() string {
 
 // kongVars centralizes the template variables Kong tags reference. Both
 // main() and the dispatch tests use this so the two call sites can't drift.
+//
+// Each vocabulary is one variable serving both the `enum:` tag and the `help:`
+// text — Kong interpolates ${VAR} in both, and trims each comma-split enum
+// value, so `", "` reads as prose in the help and parses the same as `","`.
+// Spelling the accepted formats out in prose instead let the two disagree, and
+// the help is the only place a user finds out `markdown` is a spelling at all.
 func kongVars(version, username string) kong.Vars {
 	return kong.Vars{
 		"version":              version,
 		"USER":                 username,
-		"ADD_FORMATS":          strings.Join([]string{render.FormatText, render.FormatJSON}, ","),
+		"ADD_FORMATS":          strings.Join(render.AddFormats, ", "),
 		"ADD_FORMAT_DEFAULT":   render.FormatText,
-		"LIST_FORMATS":         strings.Join(render.ListFormats, ","),
+		"LIST_FORMATS":         strings.Join(render.ListFormats, ", "),
 		"LIST_FORMAT_DEFAULT":  render.FormatTree,
-		"EVENT_FORMATS":        strings.Join(render.EventFormats, ","),
+		"EVENT_FORMATS":        strings.Join(render.EventFormats, ", "),
 		"EVENT_FORMAT_DEFAULT": render.FormatText,
 	}
 }

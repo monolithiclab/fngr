@@ -1,12 +1,14 @@
 package render
 
 import (
+	"bytes"
 	"cmp"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
 	"iter"
+	"maps"
 	"slices"
 	"strconv"
 	"time"
@@ -27,11 +29,58 @@ const (
 	FormatMarkdown = "md"
 )
 
-// ListFormats are the formats accepted by Events and EventsStream.
-var ListFormats = []string{FormatTree, FormatFlat, FormatJSON, FormatCSV, FormatMarkdown}
+// formatAliases maps every accepted spelling that is not itself canonical.
+// `md` stays the canonical name — it is what the flag defaults and the docs
+// use — but `markdown` is the word people reach for, and being told it is not
+// a format by a tool that has one is a papercut with no upside.
+var formatAliases = map[string]string{
+	"markdown": FormatMarkdown,
+}
 
-// EventFormats are the formats accepted by SingleEvent.
-var EventFormats = []string{FormatText, FormatJSON, FormatCSV, FormatMarkdown}
+// Canonical resolves an accepted spelling to the name the dispatchers switch
+// on. Anything unrecognised is returned unchanged: Kong's enum has already
+// refused what the CLI does not accept, and the dispatchers fall back to their
+// own default for a value that reaches them another way.
+func Canonical(format string) string {
+	if c, ok := formatAliases[format]; ok {
+		return c
+	}
+	return format
+}
+
+// ListFormats are the formats accepted by Events and EventsStream, aliases
+// included — the slice is the Kong enum, so a spelling missing here is
+// rejected at parse time however well Canonical would resolve it.
+var ListFormats = withAliases(FormatTree, FormatFlat, FormatJSON, FormatCSV, FormatMarkdown)
+
+// EventFormats are the formats accepted by SingleEvent, on the same terms.
+// The vocabularies are deliberately different — `tree`/`flat` need a set of
+// events, `text` is the one-event view — which is exactly why neither may
+// simply take every alias.
+var EventFormats = withAliases(FormatText, FormatJSON, FormatCSV, FormatMarkdown)
+
+// AddFormats are the *input* formats `fngr add --format` accepts. The alias
+// table is about output spellings and none of its entries resolve into this
+// vocabulary today, but it goes through withAliases anyway so that adding one
+// that does needs no second thought.
+var AddFormats = withAliases(FormatText, FormatJSON)
+
+// withAliases expands a vocabulary with the aliases of the formats in it, and
+// only those. Listing them by hand instead invites the alias into a vocabulary
+// that cannot render it: `txt` → `text` in ListFormats would parse, resolve,
+// miss every case in EventsStream's switch and fall through to flat — the user
+// asks for one format, gets another, exit 0. Deriving makes that unspellable.
+//
+// Aliases are appended in sorted order because the slice is joined into Kong's
+// enum, and the enum is in the error text a rejected --format prints.
+func withAliases(formats ...string) []string {
+	for _, alias := range slices.Sorted(maps.Keys(formatAliases)) {
+		if slices.Contains(formats, formatAliases[alias]) {
+			formats = append(formats, alias)
+		}
+	}
+	return formats
+}
 
 // nowFunc is the relative-stamp anchor. Production never reassigns it;
 // tests swap it via pinNow inside non-parallel subtests.
@@ -59,7 +108,7 @@ func formatEventLine(id int64, date, author, text string) string {
 // Events writes a list of events in the requested format. Supported formats
 // are FormatTree (default), FormatFlat, FormatJSON, FormatCSV, FormatMarkdown.
 func Events(w io.Writer, format string, events []event.Event) error {
-	switch format {
+	switch Canonical(format) {
 	case FormatCSV:
 		return CSV(w, events)
 	case FormatFlat:
@@ -76,11 +125,11 @@ func Events(w io.Writer, format string, events []event.Event) error {
 // SingleEvent writes one event in the requested format. Supported formats
 // are FormatText (default), FormatJSON, FormatCSV, FormatMarkdown.
 func SingleEvent(w io.Writer, format string, ev *event.Event) error {
-	switch format {
+	switch Canonical(format) {
 	case FormatCSV:
 		return CSV(w, []event.Event{*ev})
 	case FormatJSON:
-		return JSON(w, []event.Event{*ev})
+		return JSONEvent(w, ev)
 	case FormatMarkdown:
 		return Markdown(w, []event.Event{*ev})
 	default:
@@ -240,16 +289,34 @@ func (t *treeWriter) node(id int64, connector, continuation string) error {
 	return nil
 }
 
+// slicedSeq adapts a materialized slice to the streaming signature, so every
+// format but tree is written in exactly one place. Which of the two entry
+// points a command reaches for depends on whether it could stream, not on what
+// the user asked for, so `fngr --format=json` and `fngr event 1 -t
+// --format=json` over the same rows have to diff clean. Delegating makes that
+// structural instead of a pair of layout rules kept in step by hand — which
+// they were not: the streamed JSON used to put each comma on a line of its own
+// and a blank line before the `]`, and the buffered CSV discarded the write
+// errors its streaming twin checked.
+//
+// Tree is the exception, and not by oversight: it needs the whole topology
+// before it can draw a line, so it has no streaming form to delegate to.
+//
+// The error half is always nil — there is no read left to fail.
+func slicedSeq(events []event.Event) iter.Seq2[event.Event, error] {
+	return func(yield func(event.Event, error) bool) {
+		for _, ev := range events {
+			if !yield(ev, nil) {
+				return
+			}
+		}
+	}
+}
+
 // Flat writes one line per event in input order: `id  date  author  text`.
 // Parent/child topology is ignored; for that, use Tree.
 func Flat(w io.Writer, events []event.Event) error {
-	for _, ev := range events {
-		line := formatEventLine(ev.ID, formatLocalStamp(ev.CreatedAt), eventAuthor(ev), ev.Title)
-		if _, err := fmt.Fprintln(w, line); err != nil {
-			return err
-		}
-	}
-	return nil
+	return FlatStream(w, slicedSeq(events))
 }
 
 type jsonEvent struct {
@@ -290,11 +357,20 @@ func toJSONEvent(ev event.Event) jsonEvent {
 // round-tripping back through `fngr add --format=json`. Meta is emitted
 // as `[[key, value], ...]` sorted by (key, value).
 func JSON(w io.Writer, events []event.Event) error {
-	out := make([]jsonEvent, len(events))
-	for i, ev := range events {
-		out[i] = toJSONEvent(ev)
-	}
-	data, err := json.MarshalIndent(out, "", "  ")
+	return JSONStream(w, slicedSeq(events))
+}
+
+// JSONEvent writes one event as a single JSON object rather than a
+// one-element array. `fngr event 5 --format=json` describes one event, so
+// `jq '.title'` should answer with its title — against an array it returned
+// null, and every reader had to know to write `.[0]`. The import side reads
+// both shapes (`parseJSONAddInput` dispatches on the leading `[`), so the
+// round trip is unaffected.
+//
+// Indented at the top level, unlike the elements JSONStream writes: a
+// standalone object starts in column zero.
+func JSONEvent(w io.Writer, ev *event.Event) error {
+	data, err := json.MarshalIndent(toJSONEvent(*ev), "", "  ")
 	if err != nil {
 		return err
 	}
@@ -306,24 +382,7 @@ func JSON(w io.Writer, events []event.Event) error {
 // `id, parent_id, created_at, author, title, body`. Meta tuples beyond
 // `author` are not represented; for full meta, use JSON or Markdown.
 func CSV(w io.Writer, events []event.Event) error {
-	cw := csv.NewWriter(w)
-	_ = cw.Write([]string{"id", "parent_id", "created_at", "author", "title", "body"})
-	for _, ev := range events {
-		parentID := ""
-		if ev.ParentID != nil {
-			parentID = strconv.FormatInt(*ev.ParentID, 10)
-		}
-		_ = cw.Write([]string{
-			strconv.FormatInt(ev.ID, 10),
-			parentID,
-			ev.CreatedAt.UTC().Format(time.RFC3339),
-			eventAuthor(ev),
-			ev.Title,
-			ev.Body,
-		})
-	}
-	cw.Flush()
-	return cw.Error()
+	return CSVStream(w, slicedSeq(events))
 }
 
 // Event writes a single event in the human-readable detail layout used
@@ -419,12 +478,31 @@ func CSVStream(w io.Writer, seq iter.Seq2[event.Event, error]) error {
 // where each element is encoded individually, so the full serialized blob
 // is never held in memory. On error mid-stream the array is still closed
 // with "]\n" so any captured output is syntactically valid JSON.
+//
+// The output must match `json.MarshalIndent(events, "", "  ")` byte for byte —
+// that is the shape `fngr --format=json` has always emitted and the one the
+// import side reads back — which is why the separators are written here rather
+// than left to the encoder: json.Encoder terminates every value with a newline
+// of its own, putting the comma on a line by itself and a blank line before
+// the `]`. TestJSONStream_MatchesMarshalIndent is what pins that.
+//
+// The buffer is what makes the encoder usable at all here, not an optimization
+// on top of it: Encode writes straight through, so its trailing newline can
+// only be trimmed off a buffer. Marshalling each event afresh instead would be
+// the obvious way to get the same bytes, and costs ~260 MB of garbage over a
+// 250k listing against ~54 MB. Both are reused across the whole stream.
 func JSONStream(w io.Writer, seq iter.Seq2[event.Event, error]) error {
-	if _, err := fmt.Fprint(w, "["); err != nil {
-		return err
-	}
-	enc := json.NewEncoder(w)
+	var buf bytes.Buffer
+	// Indent one level in: an element of `MarshalIndent(slice, "", "  ")`
+	// carries its fields at four spaces and its closing brace at two.
+	enc := json.NewEncoder(&buf)
 	enc.SetIndent("  ", "  ")
+
+	// Encoded by pointer out of a hoisted variable: jsonEvent is 88 bytes, so
+	// passing it by value boxes a fresh copy onto the heap for every event,
+	// where a pointer fits the interface word. Same bytes out, a third fewer
+	// allocations over a large listing.
+	var jev jsonEvent
 
 	first := true
 	var streamErr error
@@ -433,25 +511,31 @@ func JSONStream(w io.Writer, seq iter.Seq2[event.Event, error]) error {
 			streamErr = err
 			break
 		}
-		if !first {
-			if _, werr := fmt.Fprint(w, ","); werr != nil {
-				return werr
-			}
+		buf.Reset()
+		jev = toJSONEvent(ev)
+		if err := enc.Encode(&jev); err != nil {
+			return err
 		}
-		if _, werr := fmt.Fprint(w, "\n  "); werr != nil {
-			return werr
+		// Encode's own trailing newline is the one artefact left to undo.
+		data := bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
+
+		lead := ",\n  "
+		if first {
+			lead = "[\n  "
 		}
-		if err := enc.Encode(toJSONEvent(ev)); err != nil {
+		if _, err := io.WriteString(w, lead); err != nil {
+			return err
+		}
+		if _, err := w.Write(data); err != nil {
 			return err
 		}
 		first = false
 	}
-	if !first {
-		if _, err := fmt.Fprint(w, "\n"); err != nil {
-			return err
-		}
+	tail := "\n]\n"
+	if first {
+		tail = "[]\n"
 	}
-	if _, err := fmt.Fprint(w, "]\n"); err != nil {
+	if _, err := io.WriteString(w, tail); err != nil {
 		return err
 	}
 	return streamErr
@@ -461,7 +545,7 @@ func JSONStream(w io.Writer, seq iter.Seq2[event.Event, error]) error {
 // requires the full slice for parent-child topology; callers that want
 // tree must use Events with a materialized []Event.
 func EventsStream(w io.Writer, format string, seq iter.Seq2[event.Event, error]) error {
-	switch format {
+	switch Canonical(format) {
 	case FormatCSV:
 		return CSVStream(w, seq)
 	case FormatJSON:

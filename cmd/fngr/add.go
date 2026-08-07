@@ -15,7 +15,7 @@ import (
 type AddCmd struct {
 	Args   []string `arg:"" optional:"" help:"Event text (joined with spaces). A leading \"<time>: \" prefix sets the timestamp (e.g. \"9:30: had coffee\"), unless --time is given. Omit and pipe to stdin, or use -e."`
 	Edit   bool     `short:"e" help:"Open $VISUAL or $EDITOR for the body."`
-	Format string   `short:"f" help:"Input format: text (default) or json. Under json, body is parsed as one event object or an array; per-record fields override the matching CLI flag, and absent fields fall back to it." enum:"${ADD_FORMATS}" default:"${ADD_FORMAT_DEFAULT}"`
+	Format string   `short:"f" help:"Input format: one of ${ADD_FORMATS}. Under json, body is parsed as one event object or an array; per-record fields override the matching CLI flag, and absent fields fall back to it." enum:"${ADD_FORMATS}" default:"${ADD_FORMAT_DEFAULT}"`
 	Author string   `help:"Event author (used as default if JSON record omits meta.author)." env:"FNGR_AUTHOR" default:"${USER}"`
 	Parent *int64   `help:"Parent event ID (used as default if JSON record omits parent_id)."`
 	Meta   []string `help:"Metadata key=value pairs (used as defaults if JSON record omits meta)." short:"m"`
@@ -23,7 +23,14 @@ type AddCmd struct {
 }
 
 func (c *AddCmd) Run(s eventStore, io ioStreams) error {
-	if c.Format == render.FormatJSON {
+	// Canonical, not raw equality, for the reason withAliases exists: an alias
+	// resolving to json would pass the enum and then miss this test, sending a
+	// 10 000-record batch down the text path to be stored as one event titled
+	// `[{"title":…` at exit 0. No alias resolves here today; the point is that
+	// adding one cannot make it so.
+	format := render.Canonical(c.Format)
+
+	if format == render.FormatJSON {
 		if c.Edit {
 			return fmt.Errorf("--edit conflicts with --format=json")
 		}
@@ -41,7 +48,7 @@ func (c *AddCmd) Run(s eventStore, io ioStreams) error {
 		return err
 	}
 
-	if c.Format == render.FormatJSON {
+	if format == render.FormatJSON {
 		return c.runJSON(s, io, text)
 	}
 	return c.runText(s, io, text)

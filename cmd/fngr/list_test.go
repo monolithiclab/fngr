@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"iter"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/monolithiclab/fngr/internal/db"
 	"github.com/monolithiclab/fngr/internal/event"
 	"github.com/monolithiclab/fngr/internal/parse"
+	"github.com/monolithiclab/fngr/internal/render"
 	"github.com/monolithiclab/fngr/internal/timefmt"
 )
 
@@ -121,20 +123,63 @@ func TestWithGrammarHint(t *testing.T) {
 	}
 }
 
-func TestListCmd_TreeEmptyReportsNoEvents(t *testing.T) {
+// TestListCmd_EmptyReportsNoEvents covers every format, not just tree: the
+// message used to live inside the tree branch, so `fngr --format=flat` over a
+// filter that matched nothing was total silence at exit 0 — the very thing the
+// message exists to rule out. Each format still writes its own empty rendering
+// to stdout; the note goes to stderr, so a script parsing the output is
+// unaffected either way.
+func TestListCmd_EmptyReportsNoEvents(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t) // never written to, so one store serves every subtest
+	for _, format := range render.ListFormats {
+		t.Run(format, func(t *testing.T) {
+			t.Parallel()
+			io, out, errBuf := newTestIOFull("", false)
+
+			cmd := &ListCmd{Format: format}
+			if err := cmd.Run(s, io); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if got := errBuf.String(); !strings.Contains(got, "No events found") {
+				t.Errorf("stderr = %q, want 'No events found'", got)
+			}
+			// Only the empty rendering, never an event: csv writes its header
+			// row and json writes `[]`, and neither is a match.
+			if got := out.String(); strings.Contains(got, "\"id\"") {
+				t.Errorf("stdout = %q, want no events", got)
+			}
+		})
+	}
+}
+
+// TestListCmd_NonEmptyStaysQuiet is the other half: the streaming formats learn
+// they matched something only by counting what passes through the renderer, so
+// a miscount would report an empty journal over a listing the user can see.
+func TestListCmd_NonEmptyStaysQuiet(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out, errBuf := newTestIOFull("", false)
+	if _, err := s.Add(context.Background(), event.AddInput{Title: "here", Meta: []parse.Meta{
+		{Key: "author", Value: "alice"},
+	}}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	for _, format := range render.ListFormats {
+		t.Run(format, func(t *testing.T) {
+			t.Parallel()
+			io, out, errBuf := newTestIOFull("", false)
 
-	cmd := &ListCmd{Format: "tree"}
-	if err := cmd.Run(s, io); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if got := out.String(); got != "" {
-		t.Errorf("stdout = %q, want empty", got)
-	}
-	if got := errBuf.String(); !strings.Contains(got, "No events found") {
-		t.Errorf("stderr = %q, want 'No events found'", got)
+			cmd := &ListCmd{Format: format}
+			if err := cmd.Run(s, io); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if strings.Contains(errBuf.String(), "No events found") {
+				t.Errorf("stderr = %q, want no empty-result note", errBuf.String())
+			}
+			if !strings.Contains(out.String(), "here") {
+				t.Errorf("stdout = %q, want the event", out.String())
+			}
+		})
 	}
 }
 
@@ -361,11 +406,81 @@ func TestListCmd_ReportsAFailedFlush(t *testing.T) {
 	}
 
 	wantErr := errors.New("disk full")
-	streams := ioStreams{In: strings.NewReader(""), Out: errWriter{err: wantErr}, Err: io.Discard}
 
-	cmd := &ListCmd{Format: "flat", NoPager: true}
-	if err := cmd.Run(s, streams); !errors.Is(err, wantErr) {
-		t.Errorf("Run err = %v, want %v", err, wantErr)
+	// Every format, derived rather than listed: they differ in how they give up
+	// — json abandons the array mid-write and so stops the sequence through the
+	// wrapper, csv only learns of the failure on flush, tree does not stream at
+	// all — and a hand-written list silently misses whatever is added next, as
+	// it already had for `markdown`. Either way the error is the command's, and
+	// nothing may report an empty journal over it.
+	for _, format := range render.ListFormats {
+		t.Run(format, func(t *testing.T) {
+			t.Parallel()
+			streams := ioStreams{In: strings.NewReader(""), Out: errWriter{err: wantErr}, Err: io.Discard}
+
+			cmd := &ListCmd{Format: format, NoPager: true}
+			if err := cmd.Run(s, streams); !errors.Is(err, wantErr) {
+				t.Errorf("Run err = %v, want %v", err, wantErr)
+			}
+		})
+	}
+}
+
+// TestNoteAny covers the wrapper directly, which is the only way to reach its
+// early-out: through ListCmd the pager buffers 16 KiB of output, so a renderer
+// writing to a broken stdout runs the whole sequence before anything fails. A
+// renderer that does give up mid-stream must stop the query with it.
+func TestNoteAny(t *testing.T) {
+	t.Parallel()
+	boom := errors.New("boom")
+
+	t.Run("stops when the consumer does", func(t *testing.T) {
+		t.Parallel()
+		var found bool
+		var seen int
+		for range noteAny(twoThenError(boom), &found) {
+			seen++
+			break
+		}
+		if seen != 1 || !found {
+			t.Errorf("seen = %d, found = %v, want 1 and true", seen, found)
+		}
+	})
+
+	t.Run("an error alone is not an event", func(t *testing.T) {
+		t.Parallel()
+		var found bool
+		var gotErr error
+		for _, err := range noteAny(onlyError(boom), &found) {
+			gotErr = err
+		}
+		if found {
+			t.Error("found = true, want false — the error carries no event")
+		}
+		if !errors.Is(gotErr, boom) {
+			t.Errorf("err = %v, want boom", gotErr)
+		}
+	})
+}
+
+// twoThenError yields two events and then fails, the shape of a query that
+// dies partway through its result set.
+func twoThenError(err error) iter.Seq2[event.Event, error] {
+	return func(yield func(event.Event, error) bool) {
+		for id := int64(1); id <= 2; id++ {
+			if !yield(event.Event{ID: id}, nil) {
+				return
+			}
+		}
+		yield(event.Event{}, err)
+	}
+}
+
+// onlyError yields nothing but a failure, the shape of a query that cannot
+// even start.
+func onlyError(err error) iter.Seq2[event.Event, error] {
+	return func(yield func(event.Event, error) bool) {
+		yield(event.Event{}, err)
 	}
 }
 

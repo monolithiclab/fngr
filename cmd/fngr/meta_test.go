@@ -14,35 +14,51 @@ import (
 func TestMetaListCmd_Empty(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out := newTestIO("")
+	io, out, errBuf := newTestIOFull("", true)
 
 	cmd := &MetaListCmd{}
 	if err := cmd.Run(s, io); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if !strings.Contains(out.String(), "No metadata") {
-		t.Errorf("output = %q, want No metadata", out.String())
+	if !strings.Contains(errBuf.String(), "No metadata") {
+		t.Errorf("stderr = %q, want No metadata", errBuf.String())
+	}
+	// On stderr and nowhere else: the sentence is a note about the result,
+	// not an entry, so a listing piped to a counter has to come back empty.
+	if out.String() != "" {
+		t.Errorf("stdout = %q, want empty", out.String())
 	}
 }
 
-func TestMetaListCmd_Format(t *testing.T) {
+// TestMetaListCmd_EntryReadsTheSameFilteredOrNot pins the row layout, and pins
+// it against the filter. Padding the key to the widest key made the `=` a
+// column of its own, and the width of that column came from whichever rows the
+// query returned: `fngr meta` printed `tag   =bugfix` beside `author=nico`,
+// while `fngr meta -S tag` printed `tag=bugfix` — the same entry, two
+// spellings.
+func TestMetaListCmd_EntryReadsTheSameFilteredOrNot(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out := newTestIO("")
 
+	// Two keys of different lengths, so a per-key column would be visible.
 	if _, err := s.Add(context.Background(), event.AddInput{Title: "x", Meta: []parse.Meta{
-		{Key: "tag", Value: "ops"},
+		{Key: "author", Value: "nico"},
+		{Key: "tag", Value: "bugfix"},
 	}}); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
-	cmd := &MetaListCmd{}
-	if err := cmd.Run(s, io); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	got := out.String()
-	if !strings.Contains(got, "tag=ops") || !strings.Contains(got, "(1)") {
-		t.Errorf("output = %q, want tag=ops with count", got)
+	for _, search := range []string{"", "tag"} {
+		io, out := newTestIO("")
+		cmd := &MetaListCmd{Search: search}
+		if err := cmd.Run(s, io); err != nil {
+			t.Fatalf("Run(-S %q): %v", search, err)
+		}
+		// The count is the other half of the row: one padded `key=value`
+		// cell, then `(n)`.
+		if !strings.Contains(out.String(), "tag=bugfix") || !strings.Contains(out.String(), "(1)") {
+			t.Errorf("`meta -S %q` = %q, want it to contain %q with its count", search, out.String(), "tag=bugfix")
+		}
 	}
 }
 

@@ -74,8 +74,15 @@ make ci             # codefix + format + lint + test
   shorthand). None of the event verbs prompt; meta verbs prompt with the destructive-vs-additive
   defaults (rename `[Y/n]`, delete `[y/N]`); `-f`/`--force` skips the prompt on both, and is
   *required* in a non-interactive run — every prompt errors rather than assume its default when
-  stdin has no answer to give (see `cmd/fngr/prompt.go`). The `meta` listing pads both columns to
-  the widest cell, so each one goes through `displayCell` first: escaped, then clamped to
+  stdin has no answer to give (see `cmd/fngr/prompt.go`). An empty `meta` listing reports
+  `No metadata found.` on stderr, through the same `reportNone` as `list`'s own empty-result
+  note and for the same reason — it is a remark about the result, not a row of it, and
+  `fngr meta -S tag | wc -l` should count entries. The `meta` listing pads the joined
+  `key=value` cell to the widest one, not the key and the value separately — a padded key put
+  the `=` in a column of its own (`tag   =bugfix` beside `author=nico`) whose width came from
+  whichever rows the query returned, so `fngr meta -S tag` and the unfiltered listing spelled
+  the same entry two ways. Each half still goes through `displayCell` first: escaped, then
+  clamped to
   `maxMetaCell` (60) runes with the last spent on an ellipsis where it cut. The bound is a
   constant because meta is content-controlled — 200 short rows beside one 1 MB value printed
   202 MB, ~200x what was stored. `displayCell` cuts the *raw* value to one rune past the cap
@@ -101,7 +108,10 @@ make ci             # codefix + format + lint + test
 - `cmd/fngr/plural.go` — `plural(n, noun)`, the count+noun formatter behind `Renamed 1
   occurrence` / `Imported 3 events`. Regular `-s` only, deliberately: every noun fngr counts takes
   one, and a call site with an irregular noun should say something else — which is why `delete -r`
-  reports a subtree in events rather than in children.
+  reports a subtree in events rather than in children. Also `reportNone(w, noun)`, the other half
+  of the family: `No events found.` / `No metadata found.`, on stderr, in one place so the choice
+  of stream is made once — that choice is the whole reason the note can be printed for every
+  format including the two (`[]`, a lone CSV header) that already say it themselves.
 - `cmd/fngr/store.go` — Defines the narrow `eventStore` interface that commands depend on plus the
   injectable `ioStreams` (`In io.Reader`, `Out io.Writer`, `Err io.Writer`, `IsTTY bool`).
 - `cmd/fngr/clock.go` — `warnSkippedClock(w, exists, asked, stored)`, the single formatter for the
@@ -431,8 +441,47 @@ make ci             # codefix + format + lint + test
   `Markdown`/`MarkdownStream`, `Event` are the underlying writers. List/flat use a relative-aware compact stamp via `timefmt.FormatRelative`;
   event detail keeps full ISO. Streaming variants consume `iter.Seq2[Event, error]` so memory
   stays flat regardless of result size; tree still buffers because it needs the topology.
+  All three dispatchers switch on `Canonical(format)`, which resolves the `formatAliases`
+  table — currently just `markdown` → `md` — and passes anything else through untouched.
+  `AddCmd.Run` and `list.go`'s tree branch canonicalize too, being the two places that test a
+  format outside a dispatcher: no alias resolves to `json` or `tree` today, and the point is
+  that adding one cannot silently send a 10 000-record batch down the text path.
+  `ListFormats` / `EventFormats` / `AddFormats` are the slices `main.go` joins into Kong's
+  `enum:` tags *and* into the `--format` help text — one variable each, since Kong interpolates
+  `${…}` in `help:` too and trims each comma-split enum value, so `", "` reads as prose in the
+  help and parses the same as `","`. A spelling missing from the enum is refused at parse time
+  however well `Canonical` would resolve it, so all three slices are *derived* by `withAliases`,
+  which adds an alias exactly when the vocabulary already has the format it resolves to. Listing
+  them by hand is what invites an alias into a vocabulary that cannot render it: the
+  vocabularies stay different — `tree`/`flat` need a set of events and `text` is the one-event
+  view — so `txt` → `text` in `ListFormats` would parse, resolve, miss every case in
+  `EventsStream`'s switch and fall through to flat, at exit 0. Aliases are appended sorted
+  because the joined slice is in the error text a rejected `--format` prints.
   Meta in JSON output is `[[key, value], ...]`, sorted by `(key, value)`. Each `event_meta`
   row maps to one tuple — multiple values for the same key produce multiple tuples.
+  Every buffered writer but `Tree` *is* its streaming twin over `slicedSeq`, a slice-backed
+  `iter.Seq2`: which one a command reaches for depends on whether it could stream, not on what
+  the user asked for, so their bytes have to match — and they did not. Streamed JSON put each
+  comma on a line of its own and a blank line before the `]`, and buffered `CSV` discarded the
+  write errors `CSVStream` checked. `Tree` is the one exception and not by oversight: it needs
+  the whole topology before it can draw a line, so it has no streaming form to delegate to.
+  `JSONStream` writes the `[\n  ` / `,\n  ` leads itself and encodes each element at
+  `SetIndent("  ", "  ")`, which is exactly how `MarshalIndent(slice, "", "  ")` renders one,
+  trimming the newline `Encode` adds (that newline is what the old shape came from). The
+  `bytes.Buffer` is what makes an encoder usable at all here rather than an optimization on top
+  of one — `Encode` writes straight through, so its newline can only be trimmed off a buffer —
+  and `TestJSONStream_MatchesMarshalIndent` pins the layout against `MarshalIndent` itself,
+  since comparing the two dispatchers cannot say anything once one delegates to the other.
+  Events are encoded through a hoisted `*jsonEvent`: the struct is 88 bytes, so passing it by
+  value boxes a heap copy per event. `JSONEvent` is the odd one out and marshals directly — one
+  object, what `SingleEvent` uses, since `fngr event 5 --format=json` describes one event and
+  `jq '.title'` has to answer; a standalone object starts in column zero.
+  An empty result is empty per format and deliberately so: tree/flat/md write nothing, JSON
+  writes `[]`, CSV writes its header row. `No events found.` goes to stderr for *all* of them,
+  so the two self-explanatory formats need no exception to keep in step; the streaming path
+  learns it matched something from `noteAny`, a pass-through wrapper, rather than by
+  materializing the result. Both that message and `fngr meta`'s go through
+  `cmd/fngr/plural.go::reportNone`, which is what makes the choice of stream a single decision.
   Markdown output groups events by local date as `## YYYY-MM-DD` sections; bullets are `- <time> — <body>` with multi-line bodies indented two spaces and meta on a separate continuation line of space-separated `key=value` tokens.
   `Tree` drives a `treeWriter` whose `prefix []byte` is appended to on the way down and truncated
   on the way back up, and whose `line []byte` assembles prefix+connector+event so each node

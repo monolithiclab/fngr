@@ -738,6 +738,54 @@ func TestKongDispatch_OutOfRangeTimeFlagErrors(t *testing.T) {
 	}
 }
 
+// TestKongDispatch_MarkdownAlias checks that the alias reaches the renderer
+// through Kong's enum on every command that offers `md`. `markdown` is the
+// word people reach for, and it was rejected at parse time.
+func TestKongDispatch_MarkdownAlias(t *testing.T) {
+	t.Parallel()
+	run := newDispatcher(t)
+	if _, err := run([]string{"add", "an entry"}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	for _, argv := range [][]string{
+		{"list", "--format", "markdown", "--no-pager"},
+		{"event", "show", "1", "--format", "markdown"},
+	} {
+		out, err := run(argv)
+		if err != nil {
+			t.Fatalf("%v: %v", argv, err)
+		}
+		if !strings.HasPrefix(out, "## ") {
+			t.Errorf("%v produced %q, want markdown", argv, out)
+		}
+	}
+}
+
+// TestKongDispatch_SingleEventJSONIsAnObject pins the shape of
+// `fngr event N --format=json`: one event is one object, so `jq '.title'`
+// answers. It emitted a one-element array, against which every field query
+// returned null.
+func TestKongDispatch_SingleEventJSONIsAnObject(t *testing.T) {
+	t.Parallel()
+	run := newDispatcher(t)
+	if _, err := run([]string{"add", "an entry"}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	out, err := run([]string{"event", "show", "1", "--format", "json"})
+	if err != nil {
+		t.Fatalf("show: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("not a JSON object: %v\noutput:\n%s", err, out)
+	}
+	if got["title"] != "an entry" {
+		t.Errorf("title = %v, want %q; output:\n%s", got["title"], "an entry", out)
+	}
+}
+
 // TestKongDispatch_JSONRoundTrip exercises the recipe the README promises —
 // `fngr --format=json | fngr add --format=json` — end to end through Kong,
 // against two separate databases whose id counters have nothing in common.
