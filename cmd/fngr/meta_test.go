@@ -400,8 +400,8 @@ func TestMetaRenameCmd_ConfirmAppliesOnce(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	if !strings.Contains(out.String(), "Renamed 3 occurrence(s)") {
-		t.Errorf("output = %q, want Renamed 3 occurrence(s)", out.String())
+	if !strings.Contains(out.String(), "Renamed 3 occurrences") {
+		t.Errorf("output = %q, want Renamed 3 occurrences", out.String())
 	}
 
 	oldCount, err := s.CountMeta(context.Background(), "tag", "old")
@@ -448,7 +448,7 @@ func TestMetaRenameCmd_AcceptsShorthand(t *testing.T) {
 
 // TestMetaRenameCmd_PromptWarnsAboutMerge covers the prompt's one job in the
 // consolidation case: a rename onto an existing entry destroys rows, and
-// "Renamed N occurrence(s)" alone reads as if nothing was lost.
+// "Renamed N occurrences" alone reads as if nothing was lost.
 func TestMetaRenameCmd_PromptWarnsAboutMerge(t *testing.T) {
 	t.Parallel()
 
@@ -542,8 +542,8 @@ func TestMetaDeleteCmd_Force(t *testing.T) {
 	if err := cmd.Run(s, io); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if !strings.Contains(out.String(), "Deleted 1 occurrence(s)") {
-		t.Errorf("output = %q, want Deleted 1 occurrence(s)", out.String())
+	if !strings.Contains(out.String(), "Deleted 1 occurrence\n") {
+		t.Errorf("output = %q, want Deleted 1 occurrence", out.String())
 	}
 }
 

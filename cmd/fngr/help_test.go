@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"slices"
 	"strings"
 	"testing"
 
@@ -87,6 +88,123 @@ func TestHelpCmd_UnknownCommandErrors(t *testing.T) {
 	t.Parallel()
 	out := helpOutput(t, []string{"help", "totally-not-a-command"})
 	if !strings.HasPrefix(out, "ERR:") {
-		t.Errorf("expected an error from `help <unknown>`, got plain output:\n%s", out)
+		t.Fatalf("expected an error from `help <unknown>`, got plain output:\n%s", out)
+	}
+	// `list` is default:"withargs", so Kong's own answer was list's whole
+	// usage block plus `unexpected argument totally-not-a-command` — no sign
+	// the word was meant to be a command, and no list of the ones that are.
+	for _, want := range []string{`fngr has no command "totally-not-a-command"`, "try one of:", "meta"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("`help <unknown>` = %q, want it to contain %q", out, want)
+		}
+	}
+	if strings.Contains(out, "unexpected argument") {
+		t.Errorf("`help <unknown>` = %q, want the command-path error, not Kong's positional one", out)
+	}
+}
+
+// TestCheckCommandPath covers the walk directly, including the nested and
+// argument-taking nodes the end-to-end help test cannot reach without
+// asserting on Kong's rendered usage text.
+func TestCheckCommandPath(t *testing.T) {
+	t.Parallel()
+	parser := newTestParser(t, &bytes.Buffer{})
+	root := parser.Model.Node
+
+	tests := []struct {
+		name string
+		args []string
+		want string // "" = must be accepted
+	}{
+		{name: "no args", args: nil},
+		{name: "top-level command", args: []string{"add"}},
+		{name: "nested command", args: []string{"event", "show"}},
+		{name: "meta subcommand", args: []string{"meta", "rename"}},
+		{
+			name: "unknown top-level",
+			args: []string{"bogus"},
+			want: `fngr has no command "bogus"`,
+		},
+		{
+			name: "unknown below a known command",
+			args: []string{"meta", "bogus"},
+			want: `fngr meta has no command "bogus"`,
+		},
+		{
+			// `event` takes an <id> positional as well as its verbs, so a
+			// segment matching neither is Kong's to explain, not ours.
+			name: "argument-taking node accepts anything",
+			args: []string{"event", "5"},
+		},
+		{
+			// A leaf has no sub-commands to suggest; trailing words are its
+			// own arguments.
+			name: "leaf command accepts anything",
+			args: []string{"add", "bogus"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := checkCommandPath(root, tt.args)
+			switch {
+			case tt.want == "" && err != nil:
+				t.Errorf("checkCommandPath(%q) = %v, want nil", tt.args, err)
+			case tt.want != "" && err == nil:
+				t.Errorf("checkCommandPath(%q) = nil, want %q", tt.args, tt.want)
+			case tt.want != "" && !strings.Contains(err.Error(), tt.want):
+				t.Errorf("checkCommandPath(%q) = %q, want it to contain %q", tt.args, err, tt.want)
+			}
+		})
+	}
+}
+
+// TestTakesArgument covers the two shapes fngr's grammar actually has, which
+// the checkCommandPath cases exercise only indirectly: `add` carries its own
+// positionals, while `event` carries none and gets its <id> from the
+// `default:"withargs"` child. Reading only one of the two places is what made
+// `fngr help event 5` report a mistyped command.
+func TestTakesArgument(t *testing.T) {
+	t.Parallel()
+	parser := newTestParser(t, &bytes.Buffer{})
+	root := parser.Model.Node
+
+	tests := []struct {
+		name string
+		node *kong.Node
+		want bool
+	}{
+		{name: "root, whose default command takes none", node: root, want: false},
+		{name: "own positionals", node: commandChild(root, "add"), want: true},
+		{name: "positionals on the default child", node: commandChild(root, "event"), want: true},
+		{name: "sub-commands only", node: commandChild(root, "meta"), want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if tt.node == nil {
+				t.Fatal("node not found in the grammar")
+			}
+			if got := takesArgument(tt.node); got != tt.want {
+				t.Errorf("takesArgument(%s) = %v, want %v", tt.node.Name, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestCommandNames pins the listing the error offers: sorted, and only real
+// sub-commands — an <id> positional is not something to "try one of".
+func TestCommandNames(t *testing.T) {
+	t.Parallel()
+	parser := newTestParser(t, &bytes.Buffer{})
+	names := commandNames(parser.Model.Node)
+
+	if !slices.IsSorted(names) {
+		t.Errorf("commandNames = %v, want sorted", names)
+	}
+	for _, want := range []string{"add", "delete", "event", "help", "list", "meta"} {
+		if !slices.Contains(names, want) {
+			t.Errorf("commandNames = %v, want it to include %q", names, want)
+		}
 	}
 }

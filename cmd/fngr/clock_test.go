@@ -212,7 +212,7 @@ func TestAddJSON_WarnsOnSkippedClock(t *testing.T) {
 				{"title":"d","created_at":"` + springForward + ` 02:45"}
 			]`},
 			warns:    true,
-			wantMore: "2 more record(s)",
+			wantMore: "plus 2 records in this batch",
 		},
 	}
 	for _, tt := range tests {
@@ -237,7 +237,7 @@ func TestAddJSON_WarnsOnSkippedClock(t *testing.T) {
 			if tt.wantMore != "" && !strings.Contains(got, tt.wantMore) {
 				t.Errorf("stderr = %q, want it to contain %q", got, tt.wantMore)
 			}
-			if tt.wantMore == "" && strings.Contains(got, "more record(s)") {
+			if tt.wantMore == "" && strings.Contains(got, "in this batch") {
 				t.Errorf("stderr = %q, want no tail count", got)
 			}
 		})

@@ -56,6 +56,10 @@ func (s *Store) GetSubtree(ctx context.Context, rootID int64) ([]Event, error) {
 	return GetSubtree(ctx, s.DB, rootID)
 }
 
+func (s *Store) CountSubtree(ctx context.Context, rootID int64) (int64, error) {
+	return CountSubtree(ctx, s.DB, rootID)
+}
+
 func (s *Store) ListMeta(ctx context.Context, opts ListMetaOpts) ([]MetaCount, error) {
 	return ListMeta(ctx, s.DB, opts)
 }

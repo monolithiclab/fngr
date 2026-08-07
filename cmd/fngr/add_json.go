@@ -107,18 +107,15 @@ func (c *AddCmd) runJSON(s eventStore, io ioStreams, raw string) error {
 		addInputs = append(addInputs, ai)
 	}
 	if skipped > 1 {
-		fmt.Fprintf(io.Err, "warning: %d more record(s) in this batch name a clock that does not exist\n", skipped-1)
+		fmt.Fprintf(io.Err, "warning: plus %s in this batch with a clock that does not exist\n",
+			plural(int64(skipped-1), "record"))
 	}
 
 	ids, err := s.AddMany(context.Background(), addInputs)
 	if err != nil {
 		return err
 	}
-	if len(ids) == 1 {
-		fmt.Fprintln(io.Out, "Imported 1 event")
-	} else {
-		fmt.Fprintf(io.Out, "Imported %d events\n", len(ids))
-	}
+	fmt.Fprintf(io.Out, "Imported %s\n", plural(int64(len(ids)), "event"))
 	return nil
 }
 

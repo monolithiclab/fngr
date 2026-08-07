@@ -2026,20 +2026,67 @@ Grouped; each is small and independently actionable.
   database file that is readable but not writable opens fine and fails at the
   first write with SQLite's own `attempt to write a readonly database (8)`,
   which is accurate there.*
-- Cycle errors double the sentinel text: `attaching event 3 to event 5 would
-  form a cycle: would create a parent cycle`.
-- `Renamed 1 occurrence(s)` / `Deleted 1 occurrence(s)` — pluralize properly.
-- `fngr help bogus` → blank line, then `unexpected argument bogus`, with no
-  list of valid commands.
+- ~~Cycle errors double the sentinel text: `attaching event 3 to event 5 would
+  form a cycle: would create a parent cycle`.~~
+  *Done: the prefix's job is the two ids, so it states them and nothing else —
+  `attaching event 3 to event 5: would create a parent cycle`. The self-parent
+  message was reworded to match (`attaching event 3 to itself: …`) rather than
+  left as the odd one out.*
+- ~~`Renamed 1 occurrence(s)` / `Deleted 1 occurrence(s)` — pluralize
+  properly.~~
+  *Done: `cmd/fngr/plural.go` holds the one count+noun formatter, applied to
+  both `meta` prompts, both `meta` result lines, the `--format=json` import
+  count (which hand-pluralized) and its skipped-clock tail warning. Regular
+  `-s` only — every noun fngr counts takes one, and the alternative was an
+  irregular-plural argument no call site needs.*
+- ~~`fngr help bogus` → blank line, then `unexpected argument bogus`, with no
+  list of valid commands.~~
+  *Done: `checkCommandPath` walks the path before handing it back to Kong and
+  answers `fngr has no command "bogus"; try one of: add, delete, event, help,
+  list, meta` (and `fngr meta has no command …` one level down). It stays
+  quiet wherever the word might legitimately not be a command — a leaf like
+  `add`, and a node that takes an argument, so `fngr help event 5` is still
+  Kong's to explain. The old answer was not a Kong bug: `list`
+  is `default:"withargs"`, so the word re-parsed as a stray argument to `list`
+  and got list's entire usage block in reply. That is also why the check reads
+  all three places Kong looks for an argument: `withargs` puts `event`'s `<id>`
+  on the `show` child, not on `event`.*
+- The same defect is still live one path over: `fngr evnt 5` answers
+  `unexpected argument evnt`, for exactly the `default:"withargs"` reason
+  above, and that is the typo people actually make. `checkCommandPath` is
+  already generic over any node and any arg list — the gap is that `main` calls
+  the package-level `kong.Parse` and so never sees the failing context.
+  Deferred to the `main.go` restructure below, which has to own the parser
+  anyway.
 
 **Behavior**
 
-- `delete -r` under-reports: deleting a 3-node subtree prints `Deleted event 1`
-  and the prompt names one event. State the count before asking and after
-  acting.
-- `event detach` on a parentless event prints `Detached event 1` at exit 0 with
-  nothing done. Idempotent by design is fine; it reads as confirmation that
-  work occurred.
+- ~~`delete -r` under-reports: deleting a 3-node subtree prints `Deleted event
+  1` and the prompt names one event. State the count before asking and after
+  acting.~~
+  *Done: `deleteSubject` names the target once and both lines use it —
+  `Delete event 1 and its subtree (3 events)? [y/N]` then `Deleted event 1 and
+  its subtree (3 events)`, so the prompt cannot promise a different number
+  from the result. The count comes from `CountSubtree`, added for this: the
+  first cut called `GetSubtree` and so read every title, body and meta row of
+  the subtree to print one integer — ~950 ms and ~110 MB of live heap at 100k
+  descendants, paid before the prompt and thrown away on abort. A stored cycle
+  stops either walk; any error from it degrades to the old un-counted `and all
+  its children` rather than failing the command, because the delete is an FK
+  cascade that walks nothing and `delete -r` is one of the ways out of a
+  corrupt tree.*
+- ~~`event detach` on a parentless event prints `Detached event 1` at exit 0
+  with nothing done. Idempotent by design is fine; it reads as confirmation
+  that work occurred.~~
+  *Done: it reads the event first, so a parentless one reports `Event 1 has no
+  parent; nothing to detach` (still exit 0, still idempotent) and a real
+  detach names what it cleared — `Detached event 3 from event 2`. The read is
+  a single-row `Get` and walks no ancestry, so the verb still works on the
+  corrupt tree `withRepairHint` sends people to it for. `attach` had the
+  mirror-image defect and got the mirror-image fix: re-parenting silently
+  displaced whatever parent was there, so it now reads first too and reports
+  `Attached event 3 to event 4 (was event 2)`, naming nothing when there was
+  nothing to displace.*
 - `--meta 'k='` is accepted, creating an empty-valued entry rendered as
   `k=  (1)`. `parse.FlagMeta` rejects an empty key but accepts an empty value
   and whitespace *inside* a key (`-m 'a b=c d'` stores a key that indexes as

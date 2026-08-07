@@ -965,6 +965,160 @@ func TestGetSubtree_NotFound(t *testing.T) {
 	}
 }
 
+// TestCountSubtree pins CountSubtree against GetSubtree: it exists only to
+// avoid materializing rows nobody reads, so the number it returns must be the
+// one a caller would have got from len(GetSubtree(...)).
+func TestCountSubtree(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		build func(t *testing.T, database *sql.DB) int64
+		want  int64
+	}{
+		{
+			name: "leaf counts itself",
+			build: func(t *testing.T, database *sql.DB) int64 {
+				a, _ := Add(ctx, database, AddInput{Title: "a"})
+				if _, err := Add(ctx, database, AddInput{Title: "unrelated"}); err != nil {
+					t.Fatalf("Add unrelated: %v", err)
+				}
+				return a
+			},
+			want: 1,
+		},
+		{
+			name: "root, child and grandchild",
+			build: func(t *testing.T, database *sql.DB) int64 {
+				a, _ := Add(ctx, database, AddInput{Title: "a"})
+				b, _ := Add(ctx, database, AddInput{Title: "b", ParentID: &a})
+				if _, err := Add(ctx, database, AddInput{Title: "c", ParentID: &b}); err != nil {
+					t.Fatalf("Add c: %v", err)
+				}
+				if _, err := Add(ctx, database, AddInput{Title: "unrelated"}); err != nil {
+					t.Fatalf("Add unrelated: %v", err)
+				}
+				return a
+			},
+			want: 3,
+		},
+		{
+			// Counted from halfway down: an ancestor is not a descendant.
+			name: "mid-chain root excludes what is above it",
+			build: func(t *testing.T, database *sql.DB) int64 {
+				a, _ := Add(ctx, database, AddInput{Title: "a"})
+				b, _ := Add(ctx, database, AddInput{Title: "b", ParentID: &a})
+				if _, err := Add(ctx, database, AddInput{Title: "c", ParentID: &b}); err != nil {
+					t.Fatalf("Add c: %v", err)
+				}
+				return b
+			},
+			want: 2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			database := testDB(t)
+			root := tt.build(t, database)
+
+			got, err := CountSubtree(ctx, database, root)
+			if err != nil {
+				t.Fatalf("CountSubtree: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("CountSubtree = %d, want %d", got, tt.want)
+			}
+			events, err := GetSubtree(ctx, database, root)
+			if err != nil {
+				t.Fatalf("GetSubtree: %v", err)
+			}
+			if got != int64(len(events)) {
+				t.Errorf("CountSubtree = %d but len(GetSubtree) = %d; the two must agree", got, len(events))
+			}
+		})
+	}
+}
+
+// TestCountSubtree_CorruptChainTerminates mirrors GetSubtree's cycle defence.
+// Counting is a walk too, so it needs the same UNION and the same loop test —
+// terminating on a cyclic chain is not the same as answering for it.
+func TestCountSubtree_CorruptChainTerminates(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name  string
+		build func(t *testing.T, database *sql.DB) int64
+	}{
+		{
+			name: "two events pointing at each other",
+			build: func(t *testing.T, database *sql.DB) int64 {
+				a, _ := Add(ctx, database, AddInput{Title: "a"})
+				b, _ := Add(ctx, database, AddInput{Title: "b", ParentID: &a})
+				forgeParent(t, database, a, b)
+				return a
+			},
+		},
+		{
+			name: "self-parent",
+			build: func(t *testing.T, database *sql.DB) int64 {
+				a, _ := Add(ctx, database, AddInput{Title: "a"})
+				forgeParent(t, database, a, a)
+				return a
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			database := testDB(t)
+			root := tt.build(t, database)
+
+			_, err := CountSubtree(boundedCtx(t), database, root)
+			if !errors.Is(err, ErrCorruptTree) {
+				t.Errorf("err = %v, want ErrCorruptTree", err)
+			}
+		})
+	}
+}
+
+// TestCountSubtree_AncestorCycleIsNotTheRootsProblem is the other half: a cycle
+// sitting above the queried root leaves its subtree well-formed, and the count
+// must come back rather than refuse. GetSubtree draws the line in the same
+// place, and delete -r depends on it — the escape hatch out of a corrupt tree
+// must still be able to name what it is taking.
+func TestCountSubtree_AncestorCycleIsNotTheRootsProblem(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	a, _ := Add(ctx, database, AddInput{Title: "a"})
+	b, _ := Add(ctx, database, AddInput{Title: "b", ParentID: &a})
+	c, err := Add(ctx, database, AddInput{Title: "c", ParentID: &b})
+	if err != nil {
+		t.Fatalf("Add c: %v", err)
+	}
+	if _, err := Add(ctx, database, AddInput{Title: "d", ParentID: &c}); err != nil {
+		t.Fatalf("Add d: %v", err)
+	}
+	forgeParent(t, database, a, b) // a <-> b, entirely above c
+
+	got, err := CountSubtree(boundedCtx(t), database, c)
+	if err != nil {
+		t.Fatalf("CountSubtree: %v", err)
+	}
+	if got != 2 {
+		t.Errorf("CountSubtree = %d, want 2", got)
+	}
+}
+
+func TestCountSubtree_NotFound(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	_, err := CountSubtree(ctx, database, 9999)
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("err = %v, want ErrNotFound", err)
+	}
+}
+
 func TestFTSIsolation_MetaTokensNotMatchedByBareWords(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
@@ -1339,7 +1493,11 @@ func TestReparent_RejectsSelf(t *testing.T) {
 
 	err := Reparent(ctx, database, id, &id)
 	if !errors.Is(err, ErrCycle) {
-		t.Errorf("err = %v, want ErrCycle", err)
+		t.Fatalf("err = %v, want ErrCycle", err)
+	}
+	assertNoDoubledCycleText(t, err)
+	if want := fmt.Sprintf("attaching event %d to itself", id); !strings.Contains(err.Error(), want) {
+		t.Errorf("err = %q, want it to contain %q", err, want)
 	}
 }
 
@@ -1355,7 +1513,21 @@ func TestReparent_RejectsAncestryCycle(t *testing.T) {
 	// Attaching a (top) to c (descendant) would form a cycle.
 	err := Reparent(ctx, database, a, &c)
 	if !errors.Is(err, ErrCycle) {
-		t.Errorf("err = %v, want ErrCycle", err)
+		t.Fatalf("err = %v, want ErrCycle", err)
+	}
+	assertNoDoubledCycleText(t, err)
+	if want := fmt.Sprintf("attaching event %d to event %d", a, c); !strings.Contains(err.Error(), want) {
+		t.Errorf("err = %q, want it to contain %q", err, want)
+	}
+}
+
+// assertNoDoubledCycleText checks that the prefix does not restate what the
+// sentinel already says. Both messages used to read "... would form a cycle:
+// would create a parent cycle"; the prefix's job is the ids.
+func assertNoDoubledCycleText(t *testing.T, err error) {
+	t.Helper()
+	if n := strings.Count(err.Error(), "cycle"); n != 1 {
+		t.Errorf("err = %q says \"cycle\" %d times, want exactly 1", err, n)
 	}
 }
 
