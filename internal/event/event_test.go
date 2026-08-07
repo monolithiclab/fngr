@@ -1256,6 +1256,31 @@ func TestListSeq_PropagatesDBError(t *testing.T) {
 	}
 }
 
+// TestList_NegativeLimitRefused pins the store half of the guard. Only
+// `Limit > 0` emits a LIMIT clause, so a negative value used to widen the
+// result to the whole journal — the opposite of what a limit is for, and
+// silent. The CLI checks too, but a directly-built ListOpts skips that.
+func TestList_NegativeLimitRefused(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+	if _, err := Add(ctx, database, AddInput{Title: "x"}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	if _, err := List(ctx, database, ListOpts{Limit: -1}); err == nil {
+		t.Error("List accepted Limit: -1")
+	}
+
+	// ListSeq compiles the same query, so it has to refuse it too — lazily,
+	// on the first read.
+	for _, err := range ListSeq(ctx, database, ListOpts{Limit: -1}) {
+		if err == nil {
+			t.Error("ListSeq yielded an event for Limit: -1")
+		}
+		break
+	}
+}
+
 func TestList_LimitAndSort(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
@@ -1718,6 +1743,97 @@ func TestAddTags_NotFound(t *testing.T) {
 	_, err := AddTags(ctx, database, 9999, []parse.Meta{{Key: "tag", Value: "x"}})
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestUnstorableMetaRefusedAtTheWriter pins the half of the rule that cannot
+// be bypassed. parse.ValidateMeta guards CLI arguments, but parse.Meta is an
+// exported struct with exported fields, so a directly-built AddInput — a
+// library caller, a future importer, a test — reaches the INSERT with no
+// argument parser in the way. Every write path has to refuse the tuple, or
+// the rows nothing can search for are still creatable.
+func TestUnstorableMetaRefusedAtTheWriter(t *testing.T) {
+	t.Parallel()
+
+	bad := []struct {
+		name string
+		meta parse.Meta
+	}{
+		{"empty value", parse.Meta{Key: "k", Value: ""}},
+		{"whitespace key", parse.Meta{Key: "a b", Value: "c"}},
+		{"empty key", parse.Meta{Key: "", Value: "v"}},
+	}
+	for _, tt := range bad {
+		t.Run("Add/"+tt.name, func(t *testing.T) {
+			t.Parallel()
+			database := testDB(t)
+			if _, err := Add(ctx, database, AddInput{Title: "x", Meta: []parse.Meta{tt.meta}}); err == nil {
+				t.Fatalf("Add accepted %+v", tt.meta)
+			}
+		})
+		t.Run("AddMany/"+tt.name, func(t *testing.T) {
+			t.Parallel()
+			database := testDB(t)
+			in := []AddInput{{Title: "ok"}, {Title: "x", Meta: []parse.Meta{tt.meta}}}
+			if _, err := AddMany(ctx, database, in); err == nil {
+				t.Fatalf("AddMany accepted %+v", tt.meta)
+			}
+			// Atomic: the good record must not survive the bad one.
+			got, err := List(ctx, database, ListOpts{})
+			if err != nil {
+				t.Fatalf("List: %v", err)
+			}
+			if len(got) != 0 {
+				t.Errorf("AddMany left %d events behind, want 0", len(got))
+			}
+		})
+		t.Run("AddTags/"+tt.name, func(t *testing.T) {
+			t.Parallel()
+			database := testDB(t)
+			id, err := Add(ctx, database, AddInput{Title: "x"})
+			if err != nil {
+				t.Fatalf("Add: %v", err)
+			}
+			if _, err := AddTags(ctx, database, id, []parse.Meta{tt.meta}); err == nil {
+				t.Fatalf("AddTags accepted %+v", tt.meta)
+			}
+		})
+		t.Run("UpdateMeta/"+tt.name, func(t *testing.T) {
+			t.Parallel()
+			database := testDB(t)
+			if _, err := Add(ctx, database, AddInput{Title: "x", Meta: []parse.Meta{{Key: "tag", Value: "wip"}}}); err != nil {
+				t.Fatalf("Add: %v", err)
+			}
+			if _, err := UpdateMeta(ctx, database, "tag", "wip", tt.meta.Key, tt.meta.Value); err == nil {
+				t.Fatalf("UpdateMeta renamed onto %+v", tt.meta)
+			}
+		})
+	}
+}
+
+// TestRemoveTagsNamesWhatMintingRefuses is the other half: the verbs that name
+// an existing row stay permissive, or the tuples older builds wrote become the
+// tuples nothing can take out. The row is planted through the meta table
+// directly, since no current write path will produce it.
+func TestRemoveTagsNamesWhatMintingRefuses(t *testing.T) {
+	t.Parallel()
+	database := testDB(t)
+
+	id, err := Add(ctx, database, AddInput{Title: "x"})
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if _, err := database.ExecContext(ctx,
+		"INSERT INTO event_meta (event_id, key, value, source) VALUES (?, 'k', '', 'explicit')", id); err != nil {
+		t.Fatalf("plant legacy row: %v", err)
+	}
+
+	n, err := RemoveTags(ctx, database, id, []parse.Meta{{Key: "k", Value: ""}})
+	if err != nil {
+		t.Fatalf("RemoveTags: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("removed %d rows, want 1", n)
 	}
 }
 

@@ -1,9 +1,11 @@
 package parse
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
 )
 
 type Meta struct {
@@ -71,21 +73,95 @@ func BodyTags(text string) []Meta {
 	return result
 }
 
-// KeyValue splits s on the first '=' and returns the key and value.
-// It returns an error if s does not contain '='.
+// ErrEmptyKey is the one empty-key error, shared by the two functions that
+// can reach that state from different directions — KeyValue, where `=v` cuts
+// to nothing, and ValidateMeta, where a caller supplied it directly.
+var ErrEmptyKey = errors.New("empty key")
+
+// KeyValue splits s on the first '=' and returns the key and value. It
+// returns an error if s does not contain '=' or the key is empty.
+//
+// Structural only, deliberately: KeyValue is on the path that *names* a
+// tuple as well as the path that mints one, and `event untag 'k='` has to
+// keep working on a row an older build stored. Storability is ValidateMeta's
+// job, applied by the minting callers.
 func KeyValue(s string) (key, value string, err error) {
 	key, value, ok := strings.Cut(s, "=")
 	if !ok {
-		return "", "", fmt.Errorf("invalid key=value pair %q", s)
+		// Unquoted: every caller wraps this with %q of the same string, and
+		// the pair used to be named twice in one sentence.
+		return "", "", errors.New("missing '='")
+	}
+	if key == "" {
+		return "", "", ErrEmptyKey
 	}
 	return key, value, nil
 }
 
-// MetaNameRe matches a single @person / #tag name or a `key=value` key
-// in isolation (no surrounding chars). Anchored form of the same character
-// class used by the body-tag patterns; exported so callers outside parse
-// (e.g. `cmd/fngr/meta.go::parseMetaFilter`) can validate bare-key input
-// without re-defining the rule.
+// ValidateMeta rejects a key/value pair fngr can store but not find again.
+// Every path that *mints* one goes through it — `--meta`, `event tag`,
+// `meta rename`'s new value, the `--format=json` `meta` array — because a
+// tuple only one of them refuses is a tuple the others can still create. This
+// comment is the canonical statement of the rule; the other sites point here.
+//
+// Only the minting paths. A verb that names an existing row — `event untag`,
+// `meta delete`, `meta rename`'s old value — must stay able to say what an
+// older build wrote, or the rows this rule exists to stop being created
+// become the rows nothing can remove.
+//
+// A key must be exactly one -S term: not empty, no rune that ends a term, and
+// not opening with the one that negates it. `-m 'a b=c d'` stored a row
+// `-S 'a b=c d'` read as three terms and matched nothing, `-m 'a&b=c'` one it
+// read as two, and `-m '!k=v'` one `-S '!k=v'` answered with every event
+// *except* the tagged one — the silent complement of what was typed. Hence
+// IsFilterDelim rather than a hand-listed set: the tokenizer is the authority
+// on what it cannot read back, and a second copy of that list had already
+// missed `&` and `|`.
+//
+// Nothing narrower: `-m ticket.id=PROJ-42` is a key MetaNameRe would refuse
+// and is perfectly findable, so the rule is one *term*, not one *name*.
+//
+// A value may not be empty. `-m 'k='` used to render as `k=  (1)` — an entry
+// that says nothing, which no verb but `event untag 'k='` could then name.
+// Whitespace inside a value is allowed: `author=Ada Lovelace` is what people
+// mean to write, `fngr meta -S` matches it exactly, and `-S author=Ada`
+// finds it — a term ends at the space, but `key=firstword` is enough to reach
+// the row, which is not true of a *key* split down the middle.
+func ValidateMeta(key, value string) error {
+	switch {
+	case key == "":
+		return ErrEmptyKey
+	case strings.ContainsFunc(key, IsFilterDelim):
+		return fmt.Errorf("key %q contains a space, '&' or '|', which -S reads as a term separator", key)
+	case strings.HasPrefix(key, "!"):
+		return fmt.Errorf("key %q opens with '!', which -S reads as negation", key)
+	case value == "":
+		return fmt.Errorf("empty value for key %q", key)
+	}
+	return nil
+}
+
+// IsFilterDelim reports whether r ends a term in an -S filter expression.
+// The tokenizer in internal/event/filter.go is its structural user; it lives
+// here because ValidateMeta has to refuse exactly what that tokenizer cannot
+// read back, and internal/event imports parse rather than the reverse.
+//
+// '!' is absent on purpose: a term already under way absorbs it, so it ends
+// nothing. Only a *leading* '!' negates, which ValidateMeta tests
+// separately.
+func IsFilterDelim(r rune) bool {
+	return unicode.IsSpace(r) || r == '&' || r == '|'
+}
+
+// MetaNameRe matches a single @person / #tag name in isolation (no
+// surrounding chars). Anchored form of the same character class used by the
+// body-tag patterns, so a name typed on the command line is one the same text
+// in a body would have yielded.
+//
+// It is deliberately *not* the rule for a `key=value` key — that is
+// ValidateMeta, which is looser. A sigil name has to be a clean token
+// because the body patterns have to find it unaided in running prose; a key
+// the user spells out in full does not.
 var MetaNameRe = regexp.MustCompile(`^` + metaNamePattern + `$`)
 
 // MetaArg parses a single CLI argument into a Meta entry. Supported forms:
@@ -119,10 +195,7 @@ func MetaArg(s string) (Meta, error) {
 	}
 	key, value, err := KeyValue(s)
 	if err != nil {
-		return Meta{}, fmt.Errorf("parse meta arg %q: %w", s, err)
-	}
-	if key == "" {
-		return Meta{}, fmt.Errorf("expected @person, #tag, or key=value, got %q (empty key)", s)
+		return Meta{}, fmt.Errorf("invalid meta arg %q: %w", s, err)
 	}
 	return Meta{Key: key, Value: value}, nil
 }
@@ -136,10 +209,12 @@ func FlagMeta(flags []string) ([]Meta, error) {
 	for _, f := range flags {
 		key, value, err := KeyValue(f)
 		if err != nil {
-			return nil, fmt.Errorf("invalid --meta flag: %w", err)
+			return nil, fmt.Errorf("invalid --meta flag %q: %w", f, err)
 		}
-		if key == "" {
-			return nil, fmt.Errorf("invalid --meta flag %q: empty key", f)
+		// --meta only ever mints, never names an existing row, so the
+		// storability rule applies here and not in KeyValue itself.
+		if err := ValidateMeta(key, value); err != nil {
+			return nil, fmt.Errorf("invalid --meta flag %q: %w", f, err)
 		}
 		result = append(result, Meta{Key: key, Value: value})
 	}

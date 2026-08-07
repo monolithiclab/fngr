@@ -158,6 +158,9 @@ func addInTx(ctx context.Context, tx *sql.Tx, inputs []AddInput) ([]int64, error
 		if err := requireOneAuthor(in.Meta); err != nil {
 			return nil, err
 		}
+		if err := requireStorableMeta(in.Meta); err != nil {
+			return nil, err
+		}
 
 		var res sql.Result
 		if in.CreatedAt != nil {
@@ -499,6 +502,11 @@ func AddTags(ctx context.Context, db *sql.DB, id int64, tags []parse.Meta) (int6
 	if err := requireUnprotectedTags("add", tags); err != nil {
 		return 0, err
 	}
+	// AddTags mints; RemoveTags below deliberately does not check, so a row an
+	// older build wrote can still be named and taken out.
+	if err := requireStorableMeta(tags); err != nil {
+		return 0, err
+	}
 
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
@@ -737,13 +745,19 @@ func requireUnprotectedTags(verb string, tags []parse.Meta) error {
 // leaving every event with the single row it already had, so a mistyped
 // `--author` stays correctable: refusing it too made the one field no verb can
 // touch also the one field no verb can fix, and the workaround was re-adding
-// the event under a new id. An empty new value is still refused, since that
-// blank is exactly the unrepairable state.
+// the event under a new id. An empty new value is still refused — for every
+// key, not just a protected one, since that blank is exactly the unrepairable
+// state — via parse.ValidateMeta, which is also what keeps a rename from
+// minting the whitespace key `-m` refuses.
 func requireRenamableMeta(oldKey, newKey, newValue string) error {
+	// The new tuple is minted, so it has to be one a search can reach —
+	// including the empty value the protected-key branch below used to be the
+	// only guard against. The *old* one is deliberately unchecked: a rename is
+	// how an unfindable row an older build wrote gets repaired.
+	if err := parse.ValidateMeta(newKey, newValue); err != nil {
+		return err
+	}
 	if oldKey == newKey {
-		if protectedMetaKeys[newKey] && newValue == "" {
-			return fmt.Errorf("cannot rename meta key %q to an empty value: it is single-valued and every event must carry one", newKey)
-		}
 		return nil
 	}
 	if err := requireUnprotectedMeta("rename", oldKey); err != nil {
@@ -1035,7 +1049,29 @@ func List(ctx context.Context, db *sql.DB, opts ListOpts) ([]Event, error) {
 	return out, nil
 }
 
+// ValidateLimit reports whether n is a usable ListOpts.Limit. Zero means no
+// limit; a negative value is refused rather than clamped, because clamping is
+// the silent behaviour this exists to remove.
+//
+// Unlike From/To, a bad Limit does not merely match nothing or everything *as
+// asked*: only the LIMIT clause reads it, and that clause is emitted on
+// `Limit > 0`, so a negative value silently **widens** the result to the whole
+// journal. Exported next to ValidateFilter and for the same reason — the CLI
+// must refuse before withPager spawns $PAGER and before the streaming
+// renderer writes its opening bytes, and one rule read from two altitudes has
+// to be one function or the two wordings drift.
+func ValidateLimit(n int) error {
+	if n < 0 {
+		return fmt.Errorf("limit cannot be negative, got %d (0 means no limit)", n)
+	}
+	return nil
+}
+
 func buildListQuery(opts ListOpts) (string, []any, error) {
+	if err := ValidateLimit(opts.Limit); err != nil {
+		return "", nil, err
+	}
+
 	query := `SELECT e.id, e.parent_id, e.title, e.body, e.created_at
 		FROM events e
 		WHERE 1=1`

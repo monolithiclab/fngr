@@ -103,6 +103,18 @@ func TestJSONInputToAddInput(t *testing.T) {
 			wantErr: "meta[0]: empty key",
 		},
 		{
+			name:    "empty-meta-value",
+			in:      jsonAddInput{Title: "x", Meta: [][2]string{{"k", ""}}},
+			author:  "alice",
+			wantErr: `meta[0]: empty value for key "k"`,
+		},
+		{
+			name:    "whitespace-in-meta-key",
+			in:      jsonAddInput{Title: "x", Meta: [][2]string{{"a b", "c"}}},
+			author:  "alice",
+			wantErr: "meta[0]: key \"a b\" contains a space",
+		},
+		{
 			name:    "bad-created-at",
 			in:      jsonAddInput{Title: "x", CreatedAt: mkPtr("not-a-time")},
 			author:  "alice",

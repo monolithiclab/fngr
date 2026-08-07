@@ -2032,9 +2032,23 @@ Grouped; each is small and independently actionable.
   a Kong implementation detail leaking into the scripting interface.
 - Kong parse errors dump the entire command list before the message — on
   `fngr -n -1` the actual error is 25 lines below the fold.
-- `fngr -n -1` errors and *suggests* `--limit="-1"`; taking the suggestion
+- ~~`fngr -n -1` errors and *suggests* `--limit="-1"`; taking the suggestion
   silently means "no limit" at exit 0. The error's own remedy leads to an
-  unvalidated path.
+  unvalidated path.~~ **Fixed.** `toListOpts` refuses a negative limit up
+  front: `--limit: limit cannot be negative, got -1 (0 means no limit)`. Zero
+  still means no limit, so the boundary the store tests (`Limit > 0`) is
+  unchanged — what moved is that the one value Kong's own error hands the user
+  no longer lands somewhere quieter than where it started. `buildListQuery`
+  refuses it too, being the half a directly-built `ListOpts` cannot skip; the
+  CLI keeps its own check because it must refuse before `withPager` spawns
+  `$PAGER` and before the streaming renderer writes its opening bytes. One
+  rule read from two altitudes is one exported function, `event.ValidateLimit`,
+  next to `event.ValidateFilter` and for the same reason — two wordings of the
+  same rule drift. Refused rather than clamped:
+  clamping is the silent behaviour the bullet is about. Unlike `From`/`To`,
+  which stay un-range-checked on purpose — a bad bound matches nothing or
+  everything *as asked*, whereas a negative `Limit` silently **widens** the
+  result to the whole journal.
 - Errors leak Go internals: `{"title":"t","meta":{"a":"b"}}` →
   `cannot unmarshal object into Go struct field jsonAddInput.meta of type
   [][2]string`, exposing a private type name. JSON `created_at` errors leak the
@@ -2122,10 +2136,62 @@ Grouped; each is small and independently actionable.
   displaced whatever parent was there, so it now reads first too and reports
   `Attached event 3 to event 4 (was event 2)`, naming nothing when there was
   nothing to displace.*
-- `--meta 'k='` is accepted, creating an empty-valued entry rendered as
+- ~~`--meta 'k='` is accepted, creating an empty-valued entry rendered as
   `k=  (1)`. `parse.FlagMeta` rejects an empty key but accepts an empty value
   and whitespace *inside* a key (`-m 'a b=c d'` stores a key that indexes as
-  two FTS tokens and can't be searched back as written).
+  two FTS tokens and can't be searched back as written).~~ **Fixed.** Both
+  rules are stated once, in `parse.ValidateMeta`, and applied only where a
+  tuple is *minted*: `parse.FlagMeta` (`--meta`), `internal/event`'s
+  `requireStorableMeta` (called by `addInTx` and `AddTags`),
+  `requireRenamableMeta`'s new value, and `cmd/fngr/add_json.go` per `meta`
+  pair — replacing three separate copies of the empty-key check, one of them
+  the entry point that takes 10 000 tuples at a time. The shared empty-key
+  error is `parse.ErrEmptyKey`, since `KeyValue` and `ValidateMeta` reach that
+  state from different directions and used to spell it twice.
+
+  *Two altitudes on purpose. The parse-layer calls are pre-flights, for the
+  message: `--meta` can name the flag and the JSON import can name the record
+  and pair index, which the writer cannot. The guarantee itself lives at the
+  writer, for the reason `requireOneAuthor` does — `parse.Meta` is an
+  exported struct with exported fields, so a directly-built `AddInput`
+  bypasses every argument parser. Safe to enforce there because
+  `parse.BodyTags` is bounded by `metaNamePattern`, so no body-derived tuple
+  and no migration back-fill can carry an empty value or a key that is not a
+  single term.*
+
+  *And only the minting paths. `KeyValue` and `MetaArg` stay permissive
+  splitters, because the same functions serve the verbs that **name** an
+  existing row — `event untag 'k='`, `meta delete 'k='`, `meta rename 'k='
+  'k=v'`, the last two of which CLAUDE.md already documents as the only way
+  to reach such a row. Gating those on the mint rule made exactly the rows
+  this change stops creating into rows nothing could remove: every released
+  build wrote them. `RemoveTags` is likewise unchecked at the writer.*
+
+  *The key rule is "exactly one `-S` term", and it is `parse.IsFilterDelim` —
+  the very predicate the tokenizer in `internal/event/filter.go` uses — that
+  says which runes end one, rather than a list restated on the write side. The
+  first draft of this fix restated it, and was wrong within the hour: it banned
+  whitespace only, while `&` and `|` split a term just as hard (`-m 'a&b=c'`)
+  and a leading `!` does something worse than fail — `-S '!k=v'` answers with
+  every event **except** the tagged one. The predicate lives in `parse` because
+  `internal/event` imports `parse` and not the reverse.*
+
+  The rule is one *term*, deliberately not `MetaNameRe`:
+  `-m ticket.id=PROJ-42` is a key that regex would refuse and `-S` finds
+  perfectly, and narrowing it would route a storable key to a filter column
+  that cannot answer for it. That was not hypothetical —
+  `cmd/fngr/meta.go::parseMetaFilter` did test `MetaNameRe` for its bare-key
+  form, so `fngr meta -S ticket.id` was refused by the one command that lists
+  metadata. That form is now unvalidated outright: it reaches `ListMeta`'s
+  plain `WHERE key = ?`, where the `-S` *expression* tokenizer is nowhere on
+  the path, so nothing a key can contain makes it unmatchable there — and
+  `fngr meta -S 'a b'` listing a legacy row is how an operator learns the row
+  is there at all. Applying the mint rule to it (the first draft did) hid
+  exactly the rows the change cannot create, behind a message untrue of that
+  path. Whitespace and operators inside a *value* stay legal —
+  `author=Ada Lovelace` is what people mean to write and `-S author=Ada`
+  reaches the row, a term ending at the space being no obstacle when the key
+  survives whole.
 - `$PAGER` is tokenized with `strings.Fields` (`cmd/fngr/pager.go:71`) but
   `$EDITOR` is not (`cmd/fngr/body.go:126`), so `PAGER="less -R"` works while
   `EDITOR="code -w"` fails with `fork/exec …/code -w: no such file or

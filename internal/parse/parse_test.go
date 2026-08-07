@@ -1,6 +1,7 @@
 package parse
 
 import (
+	"strconv"
 	"testing"
 )
 
@@ -196,7 +197,11 @@ func TestKeyValue(t *testing.T) {
 	}{
 		{name: "ok", input: "env=prod", wantKey: "env", wantValue: "prod"},
 		{name: "value contains =", input: "note=a=b", wantKey: "note", wantValue: "a=b"},
-		{name: "empty value", input: "tag=", wantKey: "tag", wantValue: ""},
+		{name: "key MetaNameRe would refuse", input: "ticket.id=PROJ-42", wantKey: "ticket.id", wantValue: "PROJ-42"},
+		// Storability is not KeyValue's job — untag and meta delete split the
+		// same way to name a row an older build wrote. See TestValidateMeta.
+		{name: "empty value splits", input: "tag=", wantKey: "tag", wantValue: ""},
+		{name: "whitespace key splits", input: "a b=c", wantKey: "a b", wantValue: "c"},
 		{name: "missing =", input: "noeq", wantErr: true},
 		{name: "empty input", input: "", wantErr: true},
 	}
@@ -215,6 +220,81 @@ func TestKeyValue(t *testing.T) {
 			}
 			if k != tt.wantKey || v != tt.wantValue {
 				t.Errorf("KeyValue(%q) = (%q, %q), want (%q, %q)", tt.input, k, v, tt.wantKey, tt.wantValue)
+			}
+		})
+	}
+}
+
+// TestIsFilterDelim pins the shared predicate directly rather than through
+// ValidateMeta, since its other caller is the -S tokenizer in another package
+// and the whole point of the function is that the two agree. '!' is the row
+// that matters: it is not a delimiter — a term under way absorbs it — even
+// though a leading one negates.
+func TestIsFilterDelim(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		r    rune
+		want bool
+	}{
+		{' ', true}, {'\t', true}, {'\n', true}, {' ', true},
+		{'&', true}, {'|', true},
+		{'!', false}, {'a', false}, {'=', false}, {'.', false}, {'é', false},
+	} {
+		t.Run(strconv.QuoteRune(tt.r), func(t *testing.T) {
+			t.Parallel()
+			if got := IsFilterDelim(tt.r); got != tt.want {
+				t.Errorf("IsFilterDelim(%q) = %v, want %v", tt.r, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestValidateMeta pins the rule directly, since it is what every entry point
+// that mints a tuple now shares. The accepted rows matter as much as the
+// rejected ones: the rule is "exactly one -S term", deliberately looser than
+// MetaNameRe, and narrowing it would route a key --meta happily stores to a
+// filter column that cannot answer for it.
+//
+// The rejected keys are the three ways a term ends or flips: whitespace, the
+// two boolean operators, and a leading '!' — which does not merely fail to
+// match but answers with the complement of what was typed.
+func TestValidateMeta(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		key     string
+		value   string
+		wantErr bool
+	}{
+		{name: "plain", key: "env", value: "prod"},
+		{name: "dotted key", key: "ticket.id", value: "PROJ-42"},
+		{name: "value with spaces", key: "author", value: "Ada Lovelace"},
+		{name: "unicode key", key: "réf", value: "x"},
+		// '!' ends no term once one is under way, so it is legal anywhere but
+		// the front — and the value is never tokenized at all.
+		{name: "bang inside key", key: "a!b", value: "c"},
+		{name: "operators in value", key: "k", value: "a&b|c"},
+		{name: "bang leading value", key: "k", value: "!v"},
+
+		{name: "empty key", key: "", value: "v", wantErr: true},
+		{name: "empty value", key: "k", value: "", wantErr: true},
+		{name: "both empty", key: "", value: "", wantErr: true},
+		{name: "space in key", key: "a b", value: "c", wantErr: true},
+		{name: "tab in key", key: "a\tb", value: "c", wantErr: true},
+		{name: "newline in key", key: "a\nb", value: "c", wantErr: true},
+		{name: "ampersand in key", key: "a&b", value: "c", wantErr: true},
+		{name: "pipe in key", key: "a|b", value: "c", wantErr: true},
+		{name: "bang leading key", key: "!k", value: "v", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidateMeta(tt.key, tt.value)
+			if tt.wantErr && err == nil {
+				t.Fatalf("ValidateMeta(%q, %q) expected error", tt.key, tt.value)
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("ValidateMeta(%q, %q) unexpected error: %v", tt.key, tt.value, err)
 			}
 		})
 	}
@@ -257,9 +337,14 @@ func TestFlagMeta(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:  "empty value allowed",
-			flags: []string{"key="},
-			want:  []Meta{{Key: "key", Value: ""}},
+			name:    "empty value rejected",
+			flags:   []string{"key="},
+			wantErr: true,
+		},
+		{
+			name:    "whitespace in key rejected",
+			flags:   []string{"a b=c d"},
+			wantErr: true,
 		},
 		{
 			name:  "empty flags",
@@ -356,7 +441,7 @@ func TestMetaArg(t *testing.T) {
 		{name: "key=value", input: "env=prod", wantKey: "env", wantVal: "prod"},
 		{name: "value with =", input: "note=a=b", wantKey: "note", wantVal: "a=b"},
 		{name: "hierarchical tag", input: "#work/project-x", wantKey: "tag", wantVal: "work/project-x"},
-		{name: "empty value", input: "k=", wantKey: "k", wantVal: ""},
+		{name: "value with spaces", input: "author=Ada Lovelace", wantKey: "author", wantVal: "Ada Lovelace"},
 		{name: "unicode person", input: "@josé", wantKey: "people", wantVal: "josé"},
 		{name: "unicode tag", input: "#déploiement", wantKey: "tag", wantVal: "déploiement"},
 		{name: "cjk person", input: "@田中", wantKey: "people", wantVal: "田中"},
@@ -366,6 +451,10 @@ func TestMetaArg(t *testing.T) {
 		{name: "lone #", input: "#", wantErr: true},
 		{name: "@ with space", input: "@ Sarah", wantErr: true},
 		{name: "missing key", input: "=value", wantErr: true},
+		// Accepted so `event untag 'k='` / `meta delete 'k='` can still name
+		// a row an older build stored. Minting is gated at the writer.
+		{name: "empty value names an existing row", input: "k=", wantKey: "k", wantVal: ""},
+		{name: "whitespace key names an existing row", input: "a b=c", wantKey: "a b", wantVal: "c"},
 		{name: "empty input", input: "", wantErr: true},
 	}
 	for _, tt := range tests {

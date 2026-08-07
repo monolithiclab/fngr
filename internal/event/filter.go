@@ -77,6 +77,12 @@ type token struct {
 // tokenizeFilter splits expr into terms and operators. `&` and `|` always
 // separate; `!` only starts an operator, so `!daily` negates but `wow!`
 // searches for itself.
+//
+// Where a term *ends* is parse.IsFilterDelim's answer rather than a local
+// one, because parse.ValidateMeta has to refuse exactly the keys this
+// tokenizer cannot read back — and a second copy of the rule had already
+// drifted, banning only whitespace on the write side while `&` and `|` split
+// a term just as hard.
 func tokenizeFilter(expr string) []token {
 	runes := []rune(expr)
 	var toks []token
@@ -95,19 +101,13 @@ func tokenizeFilter(expr string) []token {
 			i++
 		default:
 			start := i
-			for i < len(runes) && !isFilterDelim(runes[i]) {
+			for i < len(runes) && !parse.IsFilterDelim(runes[i]) {
 				i++
 			}
 			toks = append(toks, token{tokTerm, string(runes[start:i]), start + 1})
 		}
 	}
 	return toks
-}
-
-// isFilterDelim reports whether r ends a term. '!' is absent on purpose: a
-// term already under way absorbs it.
-func isFilterDelim(r rune) bool {
-	return unicode.IsSpace(r) || r == '&' || r == '|'
 }
 
 type filterParser struct {
