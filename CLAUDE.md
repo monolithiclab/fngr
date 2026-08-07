@@ -51,7 +51,14 @@ make ci             # codefix + format + lint + test
   back in). `ListOpts.To` is exclusive, so `--to` is turned into the first instant *past* what
   was named — next second for a clock, next midnight for a bare date — which is what makes it
   read as inclusive at both granularities; `--from >= --to` warns on stderr rather than
-  returning nothing at exit 0. With
+  returning nothing at exit 0. A negative `--limit` is refused there too, via
+  `event.ValidateLimit` — the same two-altitude seam as `event.ValidateFilter`, checked in
+  `toListOpts` before `withPager` spawns anything and enforced in `buildListQuery`, one function
+  so the two wordings cannot drift. It is refused rather than clamped because clamping is the
+  silent behaviour it exists to remove: `fngr -n -1` is a malformed short flag to Kong, whose
+  error suggests `--limit="-1"`, and only the `LIMIT` clause reads the value and only on
+  `Limit > 0` — so following that suggestion *widened* the result to the whole journal at exit
+  0, where a bad `--from`/`--to` can only ever match nothing or everything as asked. With
   `--format=json` the body is parsed as a
   JSON event record (or array) by `cmd/fngr/add_json.go`; per-record defaults flow JSON value
   > CLI flag > built-in. `event` hosts a sub-command tree: `fngr event N`
@@ -257,7 +264,39 @@ make ci             # codefix + format + lint + test
 - `internal/parse/parse.go` — `Meta` type, `BodyTags` for body-tag extraction (`@person` → people,
   `#tag` → tag), `KeyValue` helper for `key=value` strings, `FlagMeta` for `--meta` flag arrays
   (delegates to `KeyValue`), `MetaArg` for individual CLI tag args (`@person`, `#tag`, or
-  `key=value`; used by `event tag` / `event untag`), `FTSColumns` for the two `events_fts` column
+  `key=value`; used by `event tag` / `event untag`), `ValidateMeta` — the one rule for a tuple
+  fngr can store *and* find again, stated once in its doc comment and pointed at from every
+  other site. A key must be exactly one `-S` term: not empty, no rune that ends one, and not
+  opening with the one that negates. `-m 'a b=c d'` stored a row `-S 'a b=c d'` reads as three
+  terms, `-m 'a&b=c'` one it reads as two, and `-m '!k=v'` one `-S '!k=v'` answers with every
+  event *except* the tagged one — the silent complement of what was typed. Which runes those
+  are is `IsFilterDelim`'s answer, not a hand-listed set: it is the same predicate
+  `internal/event/filter.go`'s tokenizer uses, and lives in `parse` because `internal/event`
+  imports `parse` rather than the reverse. A second copy of the list had already drifted,
+  banning only whitespace while `&` and `|` split a term just as hard. The rule is one *term*,
+  not `MetaNameRe` — `-m ticket.id=PROJ-42` is a key that regex refuses and `-S` finds
+  perfectly, and testing anything narrower routes a storable key to a filter column that cannot
+  answer for it (the same reasoning `internal/event/filter.go::ftsTerm` records). A value may
+  not be empty (`-m 'k='` rendered as `k=  (1)`, an entry no verb but `event untag 'k='` could
+  name) but *may* contain whitespace and any operator, because `author=Ada Lovelace` is what
+  people mean to write and `-S author=Ada` still reaches the row — a term ends at the space, but
+  `key=firstword` is enough, which is not true of a *key* split down the middle.
+
+  Applied only where a tuple is **minted** — `FlagMeta`, each `meta` pair in
+  `cmd/fngr/add_json.go`, and the writer (`internal/event.requireStorableMeta`,
+  `requireRenamableMeta`'s new value). `KeyValue` and `MetaArg` are structural splitters and
+  stay permissive, because the same functions serve the verbs that **name** an existing row:
+  `event untag 'k='`, `meta delete 'k='`, `meta rename 'k=' 'k=v'`. Every released build could
+  write such a row, so gating those too would make exactly the rows the rule exists to prevent
+  into rows nothing can remove. Don't route the rule through `KeyValue`. `parseMetaFilter`'s
+  bare-key form is on the naming side too even though it reads like a filter: it reaches
+  `ListMeta`'s plain `WHERE key = ?`, where the `-S` *expression* tokenizer is nowhere on the
+  path — so nothing a key can contain makes it unmatchable there, and a query path is what finds
+  the rows the mint rule refuses to create. It used to test `MetaNameRe`, refusing
+  `fngr meta -S ticket.id` from the one command that lists metadata. The CLI-side calls are
+  pre-flights, for the message — `--meta` can name the flag, the JSON import the record and pair
+  index; the guarantee is the writer's, for the reason `requireOneAuthor` is (an exported
+  `parse.Meta` means a directly-built `AddInput` skips every parser). Also `FTSColumns` for the two `events_fts` column
   values (both stated in one function so a caller cannot write one and forget the other; the
   pre-migration-6 single-column join is *not* here — it is frozen as `db.legacyFTSContent`
   beside the migration that still writes it),
@@ -266,7 +305,9 @@ make ci             # codefix + format + lint + test
   decide provenance from it, so a join that differs by a space would have them disagree about a
   tag at the boundary.
   Tag and meta-name regexes share the private `metaNamePattern` constant; the anchored form is
-  exported as `MetaNameRe` for reuse by `cmd/fngr/meta.go::parseMetaFilter`. That pattern is
+  exported as `MetaNameRe`, which matches a `@person` / `#tag` name in isolation and is
+  deliberately *not* the `key=value` key rule — a sigil name has to be a clean token because the
+  body patterns must find it unaided in running prose, a key spelled out in full does not. That pattern is
   Unicode-class based (`\p{L}\p{N}_/-`), not `\w` — Go's `\w` is ASCII-only, so it truncated
   `@josé` to `people=jos` and collided with `@josa`. The body-tag patterns additionally require
   `metaNameBoundary` (start of text or a non-name rune) before the sigil, so `bob@example.com`
@@ -323,7 +364,13 @@ make ci             # codefix + format + lint + test
   single-valued because `AuthorOf` — the one lookup, used by `render` and the JSON import —
   returns the first match in `ORDER BY key, value`, so a second row means the displayed author
   is alphabetical rather than true. `requireOneAuthor` restates that at the writer, so an
-  `AddInput` built directly cannot create the state no meta verb is allowed to repair. Also
+  `AddInput` built directly cannot create the state no meta verb is allowed to repair.
+  `requireStorableMeta` is the same argument for `parse.ValidateMeta`: the CLI checks are
+  pre-flights that can name a flag or a record index, this is the one nothing bypasses. Safe
+  against the paths that never see an argument parser because `parse.BodyTags` is bounded by
+  `metaNamePattern`, so neither a body-derived tuple nor a migration back-fill can carry an
+  empty value or a whitespace key. Called by the minting writers only (`addInTx`, `AddTags`);
+  `RemoveTags` is deliberately unchecked, so a row an older build wrote stays removable. Also
   `metaSet` and `subtractMeta`, the tuple-set helpers `addInTx` and `Update` use.
 - `internal/event/event.go` — Data access functions: `Add` (transactional event + meta + FTS),
   `AddMany` (batched same shape, atomic), `AddInput` value type. Both `Add` and `AddMany`
@@ -358,7 +405,12 @@ make ci             # codefix + format + lint + test
   only that promotion rewrites a row, and the added count comes from a pre-read because
   `RowsAffected` cannot tell the promotion from an insert) / `RemoveTags` (event-scoped meta CRUD with FTS
   resync; both refuse `protectedMetaKeys`), `Delete`, `HasChildren`, `List` / `ListSeq` (FTS5 filter + date range + `Limit` +
-  `Ascending`, both built by the shared `buildListQuery`. A `Limit` always keeps the newest N and
+  `Ascending`, both built by the shared `buildListQuery`, which refuses a negative `Limit` —
+  unlike `From`/`To`, deliberately un-range-checked because a bad bound matches nothing or
+  everything *as asked*, whereas only the `LIMIT` clause reads `Limit` and it is emitted on
+  `Limit > 0`, so a negative value silently *widens* to the whole journal. Refused rather than
+  clamped, and restated here rather than left to `toListOpts` because a directly-built
+  `ListOpts` skips the CLI. A `Limit` always keeps the newest N and
   `Ascending` decides display order only, so the limited query sorts `DESC` and the ascending case
   wraps it — `SELECT * FROM (… ORDER BY e.created_at DESC LIMIT ?) ORDER BY created_at ASC`. One
   statement would apply `ORDER BY` before `LIMIT` and let the sort direction pick *which* rows
@@ -390,7 +442,10 @@ make ci             # codefix + format + lint + test
   `k=v` strips the author off every event, `k=v` → `author=evil` mints a second one), but a
   same-key value rewrite leaves every event with the single row it had, so a mistyped
   `--author` stays correctable — protecting it against that too made `author` the one field
-  nothing could repair. An empty new value is still refused.
+  nothing could repair. The *new* tuple goes through `parse.ValidateMeta` — for every key, not
+  just a protected one, since a blank value is exactly the unrepairable state — which is also
+  what keeps a rename from minting the whitespace key `-m` refuses. The *old* one is unchecked
+  on purpose: a rename is how a row an older build wrote gets repaired.
   All functions accept
   `context.Context`. `ErrNotFound`, `ErrCycle`, `ErrTimeRange` and `ErrCorruptTree` sentinels —
   the last one distinct from `ErrCycle` on purpose: `ErrCycle` refuses a requested change,

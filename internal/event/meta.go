@@ -126,6 +126,30 @@ func requireOneAuthor(meta []parse.Meta) error {
 	return nil
 }
 
+// requireStorableMeta applies parse.ValidateMeta — which states the rule and
+// the reasoning — to every tuple about to be written. It is at the writer for
+// the reason requireOneAuthor is: parse.Meta is an exported struct with
+// exported fields, so a directly-built AddInput bypasses every argument
+// parser, and an empty-valued row is unrepairable once written, since the
+// verbs that would name it have to spell out the value they are removing.
+//
+// The CLI checks anyway, but as a pre-flight rather than a second guarantee:
+// `--meta` can name the flag and the JSON import the record and pair index,
+// neither of which reaches here.
+//
+// Safe against the paths that see no argument parser at all: parse.BodyTags
+// is bounded by metaNamePattern, so neither a body-derived tuple nor a
+// migration back-fill re-deriving one can carry an empty value or a key that
+// is not a single term.
+func requireStorableMeta(meta []parse.Meta) error {
+	for _, m := range meta {
+		if err := parse.ValidateMeta(m.Key, m.Value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // CollectMeta is MergeMeta over `--meta key=value` flag strings. Errors out
 // if any flag fails to parse as `key=value`.
 func CollectMeta(text string, flags []string, author string) ([]parse.Meta, error) {

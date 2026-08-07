@@ -738,6 +738,152 @@ func TestKongDispatch_OutOfRangeTimeFlagErrors(t *testing.T) {
 	}
 }
 
+// TestKongDispatch_NegativeLimitErrors follows the suggestion Kong's own error
+// makes. `fngr -n -1` is refused as a malformed short flag with `perhaps try
+// --limit="-1"?`, and taking that advice used to list the whole journal at
+// exit 0, since the store only tests `Limit > 0`.
+func TestKongDispatch_NegativeLimitErrors(t *testing.T) {
+	t.Parallel()
+	run := newDispatcher(t)
+
+	if _, err := run([]string{"add", "one"}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+
+	out, err := run([]string{"list", `--limit=-1`})
+	if err == nil {
+		t.Fatalf("--limit=-1 succeeded, want an error; output:\n%s", out)
+	}
+	if !strings.Contains(err.Error(), "--limit: limit cannot be negative") {
+		t.Errorf("error = %v, want it to name the flag and the rule", err)
+	}
+
+	// Zero still means no limit, so the guard did not move the boundary.
+	out, err = run([]string{"list", "--limit=0", "--format", "flat"})
+	if err != nil {
+		t.Fatalf("--limit=0: %v", err)
+	}
+	if !strings.Contains(out, "one") {
+		t.Errorf("--limit=0 listed nothing, want the event; got:\n%s", out)
+	}
+}
+
+// TestKongDispatch_UnstorableMetaRefusedEverywhere walks every entry point
+// that mints a tuple, because a rule only one of them enforces is a rule the
+// others route around. The shapes are the ones fngr can write but never search
+// back: an empty value, and a key that is not exactly one -S term — whitespace
+// or `&`/`|` split it into several, and a leading `!` turns the search for it
+// into its complement, which is worse than no match at all.
+func TestKongDispatch_UnstorableMetaRefusedEverywhere(t *testing.T) {
+	t.Parallel()
+	run := newDispatcher(t)
+
+	if _, err := run([]string{"add", "seed", "-m", "tag=wip"}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	for _, tt := range []struct {
+		name string
+		args []string
+	}{
+		{"add --meta empty value", []string{"add", "x", "-m", "k="}},
+		{"add --meta whitespace key", []string{"add", "x", "-m", "a b=c"}},
+		{"add --meta and key", []string{"add", "x", "-m", "a&b=c"}},
+		{"add --meta or key", []string{"add", "x", "-m", "a|b=c"}},
+		{"add --meta negated key", []string{"add", "x", "-m", "!k=v"}},
+		{"event tag empty value", []string{"event", "tag", "1", "k="}},
+		{"event tag whitespace key", []string{"event", "tag", "1", "a b=c"}},
+		{"event tag and key", []string{"event", "tag", "1", "a&b=c"}},
+		{"event tag negated key", []string{"event", "tag", "1", "!k=v"}},
+		{"meta rename onto empty value", []string{"meta", "rename", "tag=wip", "tag=", "-f"}},
+		{"meta rename onto whitespace key", []string{"meta", "rename", "tag=wip", "a b=c", "-f"}},
+		{"meta rename onto negated key", []string{"meta", "rename", "tag=wip", "!k=v", "-f"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := run(tt.args); err == nil {
+				t.Errorf("%v succeeded, want a rejection", tt.args)
+			}
+		})
+	}
+
+	// The seed survived every refusal.
+	out, err := run([]string{"meta"})
+	if err != nil {
+		t.Fatalf("meta: %v", err)
+	}
+	if !strings.Contains(out, "tag=wip") {
+		t.Errorf("meta listing lost the seed:\n%s", out)
+	}
+}
+
+// TestKongDispatch_LegacyMetaStaysRemovable is the other half of the rule
+// above. Every released build could write `k=` rows, and CLAUDE.md names
+// `event untag 'k='` as the only verb that can name one — so gating the
+// *naming* verbs on the same rule would make exactly the rows this change
+// stops creating into rows nothing can remove.
+func TestKongDispatch_LegacyMetaStaysRemovable(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	run, _ := newDispatcherOn(t, store, "", true)
+
+	if _, err := run([]string{"add", "x"}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	// Planted directly, the way forgeParent plants a corrupt tree: no current
+	// write path produces this row, and every older one could.
+	if _, err := store.DB.Exec(
+		"INSERT INTO event_meta (event_id, key, value, source) VALUES (1, 'k', '', 'explicit')"); err != nil {
+		t.Fatalf("plant legacy row: %v", err)
+	}
+
+	out, err := run([]string{"event", "untag", "1", "k="})
+	if err != nil {
+		t.Fatalf("event untag 'k=': %v", err)
+	}
+	if !strings.Contains(out, "1 removed") {
+		t.Errorf("untag output = %q, want it to report one removal", out)
+	}
+}
+
+// TestKongDispatch_MetaFilterAnyKey pins `fngr meta -S <key>` as a query path,
+// not a minting one. It reaches ListMeta's plain `WHERE key = ?`, where the -S
+// expression tokenizer is never involved — so no key is unmatchable here, and
+// gating it would hide exactly the rows the mint rule refuses to create.
+//
+// It used to test MetaNameRe, so `ticket.id` — a key `-m` stores and `-S`
+// finds — was refused by the one command that lists metadata.
+func TestKongDispatch_MetaFilterAnyKey(t *testing.T) {
+	t.Parallel()
+	store := newTestStore(t)
+	run, _ := newDispatcherOn(t, store, "", true)
+
+	if _, err := run([]string{"add", "x", "-m", "ticket.id=PROJ-42"}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+
+	out, err := run([]string{"meta", "-S", "ticket.id"})
+	if err != nil {
+		t.Fatalf("meta -S ticket.id: %v", err)
+	}
+	if !strings.Contains(out, "ticket.id=PROJ-42") {
+		t.Errorf("meta -S ticket.id = %q, want the entry", out)
+	}
+
+	// A key no current write path can produce is still listable, which is the
+	// whole point: finding it is how the operator learns it is there.
+	if _, err := store.DB.Exec(
+		"INSERT INTO event_meta (event_id, key, value, source) VALUES (1, 'a b', 'c', 'explicit')"); err != nil {
+		t.Fatalf("plant legacy row: %v", err)
+	}
+	out, err = run([]string{"meta", "-S", "a b"})
+	if err != nil {
+		t.Fatalf("meta -S 'a b': %v", err)
+	}
+	if !strings.Contains(out, "a b=c") {
+		t.Errorf("meta -S 'a b' = %q, want the planted entry", out)
+	}
+}
+
 // TestKongDispatch_MarkdownAlias checks that the alias reaches the renderer
 // through Kong's enum on every command that offers `md`. `markdown` is the
 // word people reach for, and it was rejected at parse time.

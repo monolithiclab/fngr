@@ -229,6 +229,7 @@ fngr --from 2026-04-01T09:00:00Z          # paste a created_at back in
 fngr -n 20             # the 20 newest events
 fngr -r                # oldest first (default is newest first)
 fngr -n 20 -r          # still the 20 newest, shown oldest first
+fngr -n 0              # no limit (the default); a negative -n is an error
 fngr --no-pager        # don't pipe through $PAGER even on a TTY
 
 # Output formats. JSON is the only round-trip format
@@ -361,6 +362,26 @@ Names may contain any Unicode letter or digit plus `_`, `/` and `-`, so `@josé`
 `@田中` and `#déploiement` are stored whole. A sigil only opens a tag at the
 start of the text or after a non-name character, so `bob@example.com` and
 `https://example.com/guide#installation` do not mint metadata.
+
+A `key=value` you spell out in full is looser than a sigil name — it only has
+to be something `-S` can find again. So `--meta ticket.id=PROJ-42` is fine, and
+so is `--meta 'author=Ada Lovelace'`, which `-S author=Ada` matches. What is
+refused is what fngr could store and then never search back:
+
+- An empty value — `-m 'k='` listed as `k=  (1)` and said nothing.
+- A key that is not exactly one `-S` term. Whitespace, `&` and `|` all end a
+  term, so `-m 'a b=c'` and `-m 'a&b=c'` store rows that read back as several
+  terms and match nothing; a leading `!` is worse still, since `-S '!k=v'`
+  answers with every event *except* the tagged one.
+
+Both restrictions are on the key only. A *value* may contain spaces and
+operators alike — a term ends at the space, but `-S author=Ada` is enough to
+reach the row.
+
+Rows an older fngr wrote in any of these shapes are still yours to fix:
+`event untag`, `meta rename` and `meta delete` name them exactly as stored, and
+`fngr meta -S 'a b'` lists them so you can see they are there. Only the
+commands that *create* metadata apply the rule.
 
 `fngr meta -S` is a different, narrower filter: exactly one `#tag`, `@person`,
 `key=value` or bare key, with no operators and no full-text search. It selects

@@ -24,15 +24,14 @@ type MetaListCmd struct {
 func (c *MetaListCmd) Run(s eventStore, io ioStreams) error {
 	ctx := context.Background()
 
-	var opts event.ListMetaOpts
-	if c.Search != "" {
-		m, err := parseMetaFilter(c.Search)
-		if err != nil {
-			return err
-		}
-		opts.Key = m.Key
-		opts.Value = m.Value
+	// No emptiness test here: parseMetaFilter answers an absent filter with
+	// the zero Meta, which is the unfiltered listing. Two spellings of "no
+	// filter" is one more than the number of ways to get it wrong.
+	m, err := parseMetaFilter(c.Search)
+	if err != nil {
+		return err
 	}
+	opts := event.ListMetaOpts{Key: m.Key, Value: m.Value}
 
 	counts, err := s.ListMeta(ctx, opts)
 	if err != nil {
@@ -236,9 +235,14 @@ func parseMetaFilter(s string) (parse.Meta, error) {
 		return parse.Meta{}, nil
 	}
 	if s[0] != '@' && s[0] != '#' && !strings.Contains(s, "=") {
-		if !parse.MetaNameRe.MatchString(s) {
-			return parse.Meta{}, fmt.Errorf("invalid filter %q: bare key must be %s", s, parse.MetaNameRule)
-		}
+		// Unvalidated on purpose. This filter reaches ListMeta, a plain
+		// `WHERE key = ?` — the -S *expression* tokenizer is nowhere on this
+		// path, so nothing a key can contain makes it unmatchable here, and
+		// a query path is what finds the rows a mint rule refuses to create.
+		// It used to test MetaNameRe, so `fngr meta -S ticket.id` was refused
+		// by the one command that lists metadata for a key `-m` stores
+		// happily. Testing parse.ValidateMeta's key half instead would keep
+		// the bug's shape at a different width.
 		return parse.Meta{Key: s}, nil
 	}
 	return parse.MetaArg(s)

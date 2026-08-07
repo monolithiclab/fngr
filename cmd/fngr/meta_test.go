@@ -334,12 +334,16 @@ func TestMetaListCmd_SearchTagShorthand(t *testing.T) {
 	}
 }
 
+// TestMetaListCmd_InvalidSearch pins the one shape this filter still refuses:
+// a sigil form whose name is not one. A *bare* key is deliberately unchecked —
+// see parseMetaFilter — so `bad name` is a listing of the key `bad name`, not
+// an error.
 func TestMetaListCmd_InvalidSearch(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
 	io, _ := newTestIO("")
 
-	cmd := &MetaListCmd{Search: "bad name"}
+	cmd := &MetaListCmd{Search: "@bad name"}
 	err := cmd.Run(s, io)
 	if err == nil {
 		t.Fatal("expected error for invalid filter")

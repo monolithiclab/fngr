@@ -112,6 +112,16 @@ func withGrammarHint(err error) error {
 }
 
 func (c *ListCmd) toListOpts() (event.ListOpts, error) {
+	// Checked here as well as in the store, for the reason ValidateFilter is
+	// below: buildListQuery's error surfaces lazily, once the renderer has
+	// written its opening bytes. A negative limit is the one bad value Kong's
+	// own error hands the user — `fngr -n -1` is refused as a malformed short
+	// flag with `perhaps try --limit="-1"?`, and taking that suggestion used
+	// to list everything at exit 0. Following an error message should not land
+	// somewhere quieter than where it started.
+	if err := event.ValidateLimit(c.Limit); err != nil {
+		return event.ListOpts{}, fmt.Errorf("--limit: %w", err)
+	}
 	// Trim once here so a blank -S means the same thing as an absent one:
 	// the store treats "" as no filter, but the parser treats "   " as an
 	// empty expression, and `fngr -S "$QUERY"` should not flip between the

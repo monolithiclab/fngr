@@ -217,8 +217,11 @@ func jsonInputToAddInput(
 	if in.Meta != nil {
 		explicit = make([]parse.Meta, 0, len(in.Meta))
 		for j, pair := range in.Meta {
-			if pair[0] == "" {
-				return event.AddInput{}, false, fmt.Errorf("--format=json: record %d: meta[%d]: empty key", index, j)
+			// Pre-flighted here, rather than left to the writer, because
+			// this is the entry point that takes 10 000 tuples at a time and
+			// the record index is what makes the bad one findable.
+			if err := parse.ValidateMeta(pair[0], pair[1]); err != nil {
+				return event.AddInput{}, false, fmt.Errorf("--format=json: record %d: meta[%d]: %w", index, j, err)
 			}
 			explicit = append(explicit, parse.Meta{Key: pair[0], Value: pair[1]})
 		}
