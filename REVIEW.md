@@ -52,7 +52,7 @@ under concurrent writes, and the README states the opposite.**
 | [M13](#m13) | Medium | timefmt | DST spring-forward silently shifts `event time` to the prior hour | ✅ fixed |
 | [M14](#m14) | Medium | event | `-n N -r` returns the N **oldest** events | ✅ fixed |
 | [M15](#m15) | Medium | perf | Unbuffered stdout — one `write(2)` per event; 11-19% on large lists | ✅ fixed |
-| [M16](#m16) | Medium | supply-chain | Release workflow: broad privileges on seven mutable-tag actions | open |
+| [M16](#m16) | Medium | supply-chain | Release workflow: broad privileges on seven mutable-tag actions | ✅ fixed |
 
 Plus 18 low-severity items, an architecture section, and a measured
 performance section — all below.
@@ -1908,6 +1908,60 @@ Smaller supply-chain items:
   vulnerabilities; one un-called advisory, `GO-2026-5024` in
   `golang.org/x/sys@v0.43.0`, Windows-only, fixed in v0.44.0). Worth adding.
 
+**Resolved**, all of it. `release.yml` declares `permissions: {}` at workflow
+scope and grants per job (`contents: write` + `packages: write` +
+`id-token: write` to `goreleaser`); `ci.yml` takes the simpler shape its jobs
+call for, `contents: read` workflow-wide, since neither of them publishes
+anything. Every action is pinned to a commit SHA with the version in a trailing
+comment, `checkout` passes `persist-credentials: false`, and `goreleaser-action`
+runs `version: v2.17.1` rather than `latest`. `sigstore/cosign-installer` is
+pinned on the **v3** line (`v3.9.1`) — v4 installs cosign v3, which breaks the
+`signs:` args, see `docs/PUBLISHING.md`.
+
+Pinning an action is not enough on its own where the action then pulls an image:
+`docker/setup-qemu-action` defaults to `tonistiigi/binfmt:latest`, which it runs
+**privileged** on the runner, and `docker/setup-buildx-action` bootstraps
+`moby/buildkit:buildx-stable-1`, which builds every layer we push — both mutable
+tags, both inside the one job holding all three write scopes. `release.yml` now
+passes each by digest.
+
+The smaller items, in order: the `Dockerfile` is
+`gcr.io/distroless/static-debian13:nonroot` pinned by digest; `.goreleaser.yaml`
+gained a `sboms:` block writing one SPDX document per archive (verified in a
+snapshot run to land in `SHA256SUMS`, so the existing cosign signature covers
+them) and its `before` hook is now `go mod verify`, which writes nothing; the
+four linter versions live in the `Makefile` behind `make lint-tools`, which
+installs them into `GOPATH/bin` so `common-go.mk`'s `which` check finds them and
+its `@latest` fallback never fires — the shared file itself is untouched, and CI
+and a local `make lint` run the same versions because they read the same list;
+and a separate `vuln` job runs `make vuln` (govulncheck), with
+`golang.org/x/sys` bumped to v0.44.0 so the scan is clean of even un-called
+advisories. That job declines setup-go's cache deliberately: the cache key is
+OS + Go version + `go.sum` hash and nothing else, so it collides with
+`test (ubuntu-latest)`'s, and the shorter job winning the reservation would
+leave the longer one rebuilding all four linters from cold every run.
+
+A pin regresses invisibly — a floating tag looks like a tidy-up in review and
+breaks nothing until it is exploited — so `make lint-pins` fails on any `uses:`
+without a `@<40-hex> # vX.Y.Z` suffix, any `FROM` without a digest, and any
+action pinned to two different SHAs across the workflows (the likely outcome of
+a half-finished refresh, since both workflows share four actions). It hangs off
+`lint` as a prerequisite rather than being named separately by `make ci` and
+`ci.yml`, so there is no second list to keep in step. What a grep cannot see —
+GoReleaser's `version:`, the `Makefile`'s linter versions, the two `with:` image
+digests — is stated as such in `CLAUDE.md` rather than implied to be covered.
+
+Two things worth knowing. The `nonroot` base is a user-visible change, not just
+a hardening: SQLite in WAL mode creates `-wal`/`-shm` siblings, and a
+single-file bind mount leaves the directory around them root-owned inside the
+container, so every documented `docker run` failed with `attempt to write a
+readonly database` — reads included, since WAL needs `-shm` to open the
+database at all — until the README switched to mounting the *directory* with
+`--user "$(id -u):$(id -g)"`. Both forms were
+tested against a locally built image. And the new `vuln` job is not yet in the
+repo's required status checks — the playbook lists it for new repos, but adding
+it to fngr's own branch protection is a repo-settings change, not a commit.
+
 ---
 
 ## Low
@@ -2450,5 +2504,8 @@ below the table). Each entry states why so we don't re-propose it.
 - **`.github/workflows/`** — [M16](#m16). When pinning to SHAs, note that
   `sigstore/cosign-installer` stays on `@v3` deliberately (v4 has a real
   behavior break — see roadmap).
+  *Done: everything network-facing is pinned. The pins go stale silently, so
+  `docs/PUBLISHING.md` grew a "Refreshing the pins" section with the resolve
+  commands; a bulk refresh must not walk cosign-installer past v3.*
 - **`docs/PUBLISHING.md`** — the "Gotchas" section is the institutional memory
   of the v0.0.1 rollout. Add to it when shipping a sibling repo.

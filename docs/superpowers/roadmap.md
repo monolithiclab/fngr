@@ -32,11 +32,17 @@ cycle. Specs land under `docs/superpowers/specs/`, plans under
 - **GitHub Actions CI + release pipeline** — every push to `main` and
   every PR validates against `make lint test` on a Linux + macOS
   matrix; every `v*.*.*` tag triggers a GoReleaser-driven multi-channel
-  release (GitHub Release with cross-compiled binaries + cosign-signed
+  release (GitHub Release with cross-compiled binaries + per-archive SPDX
+  SBOMs + cosign-signed
   SHA256SUMS, multi-arch container image on `ghcr.io/monolithiclab/fngr`,
   Homebrew formula on `monolithiclab/homebrew-tap`). Pre-release tags
   (`v*.*.*-rc1` etc.) skip the `:latest` Docker tag and the brew
-  formula bump.
+  formula bump. CI also runs `govulncheck`. Everything either workflow
+  fetches is pinned — actions to commit SHAs, the images those actions
+  pull and the distroless `nonroot` base to digests, GoReleaser and the
+  linters to exact versions — with `make lint-pins` guarding the two
+  shapes a grep can see and the refresh procedure in
+  `docs/PUBLISHING.md`.
 - **CLI surface alignment** — `fngr help [<cmd>...]` is a verb-form alias
   for `--help` (multi-arg paths supported: `fngr help event show`); every
   help screen uses Kong's `HelpOptions{Compact: true}` layout (one line
@@ -220,8 +226,10 @@ deprecated keys are actually removed by upstream.
   `brew install --cask`, which would break the cross-platform install
   path we promise (`brew install monolithiclab/tap/fngr` from Linux
   too). Wait for GoReleaser to ship a `homebrew_formulas:` key.
-- **Cosign `signs:` → v4 bundle format** — pinned to
-  `sigstore/cosign-installer@v3` because cosign v4 deprecated the
+- **Cosign `signs:` → bundle format** — pinned to the
+  `sigstore/cosign-installer` **v3** line (by SHA), which installs
+  cosign v2.x; the installer's v4 line installs cosign v3.x, which
+  deprecated the
   `--output-signature` / `--output-certificate` flags in favor of a
   single `.sigstore.json` bundle. Migration touches the
   `.goreleaser.yaml` `signs:` block, the README's verification

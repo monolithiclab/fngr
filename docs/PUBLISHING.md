@@ -2,7 +2,8 @@
 
 Operational reference for shipping any monolithiclab Go CLI through the
 same multi-channel release pipeline that fngr uses: GitHub Releases
-(cross-compiled binaries + cosign-signed SHA256SUMS) + multi-arch
+(cross-compiled binaries + per-archive SPDX SBOMs + cosign-signed
+SHA256SUMS) + multi-arch
 container image on `ghcr.io` + Homebrew formula on
 `monolithiclab/homebrew-tap`. This is the playbook distilled from
 shipping fngr v0.0.1 — every step, every secret, every gotcha.
@@ -27,6 +28,10 @@ On your local machine:
 - GoReleaser (`brew install goreleaser`) — for local config validation
   and snapshot rehearsals before tagging.
 - `cosign` (`brew install cosign`) — for verifying release artifacts.
+- `syft` (`brew install syft`) — only for snapshot rehearsals, which
+  run the SBOM step. CI installs its own.
+- `crane` (`brew install crane`) — for refreshing the base-image
+  digest; see "Refreshing the pins" below.
 
 ---
 
@@ -118,14 +123,26 @@ new project name):
 
 - `LICENSE` — MIT (or pick another SPDX; update `.goreleaser.yaml`'s
   `brews[0].license` to match).
-- `Dockerfile` — distroless-static-debian13 base, single COPY of the
-  binary. Adjust the binary name in the COPY + ENTRYPOINT lines.
+- `Dockerfile` — distroless-static-debian13 `nonroot`, pinned by
+  digest, single COPY of the binary. Adjust the binary name in the
+  COPY + ENTRYPOINT lines. The image runs as UID 65532, which
+  constrains how a data volume has to be mounted — see the gotcha
+  below before documenting `docker run` for your CLI.
 - `.goreleaser.yaml` — the load-bearing release config. Search-
   replace `fngr` and `monolithiclab/fngr` and `homebrew-tap`.
 - `.github/workflows/ci.yml` — push-to-main + PR matrix on
-  ubuntu+macOS, `make lint test`, coverage artifact.
+  ubuntu+macOS, `make lint-tools` then `make lint test`, coverage
+  artifact, plus a `make vuln` (govulncheck) job.
 - `.github/workflows/release.yml` — tag-triggered, QEMU + Buildx
-  + ghcr.io login + cosign-installer + goreleaser-action.
+  + ghcr.io login + cosign-installer + syft + goreleaser-action.
+
+Everything in these files that reaches the network is pinned: actions
+to commit SHAs, the images those actions pull, the base image to a
+digest, GoReleaser and the lint tools to exact versions. Copying them
+verbatim is the right move —
+the pins are known-good — but re-run "Refreshing the pins" below
+before the first release so the new repo doesn't start out months
+behind.
 
 ### 2. Wire the `HOMEBREW_TAP_TOKEN` secret as REPO-level
 
@@ -178,10 +195,14 @@ Before tagging the first release:
 
 ```bash
 goreleaser check                                          # validates config; deprecation warnings on dockers/brews are intentional (see Gotchas)
-goreleaser release --snapshot --skip=publish,sign --clean # full local build
-ls dist/                                                  # 4 archives, SHA256SUMS, dist/homebrew/<name>.rb, multi-arch images
+goreleaser release --snapshot --skip=publish,sign --clean # full local build (add --skip=sbom if syft isn't installed)
+ls dist/                                                  # 4 archives + 4 .sbom.json, SHA256SUMS, dist/homebrew/<name>.rb, multi-arch images
 rm -rf dist/
 ```
+
+`SHA256SUMS` should list the `.sbom.json` files alongside the
+archives — GoReleaser generates SBOMs before it checksums, so the
+cosign signature over `SHA256SUMS` covers them.
 
 ### 6. Cut the first release — pre-release flow
 
@@ -265,6 +286,7 @@ gh api -X PUT /repos/monolithiclab/<new-repo>/branches/main/protection \
   --field 'required_status_checks[strict]=true' \
   --field 'required_status_checks[contexts][]=test (ubuntu-latest)' \
   --field 'required_status_checks[contexts][]=test (macos-latest)' \
+  --field 'required_status_checks[contexts][]=vuln' \
   --field 'enforce_admins=false' \
   --field 'required_pull_request_reviews=null' \
   --field 'restrictions=null'
@@ -273,6 +295,80 @@ gh api -X PUT /repos/monolithiclab/<new-repo>/branches/main/protection \
 (Use `--field`, not `--raw-field` — the API needs proper boolean/null
 types and `--raw-field` sends strings. The 422 it returns lists every
 schema mismatch.)
+
+---
+
+## Refreshing the pins
+
+Nothing in the pipeline floats. That is the point — a mutable tag on
+an action the release job runs is a write token, a package push and
+an OIDC signing identity handed to whoever can move it — but it also
+means the pins go stale silently. Refresh them on purpose, in their
+own commit, and let CI prove the new set works.
+
+fngr's `Makefile` carries a `lint-pins` target, hung off `lint` so
+`make ci` and CI both run it, that fails on an action without a
+`@<40-hex> # vX.Y.Z` suffix, on a `FROM` without a digest, and on the
+same action pinned to two different SHAs across the workflows. Copy it
+into new repos — it is the only thing standing between this section and
+a silent regression. It cannot see the rest: GoReleaser's `version:`,
+the linter versions in the `Makefile`, and the two image digests passed
+as `with:` values in `release.yml` are literals guarded by review.
+
+**GitHub Actions.** Resolve each pinned action's major alias to the
+commit it points at today, and name the version in the trailing
+comment. The list is derived from the workflows rather than kept here,
+so an action added later is not silently left behind:
+
+```bash
+grep -hoE 'uses: [^ ]+@[0-9a-f]{40} # v[0-9]+' .github/workflows/*.y*ml \
+  | sed -E 's|uses: ([^/]+/[^/@]+)[^@]*@[0-9a-f]+ # (v[0-9]+)|\1:\2|' | sort -u \
+  | while IFS=: read -r repo tag; do
+      sha=$(gh api "repos/$repo/commits/$tag" --jq .sha)
+      echo "$repo@$sha  # $(gh api "repos/$repo/tags?per_page=100" \
+        --jq "[.[] | select(.commit.sha==\"$sha\") | .name] | join(\", \")")"
+    done
+```
+
+Because the alias comes from the pin's own comment, this re-resolves
+each action within the major it is on — which is what keeps
+`sigstore/cosign-installer` on `v3`, where it is deliberately held
+(`v4` breaks our signing args, see the gotcha below). Don't hand-edit
+it forward.
+
+**Images the actions pull.** `setup-qemu-action` and
+`setup-buildx-action` are pinned by SHA but each defaults to a mutable
+image tag, so `release.yml` passes both explicitly. Refresh with
+`docker buildx imagetools inspect <ref> --format '{{.Manifest.Digest}}'`
+on `docker.io/tonistiigi/binfmt:latest` and
+`moby/buildkit:buildx-stable-1`.
+
+**Base image.** `crane digest gcr.io/distroless/static-debian13:nonroot`,
+then update both the tag and the digest in the `Dockerfile`.
+
+**GoReleaser.** `gh api repos/goreleaser/goreleaser/releases/latest
+--jq .tag_name`, update `version:` in `release.yml`, and install the
+same version locally (`brew upgrade goreleaser`) so `goreleaser check`
+and snapshot rehearsals test what CI will run.
+
+**Lint tools.** The `*_VERSION` variables in the `Makefile` exist
+because `common-go.mk` installs each linter at `@latest` when it is
+missing, and that file is shared across repos — `make lint-tools` puts
+the version this repo chose in `GOPATH/bin` so its `which` check finds
+that one instead. CI runs the same target, so there is one list, not
+two. Latest for each:
+
+```bash
+for m in honnef.co/go/tools github.com/golangci/golangci-lint \
+         github.com/securego/gosec/v2 github.com/go-critic/go-critic \
+         golang.org/x/vuln; do
+  echo "$m $(curl -s "https://proxy.golang.org/$m/@latest" | jq -r .Version)"
+done
+```
+
+Bump your local copies to match (`FORCE_UPDATE=1 make lint` reinstalls
+at `@latest`, which is not the same thing — use `go install <mod>@<ver>`
+so local and CI agree).
 
 ---
 
@@ -334,7 +430,10 @@ update this playbook.
 
 ### `cosign-installer@v4` broke our signing args
 
-Cosign v4 defaults to `--new-bundle-format`, which:
+Installer major and cosign major are not the same number, which makes
+this easy to misread: the action's **v3** line installs cosign
+**v2.x** (`v3.9.1` → cosign v2.5.2), and its v4 line installs cosign
+v3.x. That cosign defaults to `--new-bundle-format`, which:
 
 - Deprecates `--output-signature` and `--output-certificate` (the
   flags `.goreleaser.yaml`'s `signs:` config passes).
@@ -347,6 +446,32 @@ Pin `sigstore/cosign-installer@v3` until you migrate the
 `cosign verify-blob` command. (Note: `sigstore/cosign-installer`
 doesn't ship a moving `v4` major-alias tag — only specific patch
 tags like `v4.1.1`. If you do migrate, pin the patch.)
+
+### The `nonroot` base needs a directory mount, not a file mount
+
+The distroless `nonroot` variant runs as UID 65532. A CLI storing its
+state in SQLite can no longer be documented with the obvious
+single-file bind mount:
+
+```bash
+docker run --rm -v "$HOME/.foo.db:/data/foo.db" -e FOO_DB=/data/foo.db ghcr.io/...
+# error: cannot open database /data/foo.db: attempt to write a readonly database (1544)
+```
+
+The mounted file itself is writable; `/data` around it is not. It is
+a directory in the container's own layer, owned by root, and SQLite in
+WAL mode has to create `foo.db-wal` and `foo.db-shm` *beside* the
+database — so this fails on reads too, not just writes. Adding
+`--user "$(id -u):$(id -g)"` does not rescue the *file* mount: it
+changes who the process is, not who owns a directory baked into the
+image. It is what makes the directory mount below work, because there
+the directory comes from the host and you own it.
+
+Mount the **directory** instead (`-v "$HOME/.foo:/data" -e
+FOO_DB=/data/foo.db`) and pass `--user` so the host directory, which
+you own at mode 0755, is writable. Worth noting the root image hid
+this rather than avoiding it: it created the WAL sidecars in the
+container layer, where they vanished with the container.
 
 ### `dockers:` and `brews:` are deprecated by GoReleaser, but kept intentionally
 

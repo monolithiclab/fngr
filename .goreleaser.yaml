@@ -4,7 +4,11 @@ project_name: fngr
 
 before:
   hooks:
-    - go mod tidy
+    # Not `go mod tidy`: a release must build the dependency set that was
+    # reviewed and tested, and tidy can rewrite go.mod/go.sum mid-release
+    # from whatever the proxy serves that minute. `verify` checks the
+    # modules on disk still hash to what go.sum records, and writes nothing.
+    - go mod verify
 
 builds:
   - id: fngr
@@ -23,6 +27,14 @@ archives:
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     formats: [tar.gz]
     files: [LICENSE, README.md]
+
+# One SPDX SBOM per archive, written by syft (installed by the release
+# workflow). The args are spelled out rather than defaulted because the
+# default set ends in `--enrich all`, which reaches out to the network per
+# run — a release should describe what it built, not what a lookup service
+# said about it that afternoon.
+sboms:
+  - args: ["$artifact", "--output", "spdx-json=$document"]
 
 checksum:
   name_template: "SHA256SUMS"
