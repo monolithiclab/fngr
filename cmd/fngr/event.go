@@ -190,10 +190,22 @@ type EventAttachCmd struct {
 
 func (c *EventAttachCmd) Run(s eventStore, io ioStreams) error {
 	ctx := context.Background()
+	// Read first: attaching an event that already had a parent silently
+	// displaces it, and `Attached event 3 to event 1` is true of the row and
+	// silent about what it moved away from. Get walks no ancestry, so it is
+	// safe on the corrupt tree withRepairHint below exists for.
+	ev, err := s.Get(ctx, c.ID)
+	if err != nil {
+		return err
+	}
 	if err := s.Reparent(ctx, c.ID, &c.Parent); err != nil {
 		return withRepairHint(err)
 	}
-	fmt.Fprintf(io.Out, "Attached event %d to event %d\n", c.ID, c.Parent)
+	moved := ""
+	if ev.ParentID != nil && *ev.ParentID != c.Parent {
+		moved = fmt.Sprintf(" (was event %d)", *ev.ParentID)
+	}
+	fmt.Fprintf(io.Out, "Attached event %d to event %d%s\n", c.ID, c.Parent, moved)
 	return nil
 }
 
@@ -215,10 +227,23 @@ type EventDetachCmd struct {
 
 func (c *EventDetachCmd) Run(s eventStore, io ioStreams) error {
 	ctx := context.Background()
+	// Read first, so the result line can name the parent that was cleared and
+	// say so distinctly when there was none — `Detached event 1` on an event
+	// that never had a parent reads as confirmation that something happened.
+	// Get is safe on the corrupt tree this verb exists to repair: it fetches
+	// one row and walks no ancestry.
+	ev, err := s.Get(ctx, c.ID)
+	if err != nil {
+		return err
+	}
+	if ev.ParentID == nil {
+		fmt.Fprintf(io.Out, "Event %d has no parent; nothing to detach\n", c.ID)
+		return nil
+	}
 	if err := s.Reparent(ctx, c.ID, nil); err != nil {
 		return err
 	}
-	fmt.Fprintf(io.Out, "Detached event %d\n", c.ID)
+	fmt.Fprintf(io.Out, "Detached event %d from event %d\n", c.ID, *ev.ParentID)
 	return nil
 }
 

@@ -27,6 +27,16 @@ func newTestStore(t *testing.T) *event.Store {
 	return event.NewStore(database)
 }
 
+// forgeParent wires parent_id directly, past Reparent's cycle guard, to build
+// the corrupt tree no fngr command can write but any `.fngr.db` can be handed:
+// a hand-edit, a half-written file, someone else's database in the cwd.
+func forgeParent(t *testing.T, s *event.Store, child, parent int64) {
+	t.Helper()
+	if _, err := s.DB.Exec("UPDATE events SET parent_id = ? WHERE id = ?", parent, child); err != nil {
+		t.Fatalf("forge parent of %d as %d: %v", child, parent, err)
+	}
+}
+
 // stubEditor swaps the package-level launchEditor for the duration of the
 // test and restores it afterwards. Because the seam is package state, a test
 // that calls this must NOT call t.Parallel() — the race detector flags

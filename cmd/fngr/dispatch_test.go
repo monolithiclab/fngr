@@ -453,7 +453,7 @@ func TestKongDispatch_MetaRenameMerges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("meta rename: %v", err)
 	}
-	if !strings.Contains(out, "Renamed 2 occurrence(s)") {
+	if !strings.Contains(out, "Renamed 2 occurrences") {
 		t.Errorf("meta rename said %q, want 2 occurrences", strings.TrimSpace(out))
 	}
 
@@ -584,9 +584,7 @@ func TestKongDispatch_CorruptParentChain(t *testing.T) {
 			t.Fatalf("%v: %v", argv, err)
 		}
 	}
-	if _, err := store.DB.Exec("UPDATE events SET parent_id = 2 WHERE id = 1"); err != nil {
-		t.Fatalf("forge cycle: %v", err)
-	}
+	forgeParent(t, store, 1, 2)
 
 	out, err := run([]string{"--no-pager"})
 	if err != nil {
@@ -836,4 +834,60 @@ func parentsByTitle(t *testing.T, jsonOut string) map[string]string {
 		}
 	}
 	return out
+}
+
+// TestKongDispatch_TreeVerbsReportWhatHappened walks the under-reporting cases
+// through the CLI: `delete -r` used to print `Deleted event 1` after taking
+// three, `event detach` claimed a detachment on an event that never had a
+// parent, and `event attach` displaced a parent without naming it.
+func TestKongDispatch_TreeVerbsReportWhatHappened(t *testing.T) {
+	t.Parallel()
+	run := newDispatcher(t)
+
+	for _, argv := range [][]string{
+		{"add", "root"},
+		{"add", "child", "--parent", "1"},
+		{"add", "grandchild", "--parent", "2"},
+		{"add", "loner"},
+	} {
+		if _, err := run(argv); err != nil {
+			t.Fatalf("%v: %v", argv, err)
+		}
+	}
+
+	out, err := run([]string{"event", "attach", "3", "4"})
+	if err != nil {
+		t.Fatalf("attach grandchild to loner: %v", err)
+	}
+	if !strings.Contains(out, "Attached event 3 to event 4 (was event 2)") {
+		t.Errorf("attach = %q, want the displaced parent named", out)
+	}
+	if out, err = run([]string{"event", "attach", "3", "2"}); err != nil {
+		t.Fatalf("re-attach grandchild: %v", err)
+	}
+	if !strings.Contains(out, "(was event 4)") {
+		t.Errorf("attach = %q, want the displaced parent named", out)
+	}
+
+	if out, err = run([]string{"event", "detach", "4"}); err != nil {
+		t.Fatalf("detach loner: %v", err)
+	}
+	if !strings.Contains(out, "Event 4 has no parent; nothing to detach") {
+		t.Errorf("detach on a parentless event = %q, want the no-op named", out)
+	}
+
+	if out, err = run([]string{"event", "detach", "3"}); err != nil {
+		t.Fatalf("detach grandchild: %v", err)
+	}
+	if !strings.Contains(out, "Detached event 3 from event 2") {
+		t.Errorf("detach = %q, want the cleared parent named", out)
+	}
+
+	// 1 -> 2 is what is left of the chain, so -r takes two events.
+	if out, err = run([]string{"delete", "1", "-r", "-f"}); err != nil {
+		t.Fatalf("delete -r: %v", err)
+	}
+	if !strings.Contains(out, "Deleted event 1 and its subtree (2 events)") {
+		t.Errorf("delete -r = %q, want the subtree size stated", out)
+	}
 }

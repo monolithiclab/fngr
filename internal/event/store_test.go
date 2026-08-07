@@ -188,6 +188,30 @@ func TestStore_GetSubtreeNotFound(t *testing.T) {
 	}
 }
 
+func TestStore_CountSubtree(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+
+	root, err := s.Add(ctx, AddInput{Title: "root"})
+	if err != nil {
+		t.Fatalf("Add root: %v", err)
+	}
+	if _, err := s.Add(ctx, AddInput{Title: "child", ParentID: &root}); err != nil {
+		t.Fatalf("Add child: %v", err)
+	}
+
+	got, err := s.CountSubtree(ctx, root)
+	if err != nil {
+		t.Fatalf("CountSubtree: %v", err)
+	}
+	if got != 2 {
+		t.Errorf("CountSubtree = %d, want 2", got)
+	}
+	if _, err := s.CountSubtree(ctx, 9999); !errors.Is(err, ErrNotFound) {
+		t.Errorf("CountSubtree not-found err = %v, want ErrNotFound", err)
+	}
+}
+
 func TestStore_MetaCRUD(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)

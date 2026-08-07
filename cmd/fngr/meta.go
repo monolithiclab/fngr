@@ -149,7 +149,7 @@ func (c *MetaRenameCmd) Run(s eventStore, io ioStreams) error {
 	if !c.Force {
 		// A rename onto an existing entry merges, and merging destroys rows:
 		// an event carrying both ends up with one, so the totals go down.
-		// Say so before asking — "Renamed N occurrence(s)" on its own reads
+		// Say so before asking — "Renamed N occurrences" on its own reads
 		// as a pure move.
 		merge := ""
 		if newM != oldM {
@@ -163,8 +163,8 @@ func (c *MetaRenameCmd) Run(s eventStore, io ioStreams) error {
 			}
 		}
 
-		prompt := fmt.Sprintf("Rename %d occurrence(s) of %s=%s to %s=%s%s? [Y/n] ",
-			count, oldM.Key, oldM.Value, newM.Key, newM.Value, merge)
+		prompt := fmt.Sprintf("Rename %s of %s=%s to %s=%s%s? [Y/n] ",
+			plural(count, "occurrence"), oldM.Key, oldM.Value, newM.Key, newM.Value, merge)
 		ok, err := confirm(io.In, io.Out, prompt, true)
 		if err != nil {
 			return err
@@ -179,7 +179,7 @@ func (c *MetaRenameCmd) Run(s eventStore, io ioStreams) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(io.Out, "Renamed %d occurrence(s)\n", affected)
+	fmt.Fprintf(io.Out, "Renamed %s\n", plural(affected, "occurrence"))
 	return nil
 }
 
@@ -205,7 +205,7 @@ func (c *MetaDeleteCmd) Run(s eventStore, io ioStreams) error {
 	}
 
 	if !c.Force {
-		prompt := fmt.Sprintf("Delete %d occurrence(s) of %s=%s? [y/N] ", count, m.Key, m.Value)
+		prompt := fmt.Sprintf("Delete %s of %s=%s? [y/N] ", plural(count, "occurrence"), m.Key, m.Value)
 		ok, err := confirm(io.In, io.Out, prompt, false)
 		if err != nil {
 			return err
@@ -220,7 +220,7 @@ func (c *MetaDeleteCmd) Run(s eventStore, io ioStreams) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(io.Out, "Deleted %d occurrence(s)\n", n)
+	fmt.Fprintf(io.Out, "Deleted %s\n", plural(n, "occurrence"))
 	return nil
 }
 

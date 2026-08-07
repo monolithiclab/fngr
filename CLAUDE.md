@@ -60,7 +60,15 @@ make ci             # codefix + format + lint + test
   syntax `fngr event <verb> <id> [<args>]`. The two verbs that walk the tree (`show -t`, `attach`)
   route their error through `withRepairHint`, which appends the way out of an `ErrCorruptTree` —
   `fngr event detach <id>` on any event the message names, since clearing `parent_id` walks
-  nothing and so works on the very database the traversal could not survive.
+  nothing and so works on the very database the traversal could not survive. `attach` and `detach`
+  both read the event before writing, so each can name what it displaced — the old parent, or the
+  absence of one, which `detach` reports as a no-op instead of printing `Detached event N` over
+  nothing done. `Get` fetches one row and walks no ancestry, so it is safe on exactly the tree
+  those verbs exist to repair. `delete` names its subject the same way in the prompt and the
+  result line via `deleteSubject`, which sizes the subtree with `CountSubtree` — and falls back to
+  the un-counted `and all its children` on *any* error from it rather than failing, since a stored
+  cycle stops that walk and `delete -r` (an FK cascade, which walks nothing) is one of the ways
+  out of one.
   `meta` is a sub-command tree too: `fngr meta` lists with optional `-S` filter (bare key,
   key=value, @person, #tag), `meta rename` and `meta delete` mutate (both accept the same
   shorthand). None of the event verbs prompt; meta verbs prompt with the destructive-vs-additive
@@ -76,6 +84,24 @@ make ci             # codefix + format + lint + test
   escaping never shrinks a string. Widths are counted with `utf8.RuneCountInString`, which is
   what `fmt`'s `%-*s` pads to; `len` over-padded any cell holding a multibyte rune and stepped
   every row below it right.
+- `cmd/fngr/help.go` — `fngr help [<command>...]`, which re-parses with `--help` appended so the
+  output is byte-identical to `fngr <command> --help`. `checkCommandPath` vets the path first:
+  `list` is `default:"withargs"`, so a misspelled verb was never a parse failure — it re-parsed as
+  a stray positional *to list*, and the answer was list's whole usage block plus
+  `unexpected argument bogus`. It stays quiet wherever the word might not be a command at all: a
+  leaf with no sub-commands to suggest, and a node that takes an argument — `takesArgument` reads
+  all three places Kong will look (the node's own positionals, its `default:"withargs"` child's,
+  and an `arg:""` branch child), so `fngr help event 5` is still Kong's to explain. Reading only
+  one of them is the bug: `withargs` puts `event`'s `<id>` on the `show` child, not on `event`.
+  `commandChild` matches by name only — fngr declares no aliases, and Kong's alias precedence (an
+  alias loses to a real command of that name anywhere among the siblings) is not worth guessing at
+  from outside the framework. Note the check covers `fngr help <typo>`, not `fngr <typo>`; fixing
+  the primary path means `main` owning the parser instead of calling `kong.Parse`, which is
+  queued with the rest of the `main.go` restructure.
+- `cmd/fngr/plural.go` — `plural(n, noun)`, the count+noun formatter behind `Renamed 1
+  occurrence` / `Imported 3 events`. Regular `-s` only, deliberately: every noun fngr counts takes
+  one, and a call site with an irregular noun should say something else — which is why `delete -r`
+  reports a subtree in events rather than in children.
 - `cmd/fngr/store.go` — Defines the narrow `eventStore` interface that commands depend on plus the
   injectable `ioStreams` (`In io.Reader`, `Out io.Writer`, `Err io.Writer`, `IsTTY bool`).
 - `cmd/fngr/clock.go` — `warnSkippedClock(w, exists, asked, stored)`, the single formatter for the
@@ -336,7 +362,12 @@ make ci             # codefix + format + lint + test
   so the scan after it reports `ErrCorruptTree` rather than passing a deduped loop off as a
   subtree: a cycle is reachable only from a member of it — every member's parent is another
   member, so nothing outside can descend in — which reduces the test to whether the queried
-  root's own parent came back among its descendants), `ListMeta` (filtered via `ListMetaOpts{Key, Value}`),
+  root's own parent came back among its descendants),
+  `CountSubtree` (the same recursion, the same `UNION` and the same loop test — restated in SQL as
+  two scalar subqueries over one materialized CTE — for a caller that wants only the size.
+  `delete -r` is that caller, and reading every title, body and meta row of a 100k subtree to
+  print one integer cost ~950 ms and ~110 MB of live heap against ~120 ms and nothing),
+  `ListMeta` (filtered via `ListMetaOpts{Key, Value}`),
   `CountMeta`, `UpdateMeta` (a *merge*, not a plain rename — `UPDATE OR REPLACE` drops the row
   colliding with migration 2's `UNIQUE(key, value, event_id)`, so an event carrying both tags ends
   up with one. Plain `UPDATE` aborts the whole transaction there and renames nothing; any

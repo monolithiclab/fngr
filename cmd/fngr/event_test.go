@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -228,7 +229,7 @@ func TestEventCmd_ClockVerbsRejectUnparseableValues(t *testing.T) {
 func TestEventCmd_AttachAndDetach(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	io, out := newTestIO("")
 
 	a, _ := s.Add(context.Background(), event.AddInput{Title: "a"})
 	b, _ := s.Add(context.Background(), event.AddInput{Title: "b"})
@@ -247,6 +248,111 @@ func TestEventCmd_AttachAndDetach(t *testing.T) {
 	ev, _ = s.Get(context.Background(), b)
 	if ev.ParentID != nil {
 		t.Errorf("ParentID = %d, want nil", *ev.ParentID)
+	}
+	if want := fmt.Sprintf("Detached event %d from event %d", b, a); !strings.Contains(out.String(), want) {
+		t.Errorf("output = %q, want %q", out.String(), want)
+	}
+	// A first attach displaces nothing, so it must not claim to.
+	if strings.Contains(out.String(), "(was event") {
+		t.Errorf("output = %q, want no displaced parent named", out.String())
+	}
+}
+
+// TestEventAttachCmd_NamesTheDisplacedParent is the attach-side half of the
+// detach fix: re-attaching an event silently drops its old parent, and
+// `Attached event 3 to event 1` is true of the row and says nothing about what
+// it was moved away from.
+func TestEventAttachCmd_NamesTheDisplacedParent(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, out := newTestIO("")
+	ctx := context.Background()
+
+	a, _ := s.Add(ctx, event.AddInput{Title: "a"})
+	b, _ := s.Add(ctx, event.AddInput{Title: "b"})
+	c, err := s.Add(ctx, event.AddInput{Title: "c", ParentID: &a})
+	if err != nil {
+		t.Fatalf("Add c: %v", err)
+	}
+
+	if err := (&EventAttachCmd{ID: c, Parent: b}).Run(s, io); err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	want := fmt.Sprintf("Attached event %d to event %d (was event %d)", c, b, a)
+	if got := out.String(); !strings.Contains(got, want) {
+		t.Errorf("output = %q, want %q", got, want)
+	}
+}
+
+// TestEventAttachCmd_ReattachToTheSameParentNamesNothing keeps the suffix
+// meaning "this moved": re-running the same attach displaces nothing, and
+// `(was event 1)` beside `to event 1` would be noise dressed as a warning.
+func TestEventAttachCmd_ReattachToTheSameParentNamesNothing(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, out := newTestIO("")
+	ctx := context.Background()
+
+	a, _ := s.Add(ctx, event.AddInput{Title: "a"})
+	b, err := s.Add(ctx, event.AddInput{Title: "b", ParentID: &a})
+	if err != nil {
+		t.Fatalf("Add b: %v", err)
+	}
+
+	if err := (&EventAttachCmd{ID: b, Parent: a}).Run(s, io); err != nil {
+		t.Fatalf("Attach: %v", err)
+	}
+	if got := out.String(); strings.Contains(got, "(was event") {
+		t.Errorf("output = %q, want no displaced parent named", got)
+	}
+}
+
+// TestEventAttachCmd_UnknownEvent keeps the not-found error on the verb now
+// that the existence check happens in Get rather than only in Reparent.
+func TestEventAttachCmd_UnknownEvent(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, _ := newTestIO("")
+
+	a, _ := s.Add(context.Background(), event.AddInput{Title: "a"})
+	err := (&EventAttachCmd{ID: 9999, Parent: a}).Run(s, io)
+	if !errors.Is(err, event.ErrNotFound) {
+		t.Errorf("err = %v, want ErrNotFound", err)
+	}
+}
+
+// TestEventDetachCmd_NoParentIsAnExplicitNoop pins the low-severity report:
+// detaching a parentless event printed `Detached event 1` at exit 0 with
+// nothing done, which reads as confirmation that work occurred.
+func TestEventDetachCmd_NoParentIsAnExplicitNoop(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, out := newTestIO("")
+
+	id, _ := s.Add(context.Background(), event.AddInput{Title: "rootless"})
+
+	if err := (&EventDetachCmd{ID: id}).Run(s, io); err != nil {
+		t.Fatalf("Detach: %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "has no parent; nothing to detach") {
+		t.Errorf("output = %q, want the no-op reported", got)
+	}
+	if strings.Contains(got, "Detached") {
+		t.Errorf("output = %q, want no claim that anything was detached", got)
+	}
+}
+
+// TestEventDetachCmd_UnknownEvent keeps the read-first rewrite honest: the
+// existence check moved from Reparent to Get, and must still fail.
+func TestEventDetachCmd_UnknownEvent(t *testing.T) {
+	t.Parallel()
+	s := newTestStore(t)
+	io, _ := newTestIO("")
+
+	err := (&EventDetachCmd{ID: 999}).Run(s, io)
+	if !errors.Is(err, event.ErrNotFound) {
+		t.Errorf("Detach = %v, want ErrNotFound", err)
 	}
 }
 
