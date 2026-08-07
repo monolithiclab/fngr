@@ -152,7 +152,29 @@ make ci             # codefix + format + lint + test
   `*sql.DB` is a pool, so an Exec configures one connection and leaves the rest at SQLite
   defaults (`foreign_keys=OFF`, `busy_timeout=0`), which silently loses events under concurrent
   writes. Don't move them back. `Open` pings once so an unusable path fails there rather than
-  from an arbitrary later query.
+  from an arbitrary later query. That ping's error goes through `openHint` → `pathHint` →
+  `dirHint`, which replace the two result codes that name the database whatever is actually
+  wrong — SQLITE_CANTOPEN (`unable to open database file`) and, once the file exists,
+  SQLITE_READONLY (`attempt to write a readonly database`, said of a directory a `fngr list`
+  never meant to write) — with the filesystem object at fault: the path is a directory, the file
+  is not readable, or its parent is missing, is not a directory, or is not writable. `openHint`
+  masks the code to its low byte, since those arrive extended (`SQLITE_READONLY_DIRECTORY` is
+  1544, not 8), and gates on the *type and code* rather than the message text, so a driver
+  reword costs nothing. Any code outside those two keeps the driver's own text, which is
+  sometimes the better answer even when the path is also broken — a corrupt file in a read-only
+  directory should say `file is not a database (26)`. `dirHint` is called directly on the
+  `create == false` missing-file branch (the stat there already settled the file half), so
+  `fngr list --db /nope/x.db` says the directory does not exist instead of suggesting
+  `fngr add`, which would fail the same way; it is also the only path that runs when nothing has
+  failed yet, an accepted cost because a user who cannot write the directory needs telling on
+  exactly that run. Its message names the `-wal`/`-shm` siblings, because the parent being
+  writable is what a *read* needs too and no message about the database file explains that. The
+  writability probe is a real `os.CreateTemp` rather than a mode-bit read, since ACLs, read-only
+  mounts and a container UID that doesn't own the volume all deny a write the bits allow — but
+  only `fs.ErrPermission` and `EROFS` are reported as "not writable", because a full disk or an
+  fd-exhausted process fails the probe too (and the latter is itself a reason SQLite returns
+  CANTOPEN), and the hint *replaces* the driver text rather than joining it, so a guess there
+  would swap a true diagnosis for a false one.
 - `internal/db/migrate.go` — Ordered list of migrations gated by `PRAGMA user_version`. Pre-migration
   databases are detected via the legacy v1 `events` table and bumped to `user_version = 1`.
   Migration 2 deduplicates `event_meta` and adds a UNIQUE index on `(key, value, event_id)` so

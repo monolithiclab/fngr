@@ -9,10 +9,11 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
-	_ "modernc.org/sqlite"
+	"modernc.org/sqlite"
 )
 
 // testDB opens an empty database with no migrations applied. It uses a temp
@@ -311,6 +312,11 @@ func TestOpen_CreateFalseNotExists(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for nonexistent db with create=false")
 	}
+	// Nothing is wrong with the path — the database has simply not been
+	// created yet, which is the one case the hint must stay quiet about.
+	if !strings.Contains(err.Error(), "use 'fngr add' to create one") {
+		t.Errorf("Open = %q, want the create-one hint", err)
+	}
 }
 
 func TestMigrate_V2DedupesAndAddsUnique(t *testing.T) {
@@ -558,5 +564,191 @@ func TestOpen_PathWithURISpecialChars(t *testing.T) {
 				t.Errorf("expected database at %q: %v", dbPath, err)
 			}
 		})
+	}
+}
+
+// restrict chmods path and undoes it on cleanup, because t.TempDir's own
+// removal cannot enter a directory it may not write. Under root the mode bits
+// are advisory, so every case built on it is skipped there.
+func restrict(t *testing.T, path string, mode fs.FileMode) {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores the mode bits this case relies on")
+	}
+	if err := os.Chmod(path, mode); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, 0o755) })
+}
+
+// seedDB creates a real database at path and closes it.
+func seedDB(t *testing.T, path string) {
+	t.Helper()
+	database, err := Open(path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestOpen_PathErrorsAreExplained covers the translation of the two result
+// codes that name the database whatever is actually at fault — SQLITE_CANTOPEN
+// ("unable to open database file") and, once the file exists, SQLITE_READONLY
+// ("attempt to write a readonly database", said of a directory) — into the
+// filesystem object standing in the way.
+func TestOpen_PathErrorsAreExplained(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, dir string) string
+		want  string
+	}{
+		{
+			name: "path is a directory",
+			setup: func(t *testing.T, dir string) string {
+				p := filepath.Join(dir, "adir")
+				if err := os.Mkdir(p, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				return p
+			},
+			want: "is a directory, not a database file",
+		},
+		{
+			name: "parent directory missing",
+			setup: func(_ *testing.T, dir string) string {
+				return filepath.Join(dir, "nope", "fngr.db")
+			},
+			want: "does not exist",
+		},
+		{
+			name: "parent is a regular file",
+			setup: func(t *testing.T, dir string) string {
+				p := filepath.Join(dir, "afile")
+				if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return filepath.Join(p, "fngr.db")
+			},
+			want: "is not a directory",
+		},
+		{
+			name: "parent directory not writable",
+			setup: func(t *testing.T, dir string) string {
+				restrict(t, dir, 0o555)
+				return filepath.Join(dir, "fngr.db")
+			},
+			want: "-wal and fngr.db-shm",
+		},
+		{
+			// The container shape: a single-file bind mount leaves the
+			// database readable and the directory around it root-owned.
+			// SQLite reports SQLITE_READONLY_DIRECTORY here, not CANTOPEN,
+			// and calls a `fngr list` an attempt to write.
+			name: "existing database in a non-writable directory",
+			setup: func(t *testing.T, dir string) string {
+				p := filepath.Join(dir, "fngr.db")
+				seedDB(t, p)
+				restrict(t, dir, 0o555)
+				return p
+			},
+			want: "-wal and fngr.db-shm",
+		},
+		{
+			// One `sudo fngr add` leaves a database its owner can no longer
+			// read. The directory is fine, so only the file itself explains
+			// the failure.
+			name: "database file not readable",
+			setup: func(t *testing.T, dir string) string {
+				p := filepath.Join(dir, "fngr.db")
+				seedDB(t, p)
+				restrict(t, p, 0o000)
+				return p
+			},
+			want: "is not readable",
+		},
+	}
+
+	// Both entry points reach the explanation: create=true fails inside the
+	// driver, create=false at Open's own missing-file check, where the
+	// generic "use 'fngr add' to create one" would be advice that fails the
+	// same way.
+	for _, create := range []bool{true, false} {
+		for _, tt := range tests {
+			t.Run(fmt.Sprintf("%s/create=%v", tt.name, create), func(t *testing.T) {
+				t.Parallel()
+				path := tt.setup(t, t.TempDir())
+
+				database, err := Open(path, create)
+				if err == nil {
+					_ = database.Close()
+					t.Fatalf("Open(%q, %v) succeeded, want error", path, create)
+				}
+				if !strings.Contains(err.Error(), tt.want) {
+					t.Errorf("Open(%q, %v) = %q, want it to contain %q", path, create, err, tt.want)
+				}
+				// The hint replaces the driver's text rather than joining
+				// it, so nothing sqlite wrote should still be wrapped.
+				var serr *sqlite.Error
+				if errors.As(err, &serr) {
+					t.Errorf("Open(%q, %v) = %q, still wraps the driver error", path, create, err)
+				}
+			})
+		}
+	}
+}
+
+// TestOpen_DriverErrorSurvivesAnExplainablePath is the case that justifies
+// openHint's result-code gate: the path has a real problem *and* the driver
+// has a better answer than the path does. Dropping the gate makes the
+// unwritable directory shout down "file is not a database".
+func TestOpen_DriverErrorSurvivesAnExplainablePath(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "fngr.db")
+	if err := os.WriteFile(path, []byte("this is not a database"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	restrict(t, dir, 0o555)
+
+	database, err := Open(path, true)
+	if err == nil {
+		_ = database.Close()
+		t.Fatal("Open on a non-database file succeeded, want error")
+	}
+	if !strings.Contains(err.Error(), "file is not a database") {
+		t.Errorf("Open = %q, want the driver's own diagnosis", err)
+	}
+}
+
+// TestPathHint_UnstattableParent covers the one path where the hint gives up:
+// it cannot see the parent at all, so it has nothing to say the driver hasn't
+// already said.
+func TestPathHint_UnstattableParent(t *testing.T) {
+	t.Parallel()
+	closed := filepath.Join(t.TempDir(), "closed")
+	if err := os.MkdirAll(filepath.Join(closed, "inner"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	restrict(t, closed, 0o000)
+
+	if got := pathHint(filepath.Join(closed, "inner", "fngr.db")); got != "" {
+		t.Errorf("pathHint(unstattable parent) = %q, want \"\"", got)
+	}
+}
+
+func TestOpenHint_IgnoresUnrelatedErrors(t *testing.T) {
+	t.Parallel()
+	// A path that pathHint would gladly explain, paired with errors that are
+	// not the ones openHint exists to translate.
+	dir := t.TempDir()
+	if got := openHint(dir, errors.New("some other failure")); got != "" {
+		t.Errorf("openHint(non-sqlite error) = %q, want \"\"", got)
+	}
+	if got := openHint(dir, &sqlite.Error{}); got != "" {
+		t.Errorf("openHint(code 0) = %q, want \"\"", got)
 	}
 }
