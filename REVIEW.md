@@ -2009,6 +2009,23 @@ Grouped; each is small and independently actionable.
   `cannot set pragma foreign_keys: unable to open database file (14)`; a
   non-SQLite file gives `cannot set pragma journal_mode: file is not a
   database (26)`. None say "is a directory" / "not a database file".
+  *Done: [C1](#c1) moved the pragmas into the DSN, so the prefix is now
+  `cannot open database <path>`. On top of that, `db.openHint` translates the
+  two result codes that name the database whatever is at fault —
+  SQLITE_CANTOPEN and, once the file exists, SQLITE_READONLY (which reports a
+  read-only *directory* as "attempt to write a readonly database", the
+  container single-file-bind-mount case) — into the filesystem object actually
+  standing in the way: a directory, an unreadable file, or a parent that is
+  missing, is not a directory, or is not writable (that message names the
+  `-wal`/`-shm` siblings, since needing them is why a read fails too). The
+  driver's own text survives wherever it is the better answer, as with
+  `file is not a database (26)` — including for a corrupt file that also sits
+  in a read-only directory. `--db ""` is not one of these: Kong's
+  `type:"path"` expands it to the current directory, which then reports as
+  the directory it is. Not covered, and out of scope for an open-time hint: a
+  database file that is readable but not writable opens fine and fails at the
+  first write with SQLite's own `attempt to write a readonly database (8)`,
+  which is accurate there.*
 - Cycle errors double the sentinel text: `attaching event 3 to event 5 would
   form a cycle: would create a parent cycle`.
 - `Renamed 1 occurrence(s)` / `Deleted 1 occurrence(s)` — pluralize properly.
@@ -2048,6 +2065,8 @@ Grouped; each is small and independently actionable.
 - **`make bench` runs no benchmarks** — the repo has zero `Benchmark*`
   functions. All six packages report `PASS` with only tests. Worth knowing if
   the target is assumed to be doing something.
+  *Done as a side effect of [H2](#h2): `BenchmarkTree_DeepChain` is the first
+  one, and it guards the tree renderer's O(depth²) allocation regression.*
 
 ---
 

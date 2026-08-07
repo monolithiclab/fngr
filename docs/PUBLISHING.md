@@ -455,10 +455,14 @@ single-file bind mount:
 
 ```bash
 docker run --rm -v "$HOME/.foo.db:/data/foo.db" -e FOO_DB=/data/foo.db ghcr.io/...
-# error: cannot open database /data/foo.db: attempt to write a readonly database (1544)
+# error: cannot open database /data/foo.db: directory /data is not writable — SQLite
+# creates foo.db-wal and foo.db-shm beside the database, so even reading it needs one
 ```
 
-The mounted file itself is writable; `/data` around it is not. It is
+SQLite's own answer here is `attempt to write a readonly database
+(1544)`, which names the database and calls a `fngr list` a write;
+`internal/db`'s `openHint` translates it. The mounted file itself is
+writable; `/data` around it is not. It is
 a directory in the container's own layer, owned by root, and SQLite in
 WAL mode has to create `foo.db-wal` and `foo.db-shm` *beside* the
 database — so this fails on reads too, not just writes. Adding

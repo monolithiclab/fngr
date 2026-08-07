@@ -75,9 +75,10 @@ docker run --rm \
 and creates `fngr.db-wal` and `fngr.db-shm` beside the database, so
 the *directory* has to be writable; mounting only the file leaves the
 directory around it owned by root inside the container, and every
-command fails with `attempt to write a readonly database` — reads
-included, since WAL needs `-shm` to open the database at all. The
-mount target (`/data` above) is otherwise arbitrary.
+command — reads included — fails with `directory /data is not writable
+— SQLite creates fngr.db-wal and fngr.db-shm beside the database, so
+even reading it needs one`. The mount target (`/data` above) is
+otherwise arbitrary.
 
 `--user "$(id -u):$(id -g)"` is what makes the directory mount
 writable in the usual case: a directory you own is mode 0755, which
