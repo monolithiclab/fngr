@@ -483,10 +483,21 @@ make ci             # codefix + format + lint + test
   the same batch (`ParentIndex`, mutually exclusive with the former) — the latter is what lets
   a JSON import re-create a tree whose ids don't exist in the target yet. Batch parents are
   wired up by an UPDATE pass *after* the insert loop, since a child may be inserted before its
-  parent (`fngr --format=json` emits newest-first); `validateParentIndexes` rejects
-  out-of-range indexes and cycles up front, because SQLite's FK check only proves the parent
+  parent (`fngr --format=json` emits newest-first); `requireAcyclicParentIndexes` rejects
+  cycles up front, because SQLite's FK check only proves the parent
   row exists and would happily commit a cycle unreachable from any root.
-  `addInTx` also enforces `requireOneAuthor` and stamps each meta row's `source`, re-deriving
+  Every other per-record check — the index range, `ParentID`/`ParentIndex` exclusivity, a
+  non-empty title, `requireOneAuthor`, `requireStorableMeta` — runs in `validateAddInputs`, one
+  pre-pass over the batch *before* the first INSERT, and each message names the record it came
+  from. Both halves of that are the point. The checks used to sit inside the insert loop, so a
+  10 000-record import failing on the last one wrote and rolled back 9 999 events to say
+  `title cannot be empty` with nothing to say *which*. The record number comes from
+  `recordPrefix`, which stays silent on a one-record batch: `Add` is the common caller and
+  `record 0:` in front of a message about the only record there was is noise. The batch index
+  lines up with `cmd/fngr/add_json.go`'s own `--format=json: record N:` because `addInputs` is
+  built one-to-one and in order — those CLI checks run first and short-circuit, so the two
+  prefixes never stack.
+  `addInTx` stamps each meta row's `source`, re-deriving
   `parse.BodyTags(parse.EventText(...))` because `AddInput.Meta` arrives already merged; a tuple
   the text yields is recorded as body-derived even when `--meta` named it too — the same
   tie-break migration 5 makes, which also keeps a `--format=json` round trip from freezing every
@@ -550,6 +561,13 @@ make ci             # codefix + format + lint + test
   just a protected one, since a blank value is exactly the unrepairable state — which is also
   what keeps a rename from minting the whitespace key `-m` refuses. The *old* one is unchecked
   on purpose: a rename is how a row an older build wrote gets repaired.
+  Both verbs are one call to `rewriteMetaTuple`, which runs a statement over every row carrying
+  a `(key, value)` tuple and resyncs the FTS content of the events that carried it. They differ
+  in that statement and were otherwise the same forty lines — including the ordering that makes
+  them correct, which is the reason to share rather than merely the saving: the affected ids
+  must be read *before* the statement runs, because afterwards there is no tuple left to find
+  them by and an event's FTS content includes its `key=value` tokens. The protected-key gate
+  stays at the call sites, since that is the one thing the two answer differently.
   All functions accept
   `context.Context`. `ErrNotFound`, `ErrCycle`, `ErrTimeRange` and `ErrCorruptTree` sentinels —
   the last one distinct from `ErrCycle` on purpose: `ErrCycle` refuses a requested change,
