@@ -207,6 +207,59 @@ Fixes for real friction surfaced by using the tool, not new features.
   half is unchecked so `-S 'tag=*'` stays the "everything tagged" query
   it reads as. The accepted cost: a body *quoting* a `key=value` string
   is no longer reachable by searching for it. Review issue M7.
+- **Exit codes are a contract, and a short one** — three classes were
+  in use and none documented: `1` for an error fngr diagnosed, `2` for a
+  Go panic, and `80` for a parse failure. That 80 is Kong's number,
+  unguessable and meaningless outside it, so documenting it would have
+  documented the leak; `exitCode` in `main.go` now owns the mapping and
+  a refused command line exits `2`. Keeping the set *closed* is the half
+  that took a second pass: mapping every unrecognized status to `2` by
+  elimination — so the literal 80 need never be named — quietly caught
+  statuses that were not parse failures at all. `FatalIfErrorf` runs
+  every error through `kong.ExitCoder`, so an `$EDITOR` exiting `3`
+  arrived as an `*exec.ExitError` and would have been reported as "the
+  command line could not be parsed, nothing was attempted" for a command
+  that ran. Everything but Kong's own 80 now maps to `1`, which turns a
+  documented lie back into the truth. The same parse failure used to print
+  the whole 30-line command list before the message, putting `unknown
+  flag --bogus` 25 lines below the fold — `kong.ShortUsageOnError()`
+  makes it two lines and a pointer to `--help`. Still Kong's and waiting
+  on the `main.go` restructure: the usage text goes to stdout while the
+  error goes to stderr.
+- **Errors stop naming Go** — a JSON import with `"meta": {...}` answered
+  `cannot unmarshal object into Go struct field jsonAddInput.meta of type
+  [][2]string`, a private type name and a Go declaration shown to someone
+  holding a JSON file. `wireTypeError` restates it as `field "meta": got
+  object, want array (at byte 21)`; the offset is there because a batch
+  runs to 10 000 records and `encoding/json` keeps no record index. The
+  "unrecognized time" hint had the same shape of leak, offering `3:04PM`
+  — Go's reference clock — in a list of placeholders, and now says
+  `HH:MMpm`. That one token had to be fixed in three files, which was the
+  tell: the accepted vocabulary is now `timefmt.AbsoluteForms` /
+  `RelativeForms`, built into the hint and threaded into the `--time` and
+  `event time` help through `kongVars`, the way `render.ListFormats`
+  already reached `--format`.
+
+## Proposed (not yet scheduled)
+
+Real gaps from review 2026-07 that are new surface rather than fixes.
+Listed so they are not rediscovered as bugs; each needs a use case
+before it is worth the CLI surface.
+
+- **`fngr meta --format`** — the one output surface with no
+  machine-readable form, which is where you would script a tag audit or
+  a bulk rename. `ListMeta` already returns structured rows, so this is
+  a flag plus a `render.Meta(w, format, rows)`. Note that it also props
+  up an existing rejection: "bulk operations" below rests on
+  `fngr -S … --format=json | jq | xargs`, and that composition works for
+  events but not for metadata.
+- **`snippet()` in search results** — `-S kubernetes` on an event whose
+  *body* mentions it shows only the title, with no indication of why it
+  matched, so every hit in a body-heavy journal needs a follow-up
+  `fngr event N`. FTS5 has `snippet()` built in, so it is a query change
+  rather than new machinery. The open question is which formats get it:
+  a snippet column is a listing affordance, and `json`/`csv` already
+  carry the whole body.
 
 ## Publishing pipeline polish
 
@@ -277,7 +330,8 @@ only on real demand.
 - **Bulk operations / filtered delete** — composes from
   `fngr -S '...' --format json | jq | xargs fngr delete` for the
   rare case. Adding `--filter` to `delete` adds destructive surface
-  area for marginal value.
+  area for marginal value. The composition covers events only; the
+  metadata half needs `fngr meta --format` (see "Proposed" above).
 - **`fngr add -` as explicit stdin form** — auto-detect via non-TTY
   pipe handles every real workflow; explicit form would only force
   stdin in a TTY, no use case today.

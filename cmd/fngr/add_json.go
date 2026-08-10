@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -56,7 +58,7 @@ func parseJSONAddInput(raw string) ([]jsonAddInput, error) {
 		dec.DisallowUnknownFields()
 		var batch []jsonAddInput
 		if err := dec.Decode(&batch); err != nil {
-			return nil, fmt.Errorf("--format=json: %w", err)
+			return nil, fmt.Errorf("--format=json: %w", wireTypeError(err))
 		}
 		if len(batch) > maxJSONBatchSize {
 			return nil, fmt.Errorf("--format=json: batch size %d exceeds limit %d (split into smaller batches)", len(batch), maxJSONBatchSize)
@@ -67,9 +69,62 @@ func parseJSONAddInput(raw string) ([]jsonAddInput, error) {
 	dec.DisallowUnknownFields()
 	var one jsonAddInput
 	if err := dec.Decode(&one); err != nil {
-		return nil, fmt.Errorf("--format=json: %w", err)
+		return nil, fmt.Errorf("--format=json: %w", wireTypeError(err))
 	}
 	return []jsonAddInput{one}, nil
+}
+
+// wireTypeError restates encoding/json's type mismatch in terms of the wire
+// format, and passes every other decode error through untouched.
+//
+// json.UnmarshalTypeError renders as `cannot unmarshal object into Go struct
+// field jsonAddInput.meta of type [][2]string`, which names a private Go type
+// and a Go declaration at someone holding a JSON file. The three facts worth
+// keeping are all fields on it: which field, what arrived, what was wanted.
+// The byte offset comes along because a batch runs to 10 000 records and the
+// field name alone does not say which one — it is the only locator the decoder
+// keeps, records having no index at this stage.
+//
+// A top-level mismatch (`42`, or an array of strings) has no Field at all, and
+// is the case that leaks worst: `cannot unmarshal number into Go value of type
+// main.jsonAddInput` names the private type outright. So the field name is a
+// prefix rather than a precondition — skipping the translation whenever it was
+// missing left exactly the message this function exists to replace.
+func wireTypeError(err error) error {
+	var typeErr *json.UnmarshalTypeError
+	if !errors.As(err, &typeErr) {
+		return err
+	}
+	where := "input"
+	if typeErr.Field != "" {
+		where = fmt.Sprintf("field %q", typeErr.Field)
+	}
+	return fmt.Errorf("%s: got %s, want %s (at byte %d)",
+		where, typeErr.Value, wireTypeName(typeErr.Type), typeErr.Offset)
+}
+
+// wireTypeName names a Go type the way JSON spells it. Kind-level only: the
+// message says which JSON *shape* was wanted, and the exact one is the README's
+// job — "array of 2-element array of string" describes `meta` no better than
+// "array" does, and reads worse.
+//
+// No pointer case: encoding/json indirects before it reports, so a *int64 field
+// arrives here as int64 and the arm would be dead code carrying a recursion.
+func wireTypeName(t reflect.Type) string {
+	switch t.Kind() {
+	case reflect.String:
+		return "string"
+	case reflect.Bool:
+		return "boolean"
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Float32, reflect.Float64:
+		return "number"
+	case reflect.Slice, reflect.Array:
+		return "array"
+	default:
+		return "object"
+	}
 }
 
 func (c *AddCmd) runJSON(s eventStore, io ioStreams, raw string) error {

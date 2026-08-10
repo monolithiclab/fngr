@@ -8,8 +8,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/alecthomas/kong"
-
 	"github.com/monolithiclab/fngr/internal/event"
 )
 
@@ -121,17 +119,8 @@ func newDispatcherErr(t *testing.T, stdin string, isTTY bool) (func(argv []strin
 func newDispatcherOn(t *testing.T, store *event.Store, stdin string, isTTY bool) (func(argv []string) (string, error), *bytes.Buffer) {
 	t.Helper()
 
-	var cli CLI
-	parser, err := kong.New(&cli,
-		kong.Name("fngr"),
-		kongVars("test", "tester"),
-		kong.Exit(func(int) {}),
-		// Keep Kong's usage/error output out of the test log.
-		kong.Writers(&bytes.Buffer{}, &bytes.Buffer{}),
-	)
-	if err != nil {
-		t.Fatalf("kong.New: %v", err)
-	}
+	// Discard writers keep Kong's usage/error output out of the test log.
+	parser := newTestParser(t, &bytes.Buffer{}, &bytes.Buffer{}, nil)
 
 	errBuf := &bytes.Buffer{}
 	return func(argv []string) (string, error) {

@@ -19,7 +19,7 @@ type AddCmd struct {
 	Author string   `help:"Event author (used as default if JSON record omits meta.author)." env:"FNGR_AUTHOR" default:"${USER}"`
 	Parent *int64   `help:"Parent event ID (used as default if JSON record omits parent_id)."`
 	Meta   []string `help:"Metadata key=value pairs (used as defaults if JSON record omits meta)." short:"m"`
-	Time   string   `help:"Override event timestamp; absolute (YYYY-MM-DD, 3:04PM) or relative (\"2 days ago\", \"yesterday at 9am\", \"now\"). Used as default if JSON record omits created_at." short:"t"`
+	Time   string   `help:"Override event timestamp: absolute (${TIME_ABSOLUTE}) or relative (${TIME_RELATIVE}). Used as default if JSON record omits created_at." short:"t"`
 }
 
 func (c *AddCmd) Run(s eventStore, io ioStreams) error {

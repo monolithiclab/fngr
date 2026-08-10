@@ -9,25 +9,6 @@ import (
 	"github.com/alecthomas/kong"
 )
 
-// newTestParser builds a kong.Parser identical to main()'s, with Compact
-// help and a captured stdout/stderr writer so help output can be diffed.
-func newTestParser(t *testing.T, out *bytes.Buffer) *kong.Kong {
-	t.Helper()
-	var cli CLI
-	parser, err := kong.New(&cli,
-		kong.Name("fngr"),
-		kong.Description("A CLI to log and track events."),
-		kongVars("test", "tester"),
-		kong.ConfigureHelp(kong.HelpOptions{Compact: true}),
-		kong.Writers(out, out),
-		kong.Exit(func(int) {}),
-	)
-	if err != nil {
-		t.Fatalf("kong.New: %v", err)
-	}
-	return parser
-}
-
 // helpOutput captures the help text Kong emits for argv. Accepts BOTH
 // shapes verbatim:
 //   - flag path:  ["--help"], ["add", "--help"], ["event", "show", "--help"]
@@ -47,7 +28,7 @@ func newTestParser(t *testing.T, out *bytes.Buffer) *kong.Kong {
 func helpOutput(t *testing.T, argv []string) string {
 	t.Helper()
 	var buf bytes.Buffer
-	parser := newTestParser(t, &buf)
+	parser := newTestParser(t, &buf, &buf, nil)
 	kctx, err := parser.Parse(argv)
 	if err != nil {
 		return "ERR:" + err.Error()
@@ -108,7 +89,7 @@ func TestHelpCmd_UnknownCommandErrors(t *testing.T) {
 // asserting on Kong's rendered usage text.
 func TestCheckCommandPath(t *testing.T) {
 	t.Parallel()
-	parser := newTestParser(t, &bytes.Buffer{})
+	parser := newTestParser(t, &bytes.Buffer{}, &bytes.Buffer{}, nil)
 	root := parser.Model.Node
 
 	tests := []struct {
@@ -166,7 +147,7 @@ func TestCheckCommandPath(t *testing.T) {
 // `fngr help event 5` report a mistyped command.
 func TestTakesArgument(t *testing.T) {
 	t.Parallel()
-	parser := newTestParser(t, &bytes.Buffer{})
+	parser := newTestParser(t, &bytes.Buffer{}, &bytes.Buffer{}, nil)
 	root := parser.Model.Node
 
 	tests := []struct {
@@ -196,7 +177,7 @@ func TestTakesArgument(t *testing.T) {
 // sub-commands — an <id> positional is not something to "try one of".
 func TestCommandNames(t *testing.T) {
 	t.Parallel()
-	parser := newTestParser(t, &bytes.Buffer{})
+	parser := newTestParser(t, &bytes.Buffer{}, &bytes.Buffer{}, nil)
 	names := commandNames(parser.Model.Node)
 
 	if !slices.IsSorted(names) {
