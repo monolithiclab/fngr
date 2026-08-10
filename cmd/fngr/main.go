@@ -1,7 +1,10 @@
 package main
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/user"
 	"strings"
@@ -62,55 +65,42 @@ func kongVars(version, username string) kong.Vars {
 }
 
 const (
-	// exitError is the status for an error fngr diagnosed and reported, and
-	// exitUsage for a command line it would not parse. Success is 0, --help and
-	// --version included, being successful requests for help. See "Exit codes"
-	// in the README.
+	// The whole exit vocabulary: 0 for success (--help and --version included,
+	// being successful requests for help), exitError for an error fngr
+	// diagnosed and reported, exitUsage for a command line it would not parse.
+	// See "Exit codes" in the README.
 	//
-	// 2 rather than the 80 Kong picks, because 80 is unguessable and means
-	// nothing outside Kong: documenting it would document the leak rather than
-	// close it. An unhandled panic also exits 2, being the Go runtime's own
-	// status and not ours to choose — it is distinguishable by the `panic:` dump
-	// on stderr, and it is a bug rather than a state the contract describes.
+	// It is a closed set because run returns one of these three and nothing
+	// else — not because anything maps onto them. The version that mapped was
+	// the version that leaked: fngr called kong.Parse, so the status came from
+	// Kong's FatalIfErrorf, which runs every error through kong.ExitCoder and
+	// would happily exit 3 because an $EDITOR did.
+	//
+	// 2 rather than the 80 Kong exits with on a parse failure, because 80 is
+	// unguessable and means nothing outside Kong. An unhandled panic also exits
+	// 2, being the Go runtime's status and not ours to choose — it is a bug
+	// rather than a state the contract describes, and the `panic:` dump on
+	// stderr tells them apart.
+	exitOK    = 0
 	exitError = 1
 	exitUsage = 2
-
-	// kongUsageStatus is the status Kong exits with on a parse failure. Naming
-	// the literal is a shim, not a contract: the constant Kong uses is
-	// unexported, and the type that would let us ask instead (*kong.ParseError,
-	// which is exported) is only reachable if fngr owns the kong.New/Parse pair
-	// rather than calling kong.Parse — queued with the rest of the main.go
-	// restructure. TestKongOptions_ParseErrorIsShortAndExitsTwo drives a real
-	// parse failure through the real parser, so a renumbering fails there rather
-	// than reaching a user.
-	kongUsageStatus = 80
 )
 
-// exitCode maps the status Kong is about to exit with onto fngr's contract,
-// which is a closed set: 0, 1, 2 and nothing else.
-//
-// Mapping the rest to exitError rather than passing it through is what keeps
-// that set closed. Kong's own statuses are 0, 1 and kongUsageStatus, but
-// FatalIfErrorf runs every error through kong.ExitCoder first, so *any* status
-// can arrive: an $EDITOR that exits 3 reaches AddCmd.Run as an *exec.ExitError,
-// which carries ExitCode() and would otherwise make fngr exit 3 as well. That
-// is the editor's status, not fngr's, and the run it describes is one fngr
-// attempted and reported on — exitError, by the contract's own wording.
-//
-// Mapping the unknown to exitUsage instead (by elimination, so the number 80
-// need never be named) is the version of this that was wrong: it answers "the
-// command line could not be parsed, nothing was attempted" for a command that
-// ran, which is a documented lie where the leak was merely undocumented.
+// exitCode clamps a status Kong picks into that vocabulary. Kong reaches the
+// exit function from exactly two places now that fngr owns Parse and never
+// calls FatalIfErrorf — the --help and --version hooks — and both pass 0. The
+// clamp is what keeps that an observation rather than an assumption.
 func exitCode(kongStatus int) int {
-	switch kongStatus {
-	case 0:
-		return 0
-	case kongUsageStatus:
-		return exitUsage
-	default:
-		return exitError
+	if kongStatus == exitOK {
+		return exitOK
 	}
+	return exitError
 }
+
+// helpOptions is the help configuration, named rather than inlined into
+// kongOptions because writeShortUsage calls a help printer directly and must
+// pass the same one — Kong keeps its copy in an unexported field.
+var helpOptions = kong.HelpOptions{Compact: true}
 
 // kongOptions is the parser configuration, in one place because the tests build
 // their own parser and a difference between the two is a difference the tests
@@ -119,52 +109,213 @@ func exitCode(kongStatus int) int {
 // override, since a test that supplied its own would step over the very mapping
 // it came to check.
 //
-// ShortUsageOnError, not UsageOnError: the full help is 30 lines of command
-// list, which put the actual message ("unknown flag --foo") below the fold of
-// every terminal. The short form is two lines and a pointer to `--help`.
+// No kong.ShortUsageOnError: it configures FatalIfErrorf, which fngr does not
+// call. writeShortUsage prints the same two lines, on stderr — see
+// reportParseError.
 func kongOptions(version, username string, exit func(int)) []kong.Option {
 	return []kong.Option{
 		kong.Name("fngr"),
 		kong.Description("A CLI to log and track events."),
 		kongVars(version, username),
-		kong.ShortUsageOnError(),
-		kong.ConfigureHelp(kong.HelpOptions{Compact: true}),
+		kong.ConfigureHelp(helpOptions),
 		kong.Exit(func(status int) { exit(exitCode(status)) }),
 	}
 }
 
 func main() {
-	username := currentUser()
-
-	var cli CLI
-	ctx := kong.Parse(&cli, kongOptions(version, username, os.Exit)...)
-
-	dbPath, err := db.ResolvePath(cli.DB)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(exitError)
-	}
-
-	// Help shouldn't require a DB. Kong's --help flag exits during Parse;
-	// the explicit `help` verb returns from Parse normally and reaches here.
-	if strings.HasPrefix(ctx.Command(), "help") {
-		ctx.FatalIfErrorf(ctx.Run())
-		return
-	}
-
-	database, err := db.Open(dbPath, strings.HasPrefix(ctx.Command(), "add"))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(exitError)
-	}
-	defer database.Close()
-
-	ctx.BindTo(event.NewStore(database), (*eventStore)(nil))
-	ctx.Bind(ioStreams{
+	streams := ioStreams{
 		In:    os.Stdin,
 		Out:   os.Stdout,
 		Err:   os.Stderr,
 		IsTTY: term.IsTerminal(int(os.Stdin.Fd())), // #nosec G115 -- fd is a small int, cannot overflow
+	}
+	os.Exit(run(os.Args[1:], streams, os.Exit))
+}
+
+// run is main's body, returning a status instead of exiting on one, so that
+// `defer database.Close()` actually runs — reaching os.Exit through Kong's
+// FatalIfErrorf meant it never did, leaving a WAL database's -wal and -shm
+// files for the next process to recover and its checkpoint undone.
+//
+// It owns the kong.New/Parse pair rather than calling kong.Parse, which is what
+// makes three things fngr's decision instead of Kong's: the exit status (above),
+// where a message about a failed command line goes (reportParseError), and
+// whether a mistyped command is diagnosed at all (checkCommandPath, which until
+// now only the `help` verb reached).
+//
+// exit is Kong's, not run's: the --help and --version hooks call it mid-Parse
+// and expect it not to return. Nothing is open yet at that point, which is why
+// they can leave without unwinding.
+func run(args []string, streams ioStreams, exit func(int)) int {
+	var cli CLI
+	parser, err := kong.New(&cli, append(kongOptions(version, currentUser(), exit),
+		kong.Writers(streams.Out, streams.Err),
+	)...)
+	if err != nil {
+		// Unreachable short of a malformed grammar in CLI, which is a
+		// build-time mistake every test that builds a parser catches first.
+		// Reported rather than panicked so that even then fngr exits inside
+		// its own contract.
+		fmt.Fprintf(streams.Err, "fngr: error: %v\n", err)
+		return exitError
+	}
+
+	ctx, err := parser.Parse(args)
+	if err != nil {
+		return reportParseError(parser, err)
+	}
+
+	ctx.Bind(streams)
+
+	// The store is bound lazily, so which commands need a database is read off
+	// their own Run signatures — `fngr help` declares no eventStore, so nothing
+	// resolves one, so no path is resolved and no file is opened, and it stays
+	// answerable with a --db that is missing or unreadable. That used to be
+	// strings.HasPrefix(ctx.Command(), "help"), true of any command whose name
+	// merely starts that way: `fngr helpers` would have skipped the open and
+	// then run a command with no store to run against.
+	var database *sql.DB
+	defer func() {
+		if database != nil {
+			_ = database.Close()
+		}
+	}()
+	_ = ctx.BindToProvider(func() (eventStore, error) {
+		dbPath, err := db.ResolvePath(cli.DB)
+		if err != nil {
+			return nil, err
+		}
+		opened, err := db.Open(dbPath, createsDB(ctx))
+		if err != nil {
+			return nil, err
+		}
+		database = opened
+		return event.NewStore(opened), nil
 	})
-	ctx.FatalIfErrorf(ctx.Run())
+
+	if err := ctx.Run(); err != nil {
+		return fail(parser, err)
+	}
+	return exitOK
+}
+
+// fail reports an error fngr diagnosed. parser.Errorf is Kong's own formatter
+// — `fngr: error: <msg>`, indented across continuation lines — which is what
+// every error routed through FatalIfErrorf already looked like; the two
+// db.Open messages that went out as a bare `error: …` were the odd ones.
+func fail(parser *kong.Kong, err error) int {
+	parser.Errorf("%s", err)
+	return exitError
+}
+
+// reportParseError answers a command line Kong would not parse.
+//
+// The short usage goes to stderr. Kong's FatalIfErrorf writes it — plus an
+// unconditional blank line — to *stdout*, so `fngr --bogus >/dev/null` showed
+// a bare error with no usage and `fngr --bogus | cat` mixed usage into the
+// data stream.
+//
+// A mistyped command is diagnosed instead of relayed. `list` is
+// default:"withargs", so `fngr evnt 5` is not "no such command" to Kong at all
+// — it re-parses as a stray positional *to list*, and the answer was list's
+// usage block plus `unexpected argument evnt`, naming neither the typo nor the
+// commands that exist. checkCommandPath is the same vetting `fngr help` does;
+// reaching it from here is what makes it cover `fngr <typo>` and not just
+// `fngr help <typo>`.
+func reportParseError(parser *kong.Kong, err error) int {
+	var parseErr *kong.ParseError
+	if !errors.As(err, &parseErr) {
+		// Not a parse failure: a hook or Validate rejected an argv Kong had
+		// already understood, which is fngr diagnosing something rather than
+		// failing to read the command line. Asking by type is only possible
+		// because fngr owns Parse; the alternative was recognising Kong's
+		// unexported status 80 by its number.
+		return fail(parser, err)
+	}
+	if hint := checkCommandPath(unplaced(parseErr.Context)); hint != nil {
+		parser.Errorf("%s", hint)
+		return exitUsage
+	}
+	writeShortUsage(parser, parseErr.Context)
+	parser.Errorf("%s", err)
+	return exitUsage
+}
+
+// unplaced reports where Kong's trace stopped and which of the words it never
+// placed could name a command — the two arguments checkCommandPath wants.
+//
+// Both are read off the failed parse rather than re-derived from argv, because
+// argv cannot be read a second time without rebuilding Kong's scanner. The
+// words that could name a command are the ones left once every flag *and its
+// value* is taken out, and only Kong knows which flags take a value: `list` is
+// default:"withargs", so -S/-n/--format sit on the list node and are spliced in
+// at trace time rather than declared on the root. A scan of the root's own
+// flags therefore read their values as bare words, and `fngr -S ops --bogus`
+// answered `fngr has no command "ops"`, swallowing the unknown flag that was
+// the actual complaint. Path.Remainder() is Kong's own answer to the same
+// question, already tokenized.
+//
+// Scanning stops at the first word starting with `-`: a flag is not a mistyped
+// command, and whatever Kong has to say about it is the better message.
+func unplaced(ctx *kong.Context) (*kong.Node, []string) {
+	var node *kong.Node
+	var rest, prev []string
+	for i, path := range ctx.Path {
+		rem := path.Remainder()
+		if at := path.Node(); at != nil {
+			// A default command is entered without its name being typed, so a
+			// word that failed there belongs to its parent's vocabulary rather
+			// than its own. Consuming nothing is what tells the two apart:
+			// `fngr list extra` drops "list" from the remainder on the way in
+			// and `fngr meat` does not, and only the second is a typo for a
+			// command name.
+			if i > 0 && at.Parent != nil && len(rem) == len(prev) {
+				at = at.Parent
+			}
+			node = at
+		}
+		prev, rest = rem, rem
+	}
+	if node == nil {
+		return nil, nil
+	}
+	var words []string
+	for _, word := range rest {
+		if strings.HasPrefix(word, "-") {
+			break
+		}
+		words = append(words, word)
+	}
+	return node, words
+}
+
+// writeShortUsage prints Kong's own short usage on stderr, and the blank line
+// separating it from the error that follows. The printer is Kong's — the two
+// lines it writes are a format the library owns, and a private copy of them
+// would have to be re-checked against every upgrade — but it writes to the
+// parser's stdout, which is where FatalIfErrorf's copy went and the reason
+// this function exists at all.
+func writeShortUsage(parser *kong.Kong, ctx *kong.Context) {
+	defer func(stdout io.Writer) { parser.Stdout = stdout }(parser.Stdout)
+	parser.Stdout = parser.Stderr
+	_ = kong.DefaultShortHelpPrinter(helpOptions, ctx)
+	fmt.Fprintln(parser.Stderr)
+}
+
+// dbCreator is implemented by a command that may create the database rather
+// than requiring one that already exists.
+type dbCreator interface{ createsDB() bool }
+
+// createsDB reports whether the selected command may create the database. It
+// used to be strings.HasPrefix(ctx.Command(), "add"), true of any command whose
+// name merely starts that way — `fngr addendum` would have silently started a
+// second journal. Selected() is the leaf, so a declaration on `add` is found
+// for `fngr add` and one on a sub-command would be found for that alone.
+func createsDB(ctx *kong.Context) bool {
+	node := ctx.Selected()
+	if node == nil {
+		return false
+	}
+	creator, ok := node.Target.Addr().Interface().(dbCreator)
+	return ok && creator.createsDB()
 }

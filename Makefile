@@ -85,7 +85,7 @@ run:  ## Run the application locally
 
 test:  ## Run unit tests with coverage and race detection
 	go test -race -cover -coverprofile cover.out ./...
-	grep -v -E -f .covignore cover.out > cover.out.tmp && mv cover.out.tmp cover.out
+	test ! -s .covignore || { grep -v -E -f .covignore cover.out > cover.out.tmp && mv cover.out.tmp cover.out; }
 	go tool cover -func cover.out
 
 

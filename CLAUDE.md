@@ -33,31 +33,62 @@ make ci             # codefix + format + lint + test
 
 ## Architecture
 
-- `cmd/fngr/main.go` — Entrypoint. Wires Kong CLI parsing, resolves DB path, opens DB, constructs
-  an `event.Store`, and dispatches to command handlers via Kong bindings (eventStore + ioStreams).
-  The parser configuration is `kongOptions`, one list because the tests build their own parser and
-  a difference between the two is a difference they cannot see; `exit` is a *parameter* rather than
-  an appended override, since a test supplying its own `kong.Exit` steps over the mapping it came
-  to check. That mapping is `exitCode`, which owns the process status and keeps it a *closed* set:
-  `0` success (`--help` and `--version` included), `exitError` (`1`) an error fngr diagnosed,
-  `exitUsage` (`2`) a command line it would not parse — see README "Exit codes". Only
-  `kongUsageStatus` (80, Kong's own) maps to `2`; everything else maps to `1`, and that direction
-  matters. `FatalIfErrorf` runs every error through `kong.ExitCoder` first, so *any* status can
-  arrive — an `$EDITOR` exiting 3 reaches `AddCmd.Run` as an `*exec.ExitError`, which carries
-  `ExitCode()`. Mapping the unknown to `2` instead (by elimination, so the literal 80 need never
-  be named) is the version that was wrong: it answers "the command line could not be parsed,
-  nothing was attempted" for a command that ran, turning an undocumented leak into a documented
-  lie. Naming 80 is a shim, not a contract — the constant is unexported, and the type that would
-  let us ask instead (`*kong.ParseError`, which *is* exported) is only reachable once `main` owns
-  the `kong.New`/`Parse` pair; `TestKongOptions_ParseErrorIsShortAndExitsTwo` drives a real parse
-  failure through the real parser, so a renumbering fails there rather than reaching a user. Also
-  `kong.ShortUsageOnError()`, not
-  `UsageOnError()`: the full help is 30 lines of command list, so `unknown flag --bogus` arrived
-  25 lines below the fold. What is still Kong's and waits on the `main.go` restructure: the short
-  usage prints on *stdout* while the error prints on stderr, and `FatalIfErrorf` adds a blank line
-  there unconditionally — fixing that means owning the call rather than passing options to it.
+- `cmd/fngr/main.go` — Entrypoint. `main` builds the `ioStreams` and calls `run`, which owns the
+  `kong.New`/`Parse` pair and *returns* a status instead of exiting on one. Both halves matter.
+  Returning is what makes the deferred `Close` run — reaching `os.Exit` through Kong's
+  `FatalIfErrorf` meant it never did, leaving a WAL database's `-wal`/`-shm` behind and its
+  checkpoint undone. Owning the parse is what makes three further things fngr's decision rather
+  than Kong's: the exit status, the stream a message about a bad command line goes to, and whether
+  a mistyped command is diagnosed at all. The parser configuration is `kongOptions`, one list
+  because the tests build their own parser and a difference between the two is a difference they
+  cannot see; `exit` is a *parameter* rather than an appended override, since a test supplying its
+  own `kong.Exit` steps over the mapping it came to check.
+  The status vocabulary is `exitOK` / `exitError` (`1`) / `exitUsage` (`2`) — see README
+  "Exit codes" — and it is closed *structurally*, because `run` returns one of the three and
+  nothing else. The version that mapped was the version that leaked: with `kong.Parse` the status
+  came from `FatalIfErrorf`, which runs every error through `kong.ExitCoder` first, so an
+  `$EDITOR` exiting 3 reached `AddCmd.Run` as an `*exec.ExitError` carrying `ExitCode()` and fngr
+  exited 3. `exitCode` survives only as a clamp on the status Kong picks: now that fngr never
+  calls `FatalIfErrorf`, the only live `kong.Exit` call sites are the `--help` and `--version`
+  hooks and both pass 0, and the clamp is what keeps that an observation rather than an
+  assumption. Nothing names 80 any more — `reportParseError` asks `errors.As(err,
+  &parseErr)` instead, `*kong.ParseError` being exported where the status number is not.
+  `reportParseError` also writes the short usage itself, on **stderr**: Kong's
+  `FatalIfErrorf` writes it — plus an unconditional blank line — to *stdout*, so
+  `fngr --bogus >/dev/null` showed a bare error with no usage and `fngr --bogus | cat` mixed usage
+  into the data stream. The printer is still Kong's (`writeShortUsage` swaps `parser.Stdout` for
+  the duration and calls `kong.DefaultShortHelpPrinter`); a private copy of those two lines would
+  be a format the library owns, re-checked on every upgrade. It is the *short* printer, not
+  `Context.PrintUsage`, which routes to the full one: the whole help is 30 lines of command list,
+  so `unknown flag --bogus` arrived 25 lines below the fold. `kong.ShortUsageOnError()` is gone
+  with the `FatalIfErrorf` it configured.
+  A mistyped command is then diagnosed rather than relayed, by running the same
+  `checkCommandPath` `fngr help` uses (see `help.go`) — which is what makes it cover
+  `fngr <typo>` and not just `fngr help <typo>`. Its two arguments come from `unplaced`, which
+  reads them off the *failed parse* (`kong.Path.Remainder()`) rather than re-scanning argv. A
+  second argv scanner is the thing that does not work: the words that could name a command are
+  the ones left once every flag *and its value* is removed, and only Kong knows which flags take
+  a value — `list` is `default:"withargs"`, so `-S`/`-n`/`--format` sit on the list node and are
+  spliced in at trace time, and a scan of the *root* node's flags read their values as bare
+  words. `fngr -S ops --bogus` then answered `fngr has no command "ops"` and swallowed the
+  unknown flag that was the actual complaint. `unplaced` stops scanning at the first word
+  starting with `-` (a flag is nobody's mistyped command) and backs a default command out to its
+  parent when it consumed nothing — `fngr meat` enters `list` without the name being typed, so
+  the word belongs to *fngr*'s vocabulary, while `fngr list extra` consumed `list` on the way in
+  and its stray positional stays Kong's to explain.
+  The store is bound with `ctx.BindToProvider`, so *which* commands need a database is read off
+  their own `Run` signatures: `HelpCmd.Run` declares no `eventStore`, nothing resolves one, and
+  `fngr help` stays answerable with a `--db` that is missing or unreadable. Only whether a command
+  may *create* the file is still declared, by `AddCmd.createsDB` through the `dbCreator` interface.
+  Both used to be `strings.HasPrefix(ctx.Command(), …)`, true of any command whose name merely
+  starts that way — `fngr addendum` would have started a second journal and `fngr helpers` would
+  have skipped the open and then run a command with no store bound.
+  Every diagnosed error goes out through `fail` → `parser.Errorf`, so the two `db.Open` messages
+  that used to print a bare `error: …` now match the `fngr: error: …` everything else has.
   `kongVars` carries `${TIME_ABSOLUTE}` / `${TIME_RELATIVE}` alongside the `${*_FORMATS}`
-  vocabularies, for the same reason: see `internal/timefmt`.
+  vocabularies, for the same reason: see `internal/timefmt`. `helpOptions` is a package var
+  rather than a literal inside `kongOptions` because `writeShortUsage` must pass Kong the same
+  options `kong.ConfigureHelp` got, and Kong keeps its copy unexported.
 - `cmd/fngr/{add,list,event,delete,meta}.go` — Kong command structs with
   `Run(eventStore, ioStreams) error` methods, one file per top-level command. `list` is marked
   `default:"withargs"` so bare `fngr` dispatches to it; the filter is a `-S` / `--search` flag
@@ -132,9 +163,10 @@ make ci             # codefix + format + lint + test
   one of them is the bug: `withargs` puts `event`'s `<id>` on the `show` child, not on `event`.
   `commandChild` matches by name only — fngr declares no aliases, and Kong's alias precedence (an
   alias loses to a real command of that name anywhere among the siblings) is not worth guessing at
-  from outside the framework. Note the check covers `fngr help <typo>`, not `fngr <typo>`; fixing
-  the primary path means `main` owning the parser instead of calling `kong.Parse`, which is
-  queued with the rest of the `main.go` restructure.
+  from outside the framework. `checkCommandPath` is shared with the primary path: `main.go`'s
+  `reportParseError` calls it on a failed parse, so `fngr <typo>` is diagnosed the same way
+  `fngr help <typo>` is — the difference being where the node and the words come from (a walk of
+  `c.Args` here, `unplaced` reading Kong's own trace there).
 - `cmd/fngr/plural.go` — `plural(n, noun)`, the count+noun formatter behind `Renamed 1
   occurrence` / `Imported 3 events`. Regular `-s` only, deliberately: every noun fngr counts takes
   one, and a call site with an irregular noun should say something else — which is why `delete -r`

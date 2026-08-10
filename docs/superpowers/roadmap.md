@@ -211,21 +211,52 @@ Fixes for real friction surfaced by using the tool, not new features.
   in use and none documented: `1` for an error fngr diagnosed, `2` for a
   Go panic, and `80` for a parse failure. That 80 is Kong's number,
   unguessable and meaningless outside it, so documenting it would have
-  documented the leak; `exitCode` in `main.go` now owns the mapping and
-  a refused command line exits `2`. Keeping the set *closed* is the half
-  that took a second pass: mapping every unrecognized status to `2` by
-  elimination — so the literal 80 need never be named — quietly caught
-  statuses that were not parse failures at all. `FatalIfErrorf` runs
-  every error through `kong.ExitCoder`, so an `$EDITOR` exiting `3`
-  arrived as an `*exec.ExitError` and would have been reported as "the
-  command line could not be parsed, nothing was attempted" for a command
-  that ran. Everything but Kong's own 80 now maps to `1`, which turns a
-  documented lie back into the truth. The same parse failure used to print
-  the whole 30-line command list before the message, putting `unknown
-  flag --bogus` 25 lines below the fold — `kong.ShortUsageOnError()`
-  makes it two lines and a pointer to `--help`. Still Kong's and waiting
-  on the `main.go` restructure: the usage text goes to stdout while the
-  error goes to stderr.
+  documented the leak; a refused command line exits `2`. Keeping the set
+  *closed* took two more passes, and the lesson is that a contract you
+  enforce by *mapping* is a contract you do not own. Mapping every
+  unrecognized status to `2` by elimination — so the literal 80 need
+  never be named — quietly caught statuses that were not parse failures
+  at all: `FatalIfErrorf` runs every error through `kong.ExitCoder`, so
+  an `$EDITOR` exiting `3` arrived as an `*exec.ExitError` and was
+  reported as "the command line could not be parsed, nothing was
+  attempted" for a command that ran. Sending everything but 80 to `1`
+  fixed that and left a shim around an unexported constant. The
+  `main.go` restructure removed the mapping instead: `run` owns the
+  `kong.New`/`Parse` pair and *returns* one of three statuses, so the
+  set is closed structurally, and `*kong.ParseError` — exported where
+  the number is not — is what a parse failure is recognized by.
+  The same failure used to print the whole 30-line command list before
+  the message, putting `unknown flag --bogus` 25 lines below the fold;
+  it is now the short usage, and on **stderr**, where it belongs. That
+  last part was Kong's until fngr owned the call.
+- **A typo is diagnosed on the path people actually type** — `fngr evnt 5`
+  answered `unexpected argument evnt`, because `list` is
+  `default:"withargs"` and an unrecognized word re-parses as a stray
+  positional to it. `checkCommandPath` had been fixing that for
+  `fngr help evnt` for a while; the gap was that `main` called the
+  package-level `kong.Parse` and never saw the failing context. Owning
+  the parse closed it. The interesting part is where the candidate words
+  come from: re-scanning argv looks obvious and cannot work, because
+  knowing which words *could* be commands means knowing which flags take
+  a value, and `list`'s are spliced onto the trace at parse time rather
+  than sitting on the root node. That version answered `fngr -S ops
+  --bogus` with `no command "ops"` and swallowed the real complaint.
+  Reading Kong's own trace instead (`kong.Path.Remainder()`) is exact —
+  including the tell that separates `fngr meat` from `fngr list extra`,
+  which is whether the default command consumed a token on the way in.
+- **Which commands need a database is not a list** — it used to be two
+  `strings.HasPrefix(ctx.Command(), …)` tests, one for "skip the open"
+  and one for "may create the file", both true of any command whose name
+  merely started that way: `fngr helpers` would have run with no store
+  bound and `fngr addendum` would have started a second journal. The
+  store is now bound lazily with `ctx.BindToProvider`, so the answer is
+  read off each command's own `Run` signature — `fngr help` declares no
+  `eventStore`, so no path is resolved and no file is opened, which is
+  what keeps it answerable with exactly the broken `--db` it gets reached
+  for. Only "may create it" is still declared, as one method on `AddCmd`.
+  The same restructure made `defer database.Close()` run at all:
+  `FatalIfErrorf` called `os.Exit` past it, so a WAL database never got
+  its checkpoint.
 - **Errors stop naming Go** — a JSON import with `"meta": {...}` answered
   `cannot unmarshal object into Go struct field jsonAddInput.meta of type
   [][2]string`, a private type name and a Go declaration shown to someone

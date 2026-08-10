@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"iter"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -72,7 +71,7 @@ func TestListCmd_FilterSyntaxError(t *testing.T) {
 // dressed up as the user's typo and sent them to read the -S grammar.
 func TestListCmd_QueryErrorKeepsItsOwnMessage(t *testing.T) {
 	t.Parallel()
-	database, err := db.Open(filepath.Join(t.TempDir(), "fngr.db"), true)
+	database, err := db.Open(tempDB(t), true)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}

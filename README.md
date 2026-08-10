@@ -442,12 +442,17 @@ Those three are the whole set. The split is between "wrong request" and
 "request refused": a `2` means the flags or arguments were wrong and no
 database was even opened, so a script can retry a `1` and must not retry a `2`.
 
+Everything fngr says about a failure goes to **stderr**: the `fngr: error: …`
+line, and the short `Usage:` block a `2` prints above it. So `fngr --bogus > out`
+still shows you what went wrong, and a usage message never lands in the data
+stream.
+
 Three things worth knowing. An empty result is a success — `fngr -S nothing`
 exits `0` and says `No events found.` on stderr, so a script reading stdout
 sees the format's own empty value (nothing, `[]`, or a CSV header) either way.
 A child process fngr launches does not get to pick fngr's status either: an
-`$EDITOR` exiting `3` is reported as `error: editor exited: exit status 3` and
-fngr exits `1`, because that is a run fngr attempted and reported on. And an
+`$EDITOR` exiting `3` is reported as `fngr: error: editor exited: exit status 3`
+and fngr exits `1`, because that is a run fngr attempted and reported on. And an
 unhandled panic exits `2` as well; that is the Go runtime's status rather than
 one fngr picks, and it is a bug worth reporting — you can tell it apart by the
 `panic:` dump on stderr.
