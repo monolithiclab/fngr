@@ -322,10 +322,10 @@ almost always precedes its parent. What the two-pass shape does *not* give
 you is cycle rejection: SQLite's foreign key only checks that the parent row
 exists, and in a cycle every row does, so a self-parenting record would
 commit silently and become invisible to every root-anchored query.
-`validateParentIndexes` runs before the first INSERT and rejects out-of-range
+`validateAddInputs` runs before the first INSERT and rejects out-of-range
 indexes, `ParentID`+`ParentIndex` together, and cycles — the last via a
-three-colour walk that stays linear because each record has at most one
-parent.
+three-colour walk (`requireAcyclicParentIndexes`) that stays linear because
+each record has at most one parent.
 
 Two things rode along, both blocking the round trip in practice:
 
@@ -2355,14 +2355,51 @@ are local.
   ListMeta/CountMeta/UpdateMeta/DeleteMeta), `internal.go` (requireEventExists,
   rebuildEventFTS, loadMetaBatch/loadMetaChunk, deleteMetaTuples/
   insertMetaTuples).
-- **Bare `tx.Commit()` at `event.go:351` and `:401`** breaks the wrapping
+- **Per-record validation ran inside `addInTx`'s insert loop.** Not on the
+  original list; found while fixing the two items below. A `--format=json`
+  import of 10 000 records that failed on the last one inserted and rolled back
+  9 999 events in order to report `title cannot be empty` — no index, so
+  nothing in the message said which record to go and fix. **Fixed:** the title,
+  `requireOneAuthor` and `requireStorableMeta` checks are hoisted into
+  `validateAddInputs`, a pre-pass that runs before the first INSERT, and every
+  message names its record. The measured cost of the extra call is ~1.2 ns per
+  record with zero allocations; the measured saving on that failure path is
+  ~495 ms, ~35 MB and ~958 000 allocations. `recordPrefix` suppresses the index
+  on a one-record batch, so `Add` keeps its old wording. The batch parent probe
+  stays in the loop — it needs the transaction — but is now prepared once
+  rather than re-sent per record, worth ~5% of a 10k import where every record
+  names a `--parent`.
+- ~~**Bare `tx.Commit()` at `event.go:351` and `:401`** breaks the wrapping
   convention every other commit site follows. Cosmetic but load-bearing for
-  grep-ability.
-- **`UpdateMeta` and `DeleteMeta` are 32-of-40 identical lines.** The last
+  grep-ability.~~ **Fixed** — both wrapped. Left as a patch of the two sites
+  rather than a fix of the shape: the package opens seven transactions with
+  the same eight lines of begin/rollback/commit boilerplate around each, so
+  an eighth can regress the same way. Generalizing that bracket is queued
+  immediately below.
+- **Seven hand-rolled transaction brackets in `internal/event`.** `Add`,
+  `AddMany`, `Update`, `Reparent`, `AddTags`, `RemoveTags` and
+  `rewriteMetaTuple` each open with `BeginTx` + `fmt.Errorf("begin
+  transaction: %w")` + `defer func() { _ = tx.Rollback() }()` and close with a
+  wrapped `Commit`. That boilerplate is where the bare-commit bug above came
+  from, and patching the two sites leaves the shape that produced it. An
+  `inTx[T](ctx, db, func(*sql.Tx) (T, error)) (T, error)` helper collapses all
+  seven and makes the commit wrapping structural rather than remembered. Not
+  folded into the validation commit because it re-indents ~400 lines across
+  seven function bodies and would bury a small behavioral change.
+- ~~**`UpdateMeta` and `DeleteMeta` are 32-of-40 identical lines.** The last
   review's Won't-Fix on the `MetaRenameCmd`/`MetaDeleteCmd` *command* shapes
   said to revisit "if a third mutate-by-`(key,value)` verb lands." The
   duplication in the *store* layer is a separate and more compelling case —
-  and [H3](#h3)'s fix will touch `UpdateMeta` anyway.
+  and [H3](#h3)'s fix will touch `UpdateMeta` anyway.~~ **Fixed:** both are
+  now one call to `rewriteMetaTuple(ctx, db, verb, key, value, stmt, args...)`,
+  which is not merely the shorter form — it is where the ordering that makes
+  either verb correct now lives once. The affected event ids have to be read
+  *before* the statement runs, because afterwards no tuple remains to find
+  them by and an event's FTS content includes its `key=value` tokens; that
+  ordering was duplicated, so a third verb would have been the third chance to
+  get it wrong. The protected-key gate stays at the two call sites, since
+  `requireRenamableMeta` and `requireUnprotectedMeta` are precisely what the
+  two answer differently.
 - ~~**`main.go:85` — `defer database.Close()` never runs.** `ctx.FatalIfErrorf`
   at `:94` calls `os.Exit`, which skips deferred functions.~~ **Fixed:**
   `main` is now the standard `os.Exit(run(...))` shape, and `run` returns a

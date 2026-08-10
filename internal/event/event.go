@@ -119,7 +119,7 @@ func AddMany(ctx context.Context, db *sql.DB, inputs []AddInput) ([]int64, error
 // event_meta, and one INSERT into events_fts. Per-record errors abort
 // the loop with a wrapped error; the caller's deferred Rollback fires.
 func addInTx(ctx context.Context, tx *sql.Tx, inputs []AddInput) ([]int64, error) {
-	if err := validateParentIndexes(inputs); err != nil {
+	if err := validateAddInputs(inputs); err != nil {
 		return nil, err
 	}
 
@@ -139,27 +139,26 @@ func addInTx(ctx context.Context, tx *sql.Tx, inputs []AddInput) ([]int64, error
 	}
 	defer insertFTS.Close()
 
+	// Prepared like the two inserts above rather than re-sent per record: an
+	// import that names a --parent asks this once per record, and re-parsing it
+	// 10 000 times cost ~5% of the run.
+	selectParent, err := tx.PrepareContext(ctx, "SELECT 1 FROM events WHERE id = ?")
+	if err != nil {
+		return nil, fmt.Errorf("prepare parent lookup: %w", err)
+	}
+	defer selectParent.Close()
+
 	ids := make([]int64, 0, len(inputs))
-	for _, in := range inputs {
+	for i, in := range inputs {
 		if in.ParentID != nil {
 			var exists int
-			err := tx.QueryRowContext(ctx, "SELECT 1 FROM events WHERE id = ?", *in.ParentID).Scan(&exists)
+			err := selectParent.QueryRowContext(ctx, *in.ParentID).Scan(&exists)
 			if err != nil {
 				if errors.Is(err, sql.ErrNoRows) {
-					return nil, fmt.Errorf("parent event %d: %w", *in.ParentID, ErrNotFound)
+					return nil, fmt.Errorf("%sparent event %d: %w", recordPrefix(i, len(inputs)), *in.ParentID, ErrNotFound)
 				}
-				return nil, fmt.Errorf("query parent event: %w", err)
+				return nil, fmt.Errorf("%squery parent event: %w", recordPrefix(i, len(inputs)), err)
 			}
-		}
-
-		if in.Title == "" {
-			return nil, fmt.Errorf("title cannot be empty")
-		}
-		if err := requireOneAuthor(in.Meta); err != nil {
-			return nil, err
-		}
-		if err := requireStorableMeta(in.Meta); err != nil {
-			return nil, err
 		}
 
 		var res sql.Result
@@ -229,23 +228,59 @@ func addInTx(ctx context.Context, tx *sql.Tx, inputs []AddInput) ([]int64, error
 	return ids, nil
 }
 
-// validateParentIndexes rejects batch-relative parents that are out of range,
-// combined with an explicit ParentID, or part of a cycle. It runs before any
-// INSERT because the UPDATE pass that applies them cannot fail on a cycle the
-// way an INSERT would — SQLite's foreign key only checks that the parent row
-// exists, and in a cycle every row does. An unchecked cycle would commit a
-// clump of events unreachable from any root.
-func validateParentIndexes(inputs []AddInput) error {
+// validateAddInputs vets every record before addInTx writes anything, and it
+// is the only place those checks live: an AddInput can be built directly, so
+// the writer is what nothing bypasses (see requireOneAuthor).
+//
+// Every message in a batch names the record. The per-record half used to run
+// inside the insert loop and say only `title cannot be empty`, which a
+// --format=json import of 10 000 records leaves nobody able to act on.
+// Hoisting it also means a batch that cannot be stored is refused before the
+// first INSERT rather than rolled back halfway through one.
+func validateAddInputs(inputs []AddInput) error {
 	for i, in := range inputs {
-		switch {
-		case in.ParentIndex == nil:
-		case in.ParentID != nil:
-			return fmt.Errorf("record %d: ParentID and ParentIndex are mutually exclusive", i)
-		case *in.ParentIndex < 0 || *in.ParentIndex >= len(inputs):
-			return fmt.Errorf("record %d: parent index %d out of range", i, *in.ParentIndex)
+		if err := validateAddInput(in, len(inputs)); err != nil {
+			return fmt.Errorf("%s%w", recordPrefix(i, len(inputs)), err)
 		}
 	}
+	return requireAcyclicParentIndexes(inputs)
+}
 
+// recordPrefix names the offending record in a batch of n. A single-record
+// batch gets no prefix: Add is the common caller and `record 0: title cannot
+// be empty` is noise in front of a message that already describes the only
+// record there was.
+func recordPrefix(i, n int) string {
+	if n < 2 {
+		return ""
+	}
+	return fmt.Sprintf("record %d: ", i)
+}
+
+// validateAddInput vets one record against a batch of batchSize.
+func validateAddInput(in AddInput, batchSize int) error {
+	switch {
+	case in.ParentIndex == nil:
+	case in.ParentID != nil:
+		return errors.New("ParentID and ParentIndex are mutually exclusive")
+	case *in.ParentIndex < 0 || *in.ParentIndex >= batchSize:
+		return fmt.Errorf("parent index %d out of range", *in.ParentIndex)
+	}
+	if in.Title == "" {
+		return errors.New("title cannot be empty")
+	}
+	if err := requireOneAuthor(in.Meta); err != nil {
+		return err
+	}
+	return requireStorableMeta(in.Meta)
+}
+
+// requireAcyclicParentIndexes rejects a batch whose ParentIndex links form a
+// cycle. It runs before any INSERT because the UPDATE pass that applies them
+// cannot fail on a cycle the way an INSERT would — SQLite's foreign key only
+// checks that the parent row exists, and in a cycle every row does. An
+// unchecked cycle would commit a clump of events unreachable from any root.
+func requireAcyclicParentIndexes(inputs []AddInput) error {
 	// Each record has at most one parent, so the graph is a forest plus
 	// possible cycles. Walk from every node, marking nodes already known to
 	// terminate, which keeps the whole scan linear.
@@ -482,7 +517,10 @@ func Reparent(ctx context.Context, db *sql.DB, id int64, newParent *int64) error
 		}
 	}
 
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit transaction: %w", err)
+	}
+	return nil
 }
 
 // AddTags inserts the given meta entries for event id as explicit metadata:
@@ -552,7 +590,10 @@ func AddTags(ctx context.Context, db *sql.DB, id int64, tags []parse.Meta) (int6
 		return 0, err
 	}
 
-	return added, tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit transaction: %w", err)
+	}
+	return added, nil
 }
 
 // RemoveTags deletes (event_id, key, value) rows matching tags. Returns
@@ -780,20 +821,6 @@ func UpdateMeta(ctx context.Context, db *sql.DB, oldKey, oldValue, newKey, newVa
 	if err := requireRenamableMeta(oldKey, newKey, newValue); err != nil {
 		return 0, err
 	}
-
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, fmt.Errorf("begin transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	// Capture affected events before the rename so we can resync their FTS
-	// content (the indexed string includes key=value meta tokens).
-	ids, err := metaEventIDs(ctx, tx, oldKey, oldValue)
-	if err != nil {
-		return 0, err
-	}
-
 	// OR REPLACE is what makes consolidating two tags (`#wip` → `#done`)
 	// work, and consolidating is the main reason to run this verb. An event
 	// carrying both collides with the UNIQUE(key, value, event_id) index
@@ -808,29 +835,13 @@ func UpdateMeta(ctx context.Context, db *sql.DB, oldKey, oldValue, newKey, newVa
 	// is one the operator chose and no event's text yields it, so leaving it
 	// body-derived would let the next edit of any renamed event delete the
 	// rename along with the mention it no longer matches.
-	res, err := tx.ExecContext(ctx,
+	//
+	// Rows replaced away are not counted, only rows updated — which is the
+	// honest number for "renamed".
+	return rewriteMetaTuple(ctx, db, "update", oldKey, oldValue,
 		"UPDATE OR REPLACE event_meta SET key = ?, value = ?, source = ? WHERE key = ? AND value = ?",
 		newKey, newValue, metaSourceExplicit, oldKey, oldValue,
 	)
-	if err != nil {
-		return 0, fmt.Errorf("update meta: %w", err)
-	}
-	// Rows replaced away are not counted here, only rows updated — which is
-	// the honest number for "renamed".
-	n, err := res.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("rows affected: %w", err)
-	}
-
-	for _, id := range ids {
-		if err := rebuildEventFTS(ctx, tx, id); err != nil {
-			return 0, err
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("commit transaction: %w", err)
-	}
-	return n, nil
 }
 
 // DeleteMeta removes every (key, value) tuple across all events and
@@ -840,26 +851,40 @@ func DeleteMeta(ctx context.Context, db *sql.DB, key, value string) (int64, erro
 	if err := requireUnprotectedMeta("delete", key); err != nil {
 		return 0, err
 	}
+	return rewriteMetaTuple(ctx, db, "delete", key, value,
+		"DELETE FROM event_meta WHERE key = ? AND value = ?", key, value,
+	)
+}
 
+// rewriteMetaTuple runs one statement over every row carrying the (key, value)
+// tuple and resyncs the FTS content of the events that carried it, returning
+// the number of rows the statement affected. verb names the operation in any
+// error.
+//
+// It is the shared body of UpdateMeta and DeleteMeta, which differed in the one
+// statement and were otherwise the same forty lines — including the ordering
+// that makes them correct: the affected ids are captured *before* the statement
+// runs, because afterwards there is no tuple left to find them by, and the FTS
+// content of an event includes its key=value meta tokens. A third
+// mutate-by-tuple verb would have been the third copy of that ordering.
+//
+// Callers do their own protected-key gate first. It stays out here because the
+// two verbs answer it differently — see requireRenamableMeta.
+func rewriteMetaTuple(ctx context.Context, db *sql.DB, verb, key, value, query string, args ...any) (int64, error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, fmt.Errorf("begin transaction: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Capture affected events before the delete so we can resync their FTS
-	// content (the indexed string includes key=value meta tokens).
 	ids, err := metaEventIDs(ctx, tx, key, value)
 	if err != nil {
 		return 0, err
 	}
 
-	res, err := tx.ExecContext(ctx,
-		"DELETE FROM event_meta WHERE key = ? AND value = ?",
-		key, value,
-	)
+	res, err := tx.ExecContext(ctx, query, args...)
 	if err != nil {
-		return 0, fmt.Errorf("delete meta: %w", err)
+		return 0, fmt.Errorf("%s meta: %w", verb, err)
 	}
 	n, err := res.RowsAffected()
 	if err != nil {

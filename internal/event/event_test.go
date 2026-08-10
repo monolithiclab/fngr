@@ -2485,6 +2485,84 @@ func TestAdd_RejectsEmptyTitle(t *testing.T) {
 	}
 }
 
+// TestAddMany_PerRecordErrorsNameTheRecord covers the hoist of the per-record
+// checks out of the insert loop and into validateAddInputs. A --format=json
+// import runs to 10 000 records, so `title cannot be empty` with no index is
+// a message nobody can act on. The parent-existence check stays in the loop
+// (it needs the transaction) and is indexed there for the same reason. A
+// one-record batch carries no index at all — see recordPrefix.
+func TestAddMany_PerRecordErrorsNameTheRecord(t *testing.T) {
+	t.Parallel()
+
+	missing := int64(9999)
+	tests := []struct {
+		name    string
+		inputs  []AddInput
+		wantMsg string
+		noIndex bool // the message must not name a record at all
+	}{
+		{
+			name:    "empty title",
+			inputs:  []AddInput{{Title: "ok"}, {Title: "ok"}, {Title: ""}},
+			wantMsg: `record 2: title cannot be empty`,
+		},
+		{
+			name: "two authors",
+			inputs: []AddInput{{Title: "ok"}, {Title: "b", Meta: []parse.Meta{
+				{Key: MetaKeyAuthor, Value: "alice"},
+				{Key: MetaKeyAuthor, Value: "bob"},
+			}}},
+			wantMsg: `record 1: `,
+		},
+		{
+			name:    "unstorable meta",
+			inputs:  []AddInput{{Title: "a", Meta: []parse.Meta{{Key: "k", Value: ""}}}, {Title: "b"}},
+			wantMsg: `record 0: `,
+		},
+		{
+			name:    "parent that does not exist",
+			inputs:  []AddInput{{Title: "ok"}, {Title: "b", ParentID: &missing}},
+			wantMsg: `record 1: parent event 9999`,
+		},
+		{
+			name:    "lone record is not numbered",
+			inputs:  []AddInput{{Title: ""}},
+			wantMsg: `title cannot be empty`,
+			noIndex: true,
+		},
+		{
+			name:    "lone record with a missing parent is not numbered either",
+			inputs:  []AddInput{{Title: "b", ParentID: &missing}},
+			wantMsg: `parent event 9999`,
+			noIndex: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			database := testDB(t)
+
+			_, err := AddMany(ctx, database, tt.inputs)
+			if err == nil || !strings.Contains(err.Error(), tt.wantMsg) {
+				t.Fatalf("AddMany err = %v, want one containing %q", err, tt.wantMsg)
+			}
+			if tt.noIndex && strings.Contains(err.Error(), "record ") {
+				t.Errorf("AddMany err = %v, want no record index on a one-record batch", err)
+			}
+
+			// The whole batch rolls back, whichever half caught it.
+			var count int
+			if err := database.QueryRow("SELECT COUNT(*) FROM events").Scan(&count); err != nil {
+				t.Fatalf("count: %v", err)
+			}
+			if count != 0 {
+				t.Errorf("created %d events, want 0", count)
+			}
+		})
+	}
+}
+
 func TestUpdate_RejectsEmptyTitle(t *testing.T) {
 	t.Parallel()
 	database := testDB(t)
