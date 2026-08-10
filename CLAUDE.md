@@ -35,6 +35,29 @@ make ci             # codefix + format + lint + test
 
 - `cmd/fngr/main.go` — Entrypoint. Wires Kong CLI parsing, resolves DB path, opens DB, constructs
   an `event.Store`, and dispatches to command handlers via Kong bindings (eventStore + ioStreams).
+  The parser configuration is `kongOptions`, one list because the tests build their own parser and
+  a difference between the two is a difference they cannot see; `exit` is a *parameter* rather than
+  an appended override, since a test supplying its own `kong.Exit` steps over the mapping it came
+  to check. That mapping is `exitCode`, which owns the process status and keeps it a *closed* set:
+  `0` success (`--help` and `--version` included), `exitError` (`1`) an error fngr diagnosed,
+  `exitUsage` (`2`) a command line it would not parse — see README "Exit codes". Only
+  `kongUsageStatus` (80, Kong's own) maps to `2`; everything else maps to `1`, and that direction
+  matters. `FatalIfErrorf` runs every error through `kong.ExitCoder` first, so *any* status can
+  arrive — an `$EDITOR` exiting 3 reaches `AddCmd.Run` as an `*exec.ExitError`, which carries
+  `ExitCode()`. Mapping the unknown to `2` instead (by elimination, so the literal 80 need never
+  be named) is the version that was wrong: it answers "the command line could not be parsed,
+  nothing was attempted" for a command that ran, turning an undocumented leak into a documented
+  lie. Naming 80 is a shim, not a contract — the constant is unexported, and the type that would
+  let us ask instead (`*kong.ParseError`, which *is* exported) is only reachable once `main` owns
+  the `kong.New`/`Parse` pair; `TestKongOptions_ParseErrorIsShortAndExitsTwo` drives a real parse
+  failure through the real parser, so a renumbering fails there rather than reaching a user. Also
+  `kong.ShortUsageOnError()`, not
+  `UsageOnError()`: the full help is 30 lines of command list, so `unknown flag --bogus` arrived
+  25 lines below the fold. What is still Kong's and waits on the `main.go` restructure: the short
+  usage prints on *stdout* while the error prints on stderr, and `FatalIfErrorf` adds a blank line
+  there unconditionally — fixing that means owning the call rather than passing options to it.
+  `kongVars` carries `${TIME_ABSOLUTE}` / `${TIME_RELATIVE}` alongside the `${*_FORMATS}`
+  vocabularies, for the same reason: see `internal/timefmt`.
 - `cmd/fngr/{add,list,event,delete,meta}.go` — Kong command structs with
   `Run(eventStore, ioStreams) error` methods, one file per top-level command. `list` is marked
   `default:"withargs"` so bare `fngr` dispatches to it; the filter is a `-S` / `--search` flag
@@ -198,6 +221,21 @@ make ci             # codefix + format + lint + test
   (a target-database id) when it misses — the `--parent` CLI default is always the latter.
   `created_at` goes through `timefmt.Parse`, a superset of the RFC 3339 that
   `--format=json` emits, so import files accept the same stamps as `--time`.
+  Both `Decode` calls route their error through `wireTypeError`, which restates a
+  `json.UnmarshalTypeError` in the wire's own vocabulary — `field "meta": got object, want array
+  (at byte 21)` rather than `cannot unmarshal object into Go struct field jsonAddInput.meta of
+  type [][2]string`, a private Go type name and a Go declaration shown to someone holding a JSON
+  file. Every other decode error passes through with the decoder's own wording, which is already
+  about the input (`unknown field "ttile"`, `unexpected EOF`). A top-level mismatch (`42`, or an array of
+  scalars) carries no `Field` at all, and is the case that leaked worst — `cannot unmarshal number
+  into Go value of type main.jsonAddInput` names the private type outright — so the field name is
+  a *prefix* (`input:` without one), never a precondition: an early return when it was missing
+  left exactly the message the function exists to replace. `wireTypeName` is kind-level only:
+  the exact shape of `meta` is the README's job, and "array of 2-element array of string"
+  describes it no better than "array". It has no pointer case: `encoding/json` indirects before it
+  reports, so a `*int64` field arrives as `int64` and the arm would be dead code carrying a
+  recursion. The byte offset rides along because it is the only locator `encoding/json` keeps — a
+  batch runs to 10 000 records and the field name alone cannot say which.
 - `cmd/fngr/pager.go` — `withPager(io, disabled) (ioStreams, closer)` wraps `Out` in a 16 KiB
   `bufio.Writer` over whatever `pagerWriter` hands back: a pipe to `$PAGER` (fallback
   `less -FRX`, tokenized by the `envCommand` the editor launcher shares) when stdout is a TTY,
@@ -350,6 +388,16 @@ make ci             # codefix + format + lint + test
   free text delimited by `": "` (used by `fngr add` title parsing), delegating to `ParsePartial`;
   it returns the consumed token as well as the rest, so the caller can name in a warning the very
   text the user typed.
+  `AbsoluteForms` / `RelativeForms` are the one place the accepted vocabulary is written down:
+  the "unrecognized time" hint is built from them, and `kongVars` threads them into the `--time`
+  and `event time` help as `${TIME_ABSOLUTE}` / `${TIME_RELATIVE}`, the same shape
+  `render.ListFormats` reaches `--format` by. Every shape is a *placeholder*, `HH:MMpm` included:
+  the 12-hour one used to be spelled `3:04PM` — Go's reference clock, a literal sitting in a list
+  of patterns, and a Go layout shown to someone typing a time — and it was spelled that way in
+  all three sites, so the one-token fix took three hand edits. Sites that gesture at the grammar
+  without enumerating it (`event date`, list's `--from`/`--to`) are deliberately *not* built from
+  these: there is nothing there to drift, and interpolating the full list would put 100 characters
+  of placeholder in a flag summary.
   Every wall clock is assembled through `localClock`, which reports whether that clock exists —
   a DST spring-forward skips an hour and both `time.Date` and `time.ParseInLocation` resolve a
   clock inside the gap to the hour before it with no error, so `fngr event time N 2:30` stored a
@@ -601,7 +649,11 @@ make ci             # codefix + format + lint + test
   own empty in-memory database, which breaks streaming queries). CLI tests construct an
   `event.Store` via the `newTestStore` helper in `cmd/fngr/testhelpers_test.go`; the
   `internal/event` package keeps its own `testDB` for data-access tests. No persistent fixtures
-  on disk.
+  on disk. A CLI test that needs a parser builds it with `newTestParser` from that same file,
+  which is `kongOptions` plus redirected writers and exit — never a hand-rolled `kong.New`. Three
+  hand-rolled copies is what `kongOptions` was introduced to end, and the oldest had already
+  drifted: it predated `ShortUsageOnError`, so it answered a parse error with the full command
+  list, which is the difference the help tests exist to notice.
 - Tests should be parallelized.
 - Table-driven tests with `t.Run` subtests.
 - Use modern Go idioms and features.

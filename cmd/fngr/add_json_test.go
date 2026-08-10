@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -51,6 +52,96 @@ func TestParseJSONAddInput(t *testing.T) {
 			}
 			if len(got) != tc.wantLen {
 				t.Errorf("got %d records, want %d", len(got), tc.wantLen)
+			}
+		})
+	}
+}
+
+// TestParseJSONAddInput_TypeErrorsNameTheWireShape pins the translation of
+// encoding/json's type errors. Untranslated they read `cannot unmarshal object
+// into Go struct field jsonAddInput.meta of type [][2]string` — a private Go
+// type name and a Go declaration, in an error about a JSON file.
+func TestParseJSONAddInput_TypeErrorsNameTheWireShape(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"object for an array field", `{"title":"t","meta":{"a":"b"}}`, `field "meta": got object, want array`},
+		{"string for an array field", `{"title":"t","meta":"ops"}`, `field "meta": got string, want array`},
+		{"number for a string field", `{"title":5}`, `field "title": got number, want string`},
+		{"string for a number field", `{"title":"t","parent_id":"3"}`, `field "parent_id": got string, want number`},
+		{"inside a batch", `[{"title":"a"},{"title":"b","id":"x"}]`, `field "id": got string, want number`},
+		// No field name to prefix, and the case that leaked worst: untranslated
+		// these read `cannot unmarshal number into Go value of type
+		// main.jsonAddInput`, naming the private type outright.
+		{"top-level scalar", `42`, `input: got number, want object`},
+		{"top-level array of scalars", `["a"]`, `input: got string, want object`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := parseJSONAddInput(tc.input)
+			if err == nil {
+				t.Fatalf("parseJSONAddInput(%s) succeeded, want a type error", tc.input)
+			}
+			got := err.Error()
+			if !strings.Contains(got, tc.want) {
+				t.Errorf("err = %q, want substring %q", got, tc.want)
+			}
+			if !strings.Contains(got, "at byte ") {
+				t.Errorf("err = %q, want a byte offset — the field name alone cannot locate a record in a batch", got)
+			}
+			for _, leak := range []string{"jsonAddInput", "[][2]string", "Go struct", "Go value"} {
+				if strings.Contains(got, leak) {
+					t.Errorf("err = %q, leaks %q", got, leak)
+				}
+			}
+		})
+	}
+}
+
+// TestWireTypeError_PassesEverythingElseThrough guards the narrow gate: only a
+// type mismatch is restated, so a syntax error and an unknown field keep the
+// decoder's own wording rather than being flattened into one house message.
+func TestWireTypeError_PassesEverythingElseThrough(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ name, input, want string }{
+		{"syntax error", `{"title":`, "unexpected EOF"},
+		{"unknown field", `{"title":"t","ttile":"typo"}`, `unknown field "ttile"`},
+		{"invalid character", `{'title':1}`, "invalid character"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := parseJSONAddInput(tc.input)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("err = %v, want substring %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestWireTypeName(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		val  any
+		want string
+	}{
+		{"string", "", "string"},
+		{"bool", false, "boolean"},
+		{"int64", int64(0), "number"},
+		{"float64", 0.0, "number"},
+		{"uint8", uint8(0), "number"},
+		{"slice", []string(nil), "array"},
+		{"array", [2]string{}, "array"},
+		{"struct", jsonAddInput{}, "object"},
+		{"map", map[string]string(nil), "object"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := wireTypeName(reflect.TypeOf(tc.val)); got != tc.want {
+				t.Errorf("wireTypeName(%T) = %q, want %q", tc.val, got, tc.want)
 			}
 		})
 	}

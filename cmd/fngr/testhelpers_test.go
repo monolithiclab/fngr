@@ -10,9 +10,34 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/alecthomas/kong"
 	"github.com/monolithiclab/fngr/internal/db"
 	"github.com/monolithiclab/fngr/internal/event"
 )
+
+// newTestParser builds fngr's parser from the same kongOptions main() uses,
+// with the writers and the exit function redirected. A nil exit is a no-op,
+// which is what a test that only reads help text wants — Kong's --help hook
+// calls Exit and expects it not to return.
+//
+// This lives here rather than beside any one of its callers because all three
+// used to build the parser by hand and the oldest copy had already drifted: it
+// predated kong.ShortUsageOnError and so answered a parse error with the full
+// command list, which is the difference the help tests exist to notice.
+func newTestParser(t *testing.T, stdout, stderr io.Writer, exit func(int)) *kong.Kong {
+	t.Helper()
+	if exit == nil {
+		exit = func(int) {}
+	}
+	var cli CLI
+	parser, err := kong.New(&cli, append(kongOptions("test", "tester", exit),
+		kong.Writers(stdout, stderr),
+	)...)
+	if err != nil {
+		t.Fatalf("kong.New: %v", err)
+	}
+	return parser
+}
 
 // newTestStore returns a store backed by a per-test SQLite file so streaming
 // queries that hold open one connection while issuing a follow-up on another

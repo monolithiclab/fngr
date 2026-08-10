@@ -2027,11 +2027,52 @@ Grouped; each is small and independently actionable.
 
 **Errors and exit codes**
 
-- Three exit-code classes with no documented contract: `1` runtime/domain
+- ~~Three exit-code classes with no documented contract: `1` runtime/domain
   error, `80` Kong parse error (with a full usage dump), `2` Go panic. `80` is
-  a Kong implementation detail leaking into the scripting interface.
-- Kong parse errors dump the entire command list before the message — on
-  `fngr -n -1` the actual error is 25 lines below the fold.
+  a Kong implementation detail leaking into the scripting interface.~~
+  **Fixed**, and the two halves are separate fixes. The contract is now three
+  lines in the README — `0` success (`--help` and `--version` included), `1` an
+  error fngr diagnosed and reported, `2` a command line it would not parse —
+  the split being between a request that was refused and one that was wrong,
+  which is what tells a script whether a retry can help. Writing it down was
+  not enough on its own: `80` would then have been *documented* rather than
+  *fixed*, and a number that means nothing outside Kong is exactly what a
+  scripting interface should not be pinned to. `main.go::exitCode` owns the
+  mapping, wired through `kong.Exit`. It remaps only `kongUsageStatus` (80) and
+  sends everything else to `1`, which is what keeps the set closed at three.
+  The first version did the opposite — remapped *by elimination*, so the
+  unexported 80 need never be named — and that was wrong: `FatalIfErrorf` runs
+  every error through `kong.ExitCoder` before exiting, so any status at all can
+  arrive. An `$EDITOR` exiting `3` reaches `AddCmd.Run` as an `*exec.ExitError`
+  carrying `ExitCode()`, and elimination answered it with "the command line
+  could not be parsed, nothing was attempted" — a documented lie about a
+  command that ran, where the leak had merely been undocumented. Naming 80 is
+  a shim and says so: the type that would let us ask instead
+  (`*kong.ParseError`, exported where the number is not) needs `main` to own
+  the `kong.New`/`Parse` pair, and until then
+  `TestKongOptions_ParseErrorIsShortAndExitsTwo` drives a real parse failure
+  through the real parser so a renumbering fails there rather than at a user.
+  `2` rather than a fresh number because
+  it is what argparse and clap answer with; the overlap with the Go runtime's
+  own panic status is stated in the README rather than designed around, a panic
+  being a bug and not a state the contract describes, and distinguishable by
+  the `panic:` dump above it.
+  `kongOptions` exists because the fix has to be testable: it is the one
+  parser configuration `main` and the tests share, and `exit` is a parameter
+  rather than an appended override so a test cannot step over the mapping it
+  came to check.
+- ~~Kong parse errors dump the entire command list before the message — on
+  `fngr -n -1` the actual error is 25 lines below the fold.~~
+  **Fixed:** `kong.ShortUsageOnError()` in place of `kong.UsageOnError()`, 32
+  lines down to 3 — a usage line, a pointer to `--help`, and the message.
+  `fngr --help` is unaffected and still prints the full command list, which is
+  the difference that matters: the long form is an answer when it was asked for
+  and noise when it was not. One wart survives and is Kong's: the usage lines
+  go to *stdout* while the error goes to stderr, and `FatalIfErrorf` adds a
+  blank line there unconditionally. Both are inside the call `kong.Parse` makes
+  on our behalf, so fixing them means owning that call — deferred to the
+  `main.go` restructure below, along with the `fngr evnt 5` gap that needs the
+  same thing.
 - ~~`fngr -n -1` errors and *suggests* `--limit="-1"`; taking the suggestion
   silently means "no limit" at exit 0. The error's own remedy leads to an
   unvalidated path.~~ **Fixed.** `toListOpts` refuses a negative limit up
@@ -2049,10 +2090,36 @@ Grouped; each is small and independently actionable.
   which stay un-range-checked on purpose — a bad bound matches nothing or
   everything *as asked*, whereas a negative `Limit` silently **widens** the
   result to the whole journal.
-- Errors leak Go internals: `{"title":"t","meta":{"a":"b"}}` →
+- ~~Errors leak Go internals: `{"title":"t","meta":{"a":"b"}}` →
   `cannot unmarshal object into Go struct field jsonAddInput.meta of type
   [][2]string`, exposing a private type name. JSON `created_at` errors leak the
-  Go reference-time layout.
+  Go reference-time layout.~~
+  **Fixed**, both, and they are the same mistake at two altitudes: a Go
+  spelling handed to someone who is holding a JSON file or typing a time.
+  `add_json.go::wireTypeError` restates a `json.UnmarshalTypeError` in the
+  wire's vocabulary — `field "meta": got object, want array (at byte 21)` —
+  and passes every other decode error through untouched, `unknown field
+  "ttile"` and `unexpected EOF` already being about the input. The three facts
+  worth keeping were all already fields on the error; what had to go was
+  `encoding/json`'s rendering of them. `wireTypeName` is kind-level on purpose:
+  the exact shape of `meta` is the README's job, and "array of 2-element array
+  of string" describes it no better than "array" and reads worse. The byte
+  offset is included because it is the only locator the decoder keeps — a
+  batch runs to 10 000 records and the field name alone cannot say which one.
+  A top-level mismatch (`42`, or an array of scalars) has no field name at all,
+  and is where the leak was worst — `cannot unmarshal number into Go value of
+  type main.jsonAddInput` — so the field name is a prefix rather than a
+  precondition: the first version returned early when it was missing and so
+  passed through exactly the message it existed to replace.
+  The `created_at` half was the hint listing `3:04PM` among `YYYY-MM-DD` and
+  `HH:MM`: Go's reference clock passing as a placeholder, so a reader could not
+  tell whether it was a pattern or a literal to type. Now `HH:MMpm` — and
+  written once, not three times: fixing one token in three files was the tell,
+  so the vocabulary is `timefmt.AbsoluteForms` / `RelativeForms`, built into
+  the hint and threaded into the `--time` and `event time` help by `kongVars`,
+  the way `render.ListFormats` already reached `--format`. The sites that
+  gesture at the grammar without enumerating it (`event date`, list's
+  `--from`/`--to`) stay prose: there is nothing there to drift.
 - All `--db` failures surface as pragma errors — a directory, an unwritable
   path, and `--db ""` all give
   `cannot set pragma foreign_keys: unable to open database file (14)`; a
@@ -2235,11 +2302,22 @@ Grouped; each is small and independently actionable.
   indistinguishable from a broken one except by the test binary dying.
 - Search results never show why they matched. `-S kubernetes` on an event whose
   body mentions it displays only the title. FTS5 has `snippet()` built in.
+  *Real, and new surface rather than a fix — moved to the roadmap's "Proposed
+  (not yet scheduled)" section with the open question it carries: a snippet
+  column is a listing affordance, and `json` / `csv` already carry the body.*
 - `fngr meta` has **no machine-readable output** (`--format` is rejected) — the
   one surface where you'd script tag audits or bulk renames.
-- Filtering by author works via `-S 'author=nico'` but `-S '@nico'` returns
+  *Same: moved to "Proposed (not yet scheduled)", together with the footnote it
+  earns on the bulk-operations rejection, whose `-S … --format=json | jq |
+  xargs` composition covers events and not metadata.*
+- ~~Filtering by author works via `-S 'author=nico'` but `-S '@nico'` returns
   nothing, because `--author` writes key `author` while `@x` writes `people`.
-  Every user will try `@` first; it isn't documented.
+  Every user will try `@` first; it isn't documented.~~
+  **Documented**, not changed. The two keys answer different questions — who
+  wrote it against who is named in it — and an event is routinely one without
+  the other, so making `@nico` match both would remove the only way to ask
+  either. What was missing was that nothing said so: the README's filter
+  section now spells out both spellings side by side.
 
 **Tooling**
 
@@ -2531,6 +2609,10 @@ Combined with "list/flat show titles only," a body-heavy journal is effectively
 unsearchable-in-place: every hit needs a follow-up `fngr event N`. FTS5 has
 `snippet()` built in, so this is a query change rather than new machinery.
 
+*12 and 13 are both tracked in the roadmap's "Proposed (not yet scheduled)"
+section as of the low-severity sweep — accepted as real gaps, unscheduled
+because each is new CLI surface and the project is at a feature plateau.*
+
 Explicitly **not** proposed, having found no new evidence against the existing
 rejections: config file, workspaces, soft delete/undo, stats command, shell
 completion, backup, vacuum, filtered delete, `add -`.
@@ -2611,9 +2693,12 @@ completion, backup, vacuum, filtered delete, `add -`.
 **`docs/superpowers/roadmap.md`**
 
 - The "Markdown output" entry repeats the `- <time> — <body>` error.
-- The "Considered (not pursued)" entry for bulk operations rests on
+- ~~The "Considered (not pursued)" entry for bulk operations rests on
   `fngr -S … --format json | jq | xargs`, which doesn't work for metadata
-  (`fngr meta` has no `--format`). Footnote it or fix the gap.
+  (`fngr meta` has no `--format`). Footnote it or fix the gap.~~
+  *Footnoted, and the gap it depends on is now tracked: `fngr meta --format`
+  sits in the new "Proposed (not yet scheduled)" section, which the
+  bulk-operations entry points at.*
 
 ---
 

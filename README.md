@@ -337,6 +337,13 @@ Event filters are passed via the `-S` / `--search` flag (`fngr -S '#ops'`):
 | `a \| b`    | Either condition (OR)       |
 | `!a`        | Exclude condition (NOT)     |
 
+`@person` is `people=person`, which is **not** `author=`. The two keys answer
+different questions and are written by different things: `--author` (or
+`$FNGR_AUTHOR`, or `$USER`) records who wrote the event, once, as `author`;
+`@nico` in the text records that the event mentions someone, as `people`. So
+`-S '@nico'` finds events that name nico and `-S 'author=nico'` finds events
+nico wrote, and an event can easily be one without the other.
+
 `!` binds tightest, then `&`, then `|` — so `#home | #bugfix & #work` means
 `#home` or (`#bugfix` and `#work`). Parentheses for grouping are not supported.
 `!` applies to the one term that follows it, and operand order does not change
@@ -422,6 +429,28 @@ record. Every record must end up with an author from some source, and with
 exactly one — two differing `author` entries in the same record are rejected
 rather than merged. Batches are
 capped at 10 000 records and are atomic — any error rolls back the whole thing.
+
+## Exit codes
+
+| Code | Meaning |
+| ---- | ------- |
+| `0`  | Success. `--help` and `--version` are successes. |
+| `1`  | fngr ran and reported an error on stderr — no such event, a bad `--time`, a locked database, a cancelled prompt, an `$EDITOR` that failed. |
+| `2`  | fngr would not parse the command line. Nothing was attempted. |
+
+Those three are the whole set. The split is between "wrong request" and
+"request refused": a `2` means the flags or arguments were wrong and no
+database was even opened, so a script can retry a `1` and must not retry a `2`.
+
+Three things worth knowing. An empty result is a success — `fngr -S nothing`
+exits `0` and says `No events found.` on stderr, so a script reading stdout
+sees the format's own empty value (nothing, `[]`, or a CSV header) either way.
+A child process fngr launches does not get to pick fngr's status either: an
+`$EDITOR` exiting `3` is reported as `error: editor exited: exit status 3` and
+fngr exits `1`, because that is a run fngr attempted and reported on. And an
+unhandled panic exits `2` as well; that is the Go runtime's status rather than
+one fngr picks, and it is a bug worth reporting — you can tell it apart by the
+`panic:` dump on stderr.
 
 ## Database location
 

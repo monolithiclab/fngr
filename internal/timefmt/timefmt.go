@@ -174,9 +174,27 @@ func parsePartial(s string, now time.Time) (t time.Time, hasDate, hasTime, exist
 		return t, false, true, exists, nil
 	}
 	return time.Time{}, false, false, false, fmt.Errorf(
-		"unrecognized time %q (try YYYY-MM-DD, YYYY-MM-DDTHH:MM, RFC3339, HH:MM, 3:04PM, "+
-			"or relative forms like \"today\", \"yesterday\", \"2 days ago\", \"yesterday at 9am\")", s)
+		"unrecognized time %q (try %s, or relative forms like %s)",
+		s, AbsoluteForms, RelativeForms)
 }
+
+// AbsoluteForms and RelativeForms name every shape ParsePartial accepts, and
+// are the one place that list is written down. They are exported because the
+// same vocabulary has to appear in the `--time` and `event time` help text, and
+// spelling it out at each site is what let the three disagree: the 12-hour form
+// was `3:04PM` in all of them — Go's reference clock, a literal sitting in a
+// list of placeholders, and a Go layout shown to someone typing a time. Kong
+// interpolates these through kongVars, the same way render.ListFormats reaches
+// the `--format` help.
+//
+// Placeholders, not layouts: a caller wanting a layout wants DateFormat or
+// DateTimeFormat. Sites that gesture at the grammar without enumerating it
+// (`event date`, list's --from/--to) are deliberately not built from these —
+// there is nothing there to drift.
+const (
+	AbsoluteForms = "YYYY-MM-DD, YYYY-MM-DDTHH:MM, RFC3339, HH:MM, HH:MMpm"
+	RelativeForms = `"today", "yesterday", "2 days ago", "yesterday at 9am", "now"`
+)
 
 // layoutHasTime reports whether layout (one of fullFormats) carries a time
 // component. The only date-only layout in fullFormats is DateFormat.

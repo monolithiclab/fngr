@@ -111,7 +111,7 @@ func (c *EventBodyCmd) Run(s eventStore, io ioStreams) error {
 // full timestamp).
 type EventTimeCmd struct {
 	ID    int64  `arg:"" help:"Event ID."`
-	Value string `arg:"" help:"New time (HH:MM, 3:04PM, ...), full timestamp, or relative (\"3 hours ago\", \"yesterday at 9am\", \"now\")."`
+	Value string `arg:"" help:"New time or full timestamp: absolute (${TIME_ABSOLUTE}) or relative (${TIME_RELATIVE})."`
 }
 
 func (c *EventTimeCmd) Run(s eventStore, io ioStreams) error {
