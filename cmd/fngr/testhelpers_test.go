@@ -21,9 +21,9 @@ import (
 // calls Exit and expects it not to return.
 //
 // This lives here rather than beside any one of its callers because all three
-// used to build the parser by hand and the oldest copy had already drifted: it
-// predated kong.ShortUsageOnError and so answered a parse error with the full
-// command list, which is the difference the help tests exist to notice.
+// used to build the parser by hand and the oldest copy had already drifted,
+// answering a parse error with the full command list where the shared options
+// answer with a short usage — the difference the help tests exist to notice.
 func newTestParser(t *testing.T, stdout, stderr io.Writer, exit func(int)) *kong.Kong {
 	t.Helper()
 	if exit == nil {
@@ -39,14 +39,23 @@ func newTestParser(t *testing.T, stdout, stderr io.Writer, exit func(int)) *kong
 	return parser
 }
 
+// tempDB is a database path under the test's own directory. Named rather than
+// inlined so that no test can accidentally omit --db and hit $HOME:
+// db.ResolvePath falls back to ~/.fngr.db, and a test is not allowed anywhere
+// near the developer's journal. The file is not created — a caller that wants
+// one opens it.
+func tempDB(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(t.TempDir(), "fngr.db")
+}
+
 // newTestStore returns a store backed by a per-test SQLite file so streaming
 // queries that hold open one connection while issuing a follow-up on another
 // (e.g. event.ListSeq + loadMetaBatch) see the same data. Bare `:memory:`
 // gives each pool connection its own empty database.
 func newTestStore(t *testing.T) *event.Store {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "fngr.db")
-	database, err := db.Open(path, true)
+	database, err := db.Open(tempDB(t), true)
 	if err != nil {
 		t.Fatalf("open test db: %v", err)
 	}

@@ -2037,22 +2037,21 @@ Grouped; each is small and independently actionable.
   which is what tells a script whether a retry can help. Writing it down was
   not enough on its own: `80` would then have been *documented* rather than
   *fixed*, and a number that means nothing outside Kong is exactly what a
-  scripting interface should not be pinned to. `main.go::exitCode` owns the
-  mapping, wired through `kong.Exit`. It remaps only `kongUsageStatus` (80) and
-  sends everything else to `1`, which is what keeps the set closed at three.
-  The first version did the opposite — remapped *by elimination*, so the
-  unexported 80 need never be named — and that was wrong: `FatalIfErrorf` runs
-  every error through `kong.ExitCoder` before exiting, so any status at all can
-  arrive. An `$EDITOR` exiting `3` reaches `AddCmd.Run` as an `*exec.ExitError`
-  carrying `ExitCode()`, and elimination answered it with "the command line
-  could not be parsed, nothing was attempted" — a documented lie about a
-  command that ran, where the leak had merely been undocumented. Naming 80 is
-  a shim and says so: the type that would let us ask instead
-  (`*kong.ParseError`, exported where the number is not) needs `main` to own
-  the `kong.New`/`Parse` pair, and until then
-  `TestKongOptions_ParseErrorIsShortAndExitsTwo` drives a real parse failure
-  through the real parser so a renumbering fails there rather than at a user.
-  `2` rather than a fresh number because
+  scripting interface should not be pinned to. The status now comes from `run`,
+  which *returns* one of `exitOK` / `exitError` / `exitUsage` — the set is
+  closed structurally rather than by a mapping. The two intermediate versions
+  are worth recording because each was wrong in its own direction. Remapping
+  *by elimination* (everything but 80 → `1`, so the unexported number need
+  never be named) answered an `$EDITOR` that exited `3` with "the command line
+  could not be parsed, nothing was attempted" — `FatalIfErrorf` runs every
+  error through `kong.ExitCoder` first, so an `*exec.ExitError` carrying
+  `ExitCode()` arrives intact, and elimination turned an undocumented leak into
+  a documented lie. Naming 80 fixed that and was a shim, since the constant is
+  unexported. Owning the parse removed the question: `reportParseError` asks
+  `errors.As(err, &parseErr)` for `*kong.ParseError`, which *is* exported, and
+  `exitCode` survives only as a clamp on the `--help` / `--version` hooks —
+  the sole `kong.Exit` call sites left once `FatalIfErrorf` is gone, both
+  passing 0. `2` rather than a fresh number because
   it is what argparse and clap answer with; the overlap with the Go runtime's
   own panic status is stated in the README rather than designed around, a panic
   being a bug and not a state the contract describes, and distinguishable by
@@ -2063,16 +2062,18 @@ Grouped; each is small and independently actionable.
   came to check.
 - ~~Kong parse errors dump the entire command list before the message — on
   `fngr -n -1` the actual error is 25 lines below the fold.~~
-  **Fixed:** `kong.ShortUsageOnError()` in place of `kong.UsageOnError()`, 32
-  lines down to 3 — a usage line, a pointer to `--help`, and the message.
-  `fngr --help` is unaffected and still prints the full command list, which is
-  the difference that matters: the long form is an answer when it was asked for
-  and noise when it was not. One wart survives and is Kong's: the usage lines
-  go to *stdout* while the error goes to stderr, and `FatalIfErrorf` adds a
-  blank line there unconditionally. Both are inside the call `kong.Parse` makes
-  on our behalf, so fixing them means owning that call — deferred to the
-  `main.go` restructure below, along with the `fngr evnt 5` gap that needs the
-  same thing.
+  **Fixed:** the short usage in place of the full one, 32 lines down to 3 — a
+  usage line, a pointer to `--help`, and the message. `fngr --help` is
+  unaffected and still prints the full command list, which is the difference
+  that matters: the long form is an answer when it was asked for and noise when
+  it was not. The wart that survived the first pass was Kong's — the usage went
+  to *stdout* while the error went to stderr, plus an unconditional blank line
+  — and it is gone with the `main.go` restructure below. `reportParseError`
+  writes both to stderr, still through Kong's own
+  `kong.DefaultShortHelpPrinter` (`writeShortUsage` swaps the exported
+  `parser.Stdout` for the duration) rather than a private copy of a format the
+  library owns. `kong.ShortUsageOnError()` went with the `FatalIfErrorf` it
+  configured.
 - ~~`fngr -n -1` errors and *suggests* `--limit="-1"`; taking the suggestion
   silently means "no limit" at exit 0. The error's own remedy leads to an
   unvalidated path.~~ **Fixed.** `toListOpts` refuses a negative limit up
@@ -2167,13 +2168,23 @@ Grouped; each is small and independently actionable.
   and got list's entire usage block in reply. That is also why the check reads
   all three places Kong looks for an argument: `withargs` puts `event`'s `<id>`
   on the `show` child, not on `event`.*
-- The same defect is still live one path over: `fngr evnt 5` answers
+- ~~The same defect is still live one path over: `fngr evnt 5` answers
   `unexpected argument evnt`, for exactly the `default:"withargs"` reason
-  above, and that is the typo people actually make. `checkCommandPath` is
-  already generic over any node and any arg list — the gap is that `main` calls
-  the package-level `kong.Parse` and so never sees the failing context.
-  Deferred to the `main.go` restructure below, which has to own the parser
-  anyway.
+  above, and that is the typo people actually make.~~ **Fixed** with the
+  `main.go` restructure below: `run` owns the `kong.New`/`Parse` pair, so
+  `reportParseError` has the failing context and runs the same
+  `checkCommandPath` over it. `fngr evnt 5` now answers `fngr: error: fngr has
+  no command "evnt"; try one of: add, delete, event, help, list, meta` at exit
+  `2`. The node and the candidate words come from `unplaced`, which reads
+  Kong's own trace (`kong.Path.Remainder()`) rather than re-scanning argv — a
+  second scanner cannot know which flags take a value, since `list` is
+  `default:"withargs"` and its `-S`/`-n`/`--format` are spliced onto the trace
+  at parse time, so the first attempt read `fngr -S ops --bogus` as a mistyped
+  command `ops` and swallowed the unknown flag that was the real complaint.
+  `unplaced` also stops at the first `-`-prefixed word and backs a *default*
+  command out to its parent when it consumed no token, which is what separates
+  `fngr meat` (typo, diagnosed) from `fngr list extra` (stray positional, left
+  to Kong).
 
 **Behavior**
 
@@ -2352,18 +2363,26 @@ are local.
   said to revisit "if a third mutate-by-`(key,value)` verb lands." The
   duplication in the *store* layer is a separate and more compelling case —
   and [H3](#h3)'s fix will touch `UpdateMeta` anyway.
-- **`main.go:85` — `defer database.Close()` never runs.** `ctx.FatalIfErrorf`
-  at `:94` calls `os.Exit`, which skips deferred functions. Harmless today
-  (process exit closes the fd, and WAL checkpoints on clean close are
-  best-effort anyway), but it's a latent trap if cleanup ever grows teeth. The
-  fix is the standard `func main() { os.Exit(run()) }` shape.
-- **Behavioral logic encoded as command-name string prefixes** —
+- ~~**`main.go:85` — `defer database.Close()` never runs.** `ctx.FatalIfErrorf`
+  at `:94` calls `os.Exit`, which skips deferred functions.~~ **Fixed:**
+  `main` is now the standard `os.Exit(run(...))` shape, and `run` returns a
+  status from every path instead of exiting on one, so the deferred `Close`
+  runs and a WAL database gets its checkpoint.
+- ~~**Behavioral logic encoded as command-name string prefixes** —
   `strings.HasPrefix(ctx.Command(), "help")` at `main.go:75` and
   `strings.HasPrefix(ctx.Command(), "add")` at `:80` decide whether a DB is
-  needed and whether to create it. Renaming a command silently changes DB
-  semantics, and `main.go` is in `.covignore`, so nothing tests it. A
-  `dbPolicy` method on the command structs (or a Kong tag) would make this
-  declarative and testable.
+  needed and whether to create it.~~ **Fixed,** and the two halves came out
+  differently. "Needs a database" is no longer declared at all: `run` binds the
+  store with `ctx.BindToProvider`, so the answer is read off each command's own
+  `Run` signature — `HelpCmd.Run` takes no `eventStore`, so nothing resolves
+  one, no path is resolved and no file is opened, which is what keeps
+  `fngr help` answerable with a `--db` that is missing or unreadable. "May
+  create it" stays declarative but is now a method, `AddCmd.createsDB` behind
+  the `dbCreator` interface. Both prefixes were true of any command whose name
+  merely started that way: `fngr addendum` would have started a second journal,
+  `fngr helpers` would have run with no store bound. `main.go` is no longer in
+  `.covignore` either — `run`, `reportParseError`, `unplaced`,
+  `writeShortUsage`, `createsDB` and `exitCode` are all directly tested.
 - ~~**`wrapFilterErr` string-matches driver error text** from the cmd layer
   (`list.go:64-68`, matching `"fts5"`, `"SQL logic error"`, `"unterminated"`).~~
   Resolved with [C5](#c5): the parser returns `event.ErrFilter` and the cmd

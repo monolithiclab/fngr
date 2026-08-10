@@ -21,6 +21,12 @@ type HelpCmd struct {
 // In tests with Exit neutralized, the flag-handler still writes help to
 // the configured Writers and Parse returns; any real parse error is
 // propagated.
+//
+// It takes no eventStore, and that is what keeps `fngr help` answerable with a
+// --db that is missing or unreadable: main binds the store lazily, so a command
+// that does not ask for one opens no database — see run. Adding the parameter
+// here would quietly make help fail on exactly the broken setup it is reached
+// for.
 func (c *HelpCmd) Run(realCtx *kong.Context) error {
 	// Vet the path before handing it back to Kong — see checkCommandPath.
 	if err := checkCommandPath(realCtx.Model.Node, c.Args); err != nil {

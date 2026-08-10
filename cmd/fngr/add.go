@@ -22,6 +22,12 @@ type AddCmd struct {
 	Time   string   `help:"Override event timestamp: absolute (${TIME_ABSOLUTE}) or relative (${TIME_RELATIVE}). Used as default if JSON record omits created_at." short:"t"`
 }
 
+// createsDB reports that add is the one command allowed to create the
+// database. Every other verb reads or edits something that has to be there
+// already, and a typo'd --db should say so rather than silently start a second
+// journal.
+func (*AddCmd) createsDB() bool { return true }
+
 func (c *AddCmd) Run(s eventStore, io ioStreams) error {
 	// Canonical, not raw equality, for the reason withAliases exists: an alias
 	// resolving to json would pass the enum and then miss this test, sending a
