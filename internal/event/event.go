@@ -68,26 +68,59 @@ type AddInput struct {
 	CreatedAt   *time.Time
 }
 
+// inTx runs fn inside a transaction, committing when it returns nil and
+// rolling back otherwise. It is the only place in this package that opens
+// one.
+//
+// That is what the helper is for, rather than the eight lines it saves each
+// caller. The bracket was hand-written at seven sites, and two of them
+// returned tx.Commit() bare — so a write that failed at the very last step
+// reported `database is locked` with nothing to say which write it was, and
+// the eighth site could regress the same way. Wording the begin and commit
+// errors here makes that structural.
+//
+// Every caller pairs it with a private fooInTx doing the work, the shape
+// addInTx already had. Keeping the body in its own function rather than a
+// closure is what lets a mutation be tested against a transaction directly.
+func inTx[T any](ctx context.Context, db *sql.DB, fn func(*sql.Tx) (T, error)) (T, error) {
+	var zero T
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return zero, fmt.Errorf("begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	v, err := fn(tx)
+	if err != nil {
+		return zero, err
+	}
+	if err := tx.Commit(); err != nil {
+		return zero, fmt.Errorf("commit transaction: %w", err)
+	}
+	return v, nil
+}
+
+// inTxVoid is inTx for a mutation with nothing to return.
+func inTxVoid(ctx context.Context, db *sql.DB, fn func(*sql.Tx) error) error {
+	_, err := inTx(ctx, db, func(tx *sql.Tx) (struct{}, error) {
+		return struct{}{}, fn(tx)
+	})
+	return err
+}
+
 // Add inserts a single event with its meta tuples and FTS row inside one
 // transaction, returning the new event ID. A nil ParentID creates a root
 // event; a non-nil ParentID must reference an existing event or
 // ErrNotFound is returned. A nil CreatedAt defaults to the SQL
 // CURRENT_TIMESTAMP. Title is required; Body may be empty.
 func Add(ctx context.Context, db *sql.DB, in AddInput) (int64, error) {
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, fmt.Errorf("begin transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	ids, err := addInTx(ctx, tx, []AddInput{in})
-	if err != nil {
-		return 0, err
-	}
-	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("commit transaction: %w", err)
-	}
-	return ids[0], nil
+	return inTx(ctx, db, func(tx *sql.Tx) (int64, error) {
+		ids, err := addInTx(ctx, tx, []AddInput{in})
+		if err != nil {
+			return 0, err
+		}
+		return ids[0], nil
+	})
 }
 
 // AddMany inserts the given events in a single transaction. Empty input
@@ -97,21 +130,9 @@ func AddMany(ctx context.Context, db *sql.DB, inputs []AddInput) ([]int64, error
 	if len(inputs) == 0 {
 		return nil, nil
 	}
-
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("begin transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	ids, err := addInTx(ctx, tx, inputs)
-	if err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit transaction: %w", err)
-	}
-	return ids, nil
+	return inTx(ctx, db, func(tx *sql.Tx) ([]int64, error) {
+		return addInTx(ctx, tx, inputs)
+	})
 }
 
 // addInTx inserts events using the given tx. Caller owns commit/rollback.
@@ -376,12 +397,15 @@ func Update(ctx context.Context, db *sql.DB, id int64, title, body *string, crea
 		}
 	}
 
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
+	return inTxVoid(ctx, db, func(tx *sql.Tx) error {
+		return updateInTx(ctx, tx, id, title, body, createdAt, stamp)
+	})
+}
 
+// updateInTx is Update's body. stamp is the already-formatted createdAt,
+// which is validated before the transaction opens so a bad timestamp costs
+// no write lock.
+func updateInTx(ctx context.Context, tx *sql.Tx, id int64, title, body *string, createdAt *time.Time, stamp string) error {
 	if err := requireEventExists(ctx, tx, id); err != nil {
 		return err
 	}
@@ -444,9 +468,6 @@ func Update(ctx context.Context, db *sql.DB, id int64, title, body *string, crea
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit transaction: %w", err)
-	}
 	return nil
 }
 
@@ -455,12 +476,13 @@ func Update(ctx context.Context, db *sql.DB, id int64, title, body *string, crea
 // returns ErrCycle if id appears in it (including newParent == &id).
 // Returns ErrNotFound if id or *newParent does not exist.
 func Reparent(ctx context.Context, db *sql.DB, id int64, newParent *int64) error {
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
+	return inTxVoid(ctx, db, func(tx *sql.Tx) error {
+		return reparentInTx(ctx, tx, id, newParent)
+	})
+}
 
+// reparentInTx is Reparent's body.
+func reparentInTx(ctx context.Context, tx *sql.Tx, id int64, newParent *int64) error {
 	if err := requireEventExists(ctx, tx, id); err != nil {
 		return err
 	}
@@ -517,9 +539,6 @@ func Reparent(ctx context.Context, db *sql.DB, id int64, newParent *int64) error
 		}
 	}
 
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit transaction: %w", err)
-	}
 	return nil
 }
 
@@ -545,13 +564,13 @@ func AddTags(ctx context.Context, db *sql.DB, id int64, tags []parse.Meta) (int6
 	if err := requireStorableMeta(tags); err != nil {
 		return 0, err
 	}
+	return inTx(ctx, db, func(tx *sql.Tx) (int64, error) {
+		return addTagsInTx(ctx, tx, id, tags)
+	})
+}
 
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, fmt.Errorf("begin transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
+// addTagsInTx is AddTags' body.
+func addTagsInTx(ctx context.Context, tx *sql.Tx, id int64, tags []parse.Meta) (int64, error) {
 	if err := requireEventExists(ctx, tx, id); err != nil {
 		return 0, err
 	}
@@ -590,9 +609,6 @@ func AddTags(ctx context.Context, db *sql.DB, id int64, tags []parse.Meta) (int6
 		return 0, err
 	}
 
-	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("commit transaction: %w", err)
-	}
 	return added, nil
 }
 
@@ -609,13 +625,13 @@ func RemoveTags(ctx context.Context, db *sql.DB, id int64, tags []parse.Meta) (i
 	if err := requireUnprotectedTags("remove", tags); err != nil {
 		return 0, err
 	}
+	return inTx(ctx, db, func(tx *sql.Tx) (int64, error) {
+		return removeTagsInTx(ctx, tx, id, tags)
+	})
+}
 
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, fmt.Errorf("begin transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
+// removeTagsInTx is RemoveTags' body.
+func removeTagsInTx(ctx context.Context, tx *sql.Tx, id int64, tags []parse.Meta) (int64, error) {
 	if err := requireEventExists(ctx, tx, id); err != nil {
 		return 0, err
 	}
@@ -645,9 +661,6 @@ func RemoveTags(ctx context.Context, db *sql.DB, id int64, tags []parse.Meta) (i
 		return 0, err
 	}
 
-	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("commit transaction: %w", err)
-	}
 	return total, nil
 }
 
@@ -871,35 +884,28 @@ func DeleteMeta(ctx context.Context, db *sql.DB, key, value string) (int64, erro
 // Callers do their own protected-key gate first. It stays out here because the
 // two verbs answer it differently — see requireRenamableMeta.
 func rewriteMetaTuple(ctx context.Context, db *sql.DB, verb, key, value, query string, args ...any) (int64, error) {
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, fmt.Errorf("begin transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	ids, err := metaEventIDs(ctx, tx, key, value)
-	if err != nil {
-		return 0, err
-	}
-
-	res, err := tx.ExecContext(ctx, query, args...)
-	if err != nil {
-		return 0, fmt.Errorf("%s meta: %w", verb, err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("rows affected: %w", err)
-	}
-
-	for _, id := range ids {
-		if err := rebuildEventFTS(ctx, tx, id); err != nil {
+	return inTx(ctx, db, func(tx *sql.Tx) (int64, error) {
+		ids, err := metaEventIDs(ctx, tx, key, value)
+		if err != nil {
 			return 0, err
 		}
-	}
-	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("commit transaction: %w", err)
-	}
-	return n, nil
+
+		res, err := tx.ExecContext(ctx, query, args...)
+		if err != nil {
+			return 0, fmt.Errorf("%s meta: %w", verb, err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return 0, fmt.Errorf("rows affected: %w", err)
+		}
+
+		for _, id := range ids {
+			if err := rebuildEventFTS(ctx, tx, id); err != nil {
+				return 0, err
+			}
+		}
+		return n, nil
+	})
 }
 
 // metaEventIDs returns the distinct event IDs carrying the given (key, value)

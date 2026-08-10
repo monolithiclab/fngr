@@ -479,7 +479,14 @@ make ci             # codefix + format + lint + test
 - `internal/event/event.go` — Data access functions: `Add` (transactional event + meta + FTS),
   `AddMany` (batched same shape, atomic), `AddInput` value type. Both `Add` and `AddMany`
   delegate to a private `addInTx` that runs the per-record INSERT loop using a caller-owned
-  `*sql.Tx`. `AddInput` names its parent either by database id (`ParentID`) or by position in
+  `*sql.Tx`. That pairing is the package-wide shape: `inTx` (and `inTxVoid`, its no-result
+  wrapper) is the *only* `BeginTx` here, and every mutation is a public function that validates
+  what it can without a write lock and then hands a private `fooInTx` to it. Two of the seven
+  hand-written brackets it replaced returned `tx.Commit()` bare, so a write failing at the last
+  step said `database is locked` with nothing to say which write it was; wording the begin and
+  commit errors in one place is what makes that unforgettable rather than remembered. Keep the
+  body in a named `fooInTx` rather than a closure — that is what lets a mutation be driven from
+  a caller-owned transaction, and it is why the conversion re-indented nothing. `AddInput` names its parent either by database id (`ParentID`) or by position in
   the same batch (`ParentIndex`, mutually exclusive with the former) — the latter is what lets
   a JSON import re-create a tree whose ids don't exist in the target yet. Batch parents are
   wired up by an UPDATE pass *after* the insert loop, since a child may be inserted before its
