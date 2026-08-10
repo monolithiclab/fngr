@@ -2371,21 +2371,27 @@ are local.
   names a `--parent`.
 - ~~**Bare `tx.Commit()` at `event.go:351` and `:401`** breaks the wrapping
   convention every other commit site follows. Cosmetic but load-bearing for
-  grep-ability.~~ **Fixed** — both wrapped. Left as a patch of the two sites
-  rather than a fix of the shape: the package opens seven transactions with
-  the same eight lines of begin/rollback/commit boilerplate around each, so
-  an eighth can regress the same way. Generalizing that bracket is queued
-  immediately below.
-- **Seven hand-rolled transaction brackets in `internal/event`.** `Add`,
+  grep-ability.~~ **Fixed** — both wrapped, then the shape that produced them
+  fixed too; see immediately below.
+- ~~**Seven hand-rolled transaction brackets in `internal/event`.** `Add`,
   `AddMany`, `Update`, `Reparent`, `AddTags`, `RemoveTags` and
   `rewriteMetaTuple` each open with `BeginTx` + `fmt.Errorf("begin
   transaction: %w")` + `defer func() { _ = tx.Rollback() }()` and close with a
   wrapped `Commit`. That boilerplate is where the bare-commit bug above came
-  from, and patching the two sites leaves the shape that produced it. An
-  `inTx[T](ctx, db, func(*sql.Tx) (T, error)) (T, error)` helper collapses all
-  seven and makes the commit wrapping structural rather than remembered. Not
-  folded into the validation commit because it re-indents ~400 lines across
-  seven function bodies and would bury a small behavioral change.
+  from, and patching the two sites leaves the shape that produced
+  it.~~ **Fixed:** `inTx[T](ctx, db, func(*sql.Tx) (T, error)) (T, error)` and
+  its no-result wrapper `inTxVoid` are now the only `BeginTx` in the package —
+  `grep -c BeginTx internal/event` is 1. Each caller pairs the bracket with a
+  private `fooInTx` holding the body, the shape `addInTx` already had, so the
+  conversion changed heads and tails and re-indented nothing.
+
+  Two things fell out. Coverage went 91.8% → 92.4% for the whole module,
+  because seven copies of an untested begin/commit branch became one helper
+  that `TestInTx` covers at 100% — including the commit branch, reachable by
+  committing inside `fn` and letting the outer `Commit` fail with
+  `sql.ErrTxDone`. And the bodies are now callable against a caller-owned
+  `*sql.Tx`, which is what a future `Delete`-plus-reparent compound operation
+  would need to be atomic.
 - ~~**`UpdateMeta` and `DeleteMeta` are 32-of-40 identical lines.** The last
   review's Won't-Fix on the `MetaRenameCmd`/`MetaDeleteCmd` *command* shapes
   said to revisit "if a third mutate-by-`(key,value)` verb lands." The
