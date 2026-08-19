@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"io"
 	"os/user"
 	"slices"
 	"strings"
@@ -253,6 +254,95 @@ func TestRun_HelpFlagExitsZero(t *testing.T) {
 	}
 	if !strings.Contains(res.stdout, "Commands:") {
 		t.Errorf("stdout = %q, want the command list", res.stdout)
+	}
+}
+
+// TestRun_FlushesBufferedOutput is what moving the buffer out of withPager
+// costs and buys in one test: every command's output now goes through it, so
+// run is the one place that empties it. Nothing here writes 16 KiB, which is
+// exactly the point — before the flush the listing exists only in memory.
+func TestRun_FlushesBufferedOutput(t *testing.T) {
+	t.Parallel()
+
+	path := tempDB(t)
+	if res := runCLI(t, "--db", path, "add", "--author", "tester", "first note"); res.status != exitOK {
+		t.Fatalf("add: status = %d, stderr = %q", res.status, res.stderr)
+	}
+
+	streams, _, dest, _ := newTestIOBuffered("")
+	// event show, not list: list is the one command that already had a flush of
+	// its own, so it cannot show that the hoist reached anything else.
+	if status := run([]string{"--db", path, "event", "show", "1"}, streams, func(int) {}); status != exitOK {
+		t.Fatalf("status = %d, want %d", status, exitOK)
+	}
+	if !strings.Contains(dest.String(), "first note") {
+		t.Errorf("stdout = %q, want the event run buffered and then flushed", dest.String())
+	}
+}
+
+// TestRun_ReportsAFailedFlush is the cost side. The tail of any command's
+// output is written at that flush and nowhere else, so swallowing its error
+// would exit 0 over output the user never received.
+func TestRun_ReportsAFailedFlush(t *testing.T) {
+	t.Parallel()
+
+	path := tempDB(t)
+	if res := runCLI(t, "--db", path, "add", "--author", "tester", "first note"); res.status != exitOK {
+		t.Fatalf("add: status = %d, stderr = %q", res.status, res.stderr)
+	}
+
+	var stderr bytes.Buffer
+	streams := ioStreams{
+		In:  strings.NewReader(""),
+		Out: newBufferedOut(errWriter{err: errors.New("disk full")}),
+		Err: &stderr,
+	}
+	if status := run([]string{"--db", path, "event", "show", "1"}, streams, func(int) {}); status != exitError {
+		t.Errorf("status = %d, want %d", status, exitError)
+	}
+	if !strings.Contains(stderr.String(), "disk full") {
+		t.Errorf("stderr = %q, want it to name the failed flush", stderr.String())
+	}
+}
+
+// TestRun_FlushesBeforeExitingMidParse covers the one exit that does not return
+// through run at all. Kong's --help and --version hooks call the exit function
+// from inside Parse, so with Out buffered `fngr --help` printed nothing.
+func TestRun_FlushesBeforeExitingMidParse(t *testing.T) {
+	t.Parallel()
+
+	for _, flag := range []string{"--help", "--version"} {
+		t.Run(flag, func(t *testing.T) {
+			t.Parallel()
+			var atExit string
+			streams, _, dest, _ := newTestIOBuffered("")
+
+			run([]string{flag}, streams, func(int) { atExit = dest.String() })
+
+			if atExit == "" {
+				t.Error("stdout was still empty when Kong asked to exit; the buffer was never flushed")
+			}
+		})
+	}
+}
+
+// TestRun_ReportsAFailedFlushOnTheMidParseExit is the other half of that exit.
+// run never regains control there, so the status handed to Kong's exit function
+// is the only place left to say that the help text reached nothing.
+func TestRun_ReportsAFailedFlushOnTheMidParseExit(t *testing.T) {
+	t.Parallel()
+
+	var got []int
+	streams := ioStreams{
+		In:  strings.NewReader(""),
+		Out: newBufferedOut(errWriter{err: errors.New("disk full")}),
+		Err: io.Discard,
+	}
+
+	run([]string{"--help"}, streams, func(status int) { got = append(got, status) })
+
+	if len(got) != 1 || got[0] != exitError {
+		t.Errorf("Kong asked to exit %v, want [%d] — the help text was never written", got, exitError)
 	}
 }
 

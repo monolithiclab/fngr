@@ -391,10 +391,12 @@ func TestListCmd_NoPagerStillRendersToBuffer(t *testing.T) {
 	}
 }
 
-// TestListCmd_ReportsAFailedFlush is the other half of M15: Out is buffered
-// now, so the tail of a listing is written when Run returns and nowhere else.
-// Swallowing that error would exit 0 over output the user never received.
-func TestListCmd_ReportsAFailedFlush(t *testing.T) {
+// TestListCmd_ReportsAFailedWrite is the other half of M15: a listing that
+// could not be written is the command's error, whichever renderer noticed.
+// Reporting anything else would exit 0 over output the user never received —
+// see TestRun_ReportsAFailedFlush for the same rule one level up, where the
+// buffer that holds the tail back is finally emptied.
+func TestListCmd_ReportsAFailedWrite(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
 
