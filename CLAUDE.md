@@ -459,29 +459,29 @@ make ci             # codefix + format + lint + test
   into a string SQLite stores but the driver cannot scan back — one such row broke every read of
   the table. Month arithmetic goes through `addMonths`, which clamps the day to the target month's
   last day; plain `AddDate` normalizes Feb 31 forward to Mar 3.
-- `internal/event/meta.go` — Domain meta key constants (`MetaKeyAuthor`, etc.), the
-  `metaSourceBody` / `metaSourceExplicit` values of `event_meta.source`, and `MergeMeta`, which
-  merges all meta sources for a new event (author, body tags, explicit entries) with dedup.
-  `CollectMeta` is `MergeMeta` over `--meta key=value` strings. An explicit `author` *replaces*
-  the default rather than joining it; two distinct explicit authors are an error, and so is an
-  empty one (`-m author=` used to both blank the author and discard the real one). `author` is
-  single-valued because `AuthorOf` — the one lookup, used by `render` and the JSON import —
-  returns the first match in `ORDER BY key, value`, so a second row means the displayed author
-  is alphabetical rather than true. `requireOneAuthor` restates that at the writer, so an
-  `AddInput` built directly cannot create the state no meta verb is allowed to repair.
-  `requireStorableMeta` is the same argument for `parse.ValidateMeta`: the CLI checks are
-  pre-flights that can name a flag or a record index, this is the one nothing bypasses. Safe
-  against the paths that never see an argument parser because `parse.BodyTags` is bounded by
-  `metaNamePattern`, so neither a body-derived tuple nor a migration back-fill can carry an
-  empty value or a whitespace key. Called by the minting writers only (`addInTx`, `AddTags`);
-  `RemoveTags` is deliberately unchecked, so a row an older build wrote stays removable. Also
-  `metaSet` and `subtractMeta`, the tuple-set helpers `addInTx` and `Update` use.
+- `internal/event/*` — Split at the read/write seam; the per-file bullets below say which file
+  holds what, and so does the package doc on `event.go`. What only this bullet can say is *why*
+  the two files that depart from the seam depart from it. It was `event.go` at 1 396 lines beside
+  a 188-line `meta.go`; a verb's tests live in the matching `*_test.go`, with `testDB` and the
+  other fixtures every one of them reaches for in `testhelpers_test.go`.
+  `meta.go` is named for a **domain**, and it wins over the seam inside that domain: it holds the
+  rules, the storage verbs *and* metadata's own reads (`ListMeta`, `CountMeta`), reading rules
+  first and verbs after. The review suggested a new `meta.go` for the meta CRUD, but the name was
+  already the domain file's, and two files a reader has to tell apart is worse than one that
+  answers every metadata question.
+  `tx.go` is named for a **role**, which is the thing `internal.go` (what it began as) was not: a
+  visibility every declaration in a package already under `internal/` has is a criterion nothing
+  can fail, so nothing would ever be moved out of it. Its rule is the transaction bracket plus the
+  tx-taking helpers that are shared across files and belong to no one domain — a criterion that
+  can refuse, and does at both ends: `formatTimestamp` opens nothing and went to `event.go`
+  beside the `ErrTimeRange` it is the sole producer of, while `meta.go`'s `readMetaTx` and
+  `execBodyMetaTuples` take a `*sql.Tx` and stay where they are, being about metadata.
 - `internal/event/event.go` — Data access functions: `Add` (transactional event + meta + FTS),
   `AddMany` (batched same shape, atomic), `AddInput` value type. Both `Add` and `AddMany`
   delegate to a private `addInTx` that runs the per-record INSERT loop using a caller-owned
   `*sql.Tx`. That pairing is the package-wide shape: `inTx` (and `inTxVoid`, its no-result
-  wrapper) is the *only* `BeginTx` here, and every mutation is a public function that validates
-  what it can without a write lock and then hands a private `fooInTx` to it. Two of the seven
+  wrapper, both in `tx.go`) is the *only* `BeginTx` here, and every mutation is a public function
+  that validates what it can without a write lock and then hands a private `fooInTx` to it. Two of the seven
   hand-written brackets it replaced returned `tx.Commit()` bare, so a write failing at the last
   step said `database is locked` with nothing to say which write it was; wording the begin and
   commit errors in one place is what makes that unforgettable rather than remembered. Keep the
@@ -509,24 +509,22 @@ make ci             # codefix + format + lint + test
   the text yields is recorded as body-derived even when `--meta` named it too — the same
   tie-break migration 5 makes, which also keeps a `--format=json` round trip from freezing every
   body tag as explicit.
-  `Get`, `Update` (title, body, and/or timestamp; on title or body change body-derived tags are
-  *synced* — `parse.BodyTags(old) \ parse.BodyTags(new)` deleted via `execBodyMetaTuples` with
-  `deleteBodyMetaSQL`, which matches `source = 'body'` only, then `parse.BodyTags(new)` inserted
-  with `insertBodyMetaSQL`'s `ON CONFLICT DO NOTHING` so an explicit row keeps its provenance;
-  FTS rebuilt. The source filter is what carries the semantics — without it an edit that drops an
-  inline `@bob` also deletes the `people=bob` an operator added by hand, the two being the same
-  row. Subtracting the delta is an optimisation on top, same end state either way, worth it
-  because most edits touch no tags and would otherwise rewrite every row), `Reparent` (set/clear
-  `parent_id`; rejects self and ancestry cycles via `ErrCycle`. Its upward walk carries a `seen`
-  set seeded with the starting node — that is a *bound*, not part of the cycle check: a cycle
-  sitting upstream of the walk never contains the moving event, so the `parent == id` test never
-  fires and the loop spun at full CPU forever inside an open transaction. A repeat means the
-  stored chain is already cyclic → `ErrCorruptTree`), `AddTags` (inserts as
-  `'explicit'`, *promoting* an existing body-derived row, since a tag named on the command line
-  must survive the next body edit; the `DO UPDATE` is guarded on `source <> excluded.source` so
-  only that promotion rewrites a row, and the added count comes from a pre-read because
-  `RowsAffected` cannot tell the promotion from an insert) / `RemoveTags` (event-scoped meta CRUD with FTS
-  resync; both refuse `protectedMetaKeys`), `Delete`, `HasChildren`, `List` / `ListSeq` (FTS5 filter + date range + `Limit` +
+  The `ErrNotFound`, `ErrCycle`, `ErrTimeRange` and `ErrCorruptTree` sentinels are declared here —
+  the last one distinct from `ErrCycle` on purpose: `ErrCycle` refuses a requested change,
+  `ErrCorruptTree` reports a chain that was already broken when fngr opened the file (a
+  hand-edit, a half-written database, or someone else's `.fngr.db` that `db.ResolvePath` picked
+  up from the current directory). Every function in the package that touches the database accepts
+  a `context.Context`.
+  `formatTimestamp` — the only writer of `created_at`, re-checking `timefmt.InRange` because a
+  timestamp can bypass the CLI parser via `--format=json` or a directly-built `AddInput` — is
+  here rather than in `tx.go` because it opens no transaction and produces the `ErrTimeRange`
+  declared above it.
+- `internal/event/query.go` — Every *standalone* read of an event. Two kinds are elsewhere and
+  neither is an oversight: metadata's own reads (`ListMeta`, `CountMeta`) are in `meta.go` with
+  the rest of the metadata, and the small `SELECT`s a mutation makes inside its own transaction
+  before writing (`event.go`'s parent lookup, `mutate.go`'s title/body and parent_id reads,
+  `tx.go`'s `requireEventExists` and `rebuildEventFTS`) stay beside the write they serve.
+  `Get`, `HasChildren`, `List` / `ListSeq` (FTS5 filter + date range + `Limit` +
   `Ascending`, both built by the shared `buildListQuery`, which refuses a negative `Limit` —
   unlike `From`/`To`, deliberately un-range-checked because a bad bound matches nothing or
   everything *as asked*, whereas only the `LIMIT` clause reads `Limit` and it is emitted on
@@ -550,9 +548,57 @@ make ci             # codefix + format + lint + test
   `CountSubtree` (the same recursion, the same `UNION` and the same loop test — restated in SQL as
   two scalar subqueries over one materialized CTE — for a caller that wants only the size.
   `delete -r` is that caller, and reading every title, body and meta row of a 100k subtree to
-  print one integer cost ~950 ms and ~110 MB of live heap against ~120 ms and nothing),
-  `ListMeta` (filtered via `ListMetaOpts{Key, Value}`),
-  `CountMeta`, `UpdateMeta` (a *merge*, not a plain rename — `UPDATE OR REPLACE` drops the row
+  print one integer cost ~950 ms and ~110 MB of live heap against ~120 ms and nothing).
+  `loadMetaBatch` chunks the IN clause to stay under SQLite's parameter limit.
+  `scanEventRow` is the only row reader — shared by
+  `scanEvents` and `ListSeq`. `created_at` is read through a `timeScanner` rather than scanned
+  straight into a `time.Time`: the driver hands back a raw string for a value it cannot parse, and
+  the default conversion then failed the *entire* result set, so one bad row written by an older
+  build broke list, show and delete alike (delete calls `Get` first). `timeScanner` never errors —
+  such a row reads as the zero time and stays deletable.
+- `internal/event/mutate.go` — `Update` (title, body, and/or timestamp; on title or body change body-derived tags are
+  *synced* — `parse.BodyTags(old) \ parse.BodyTags(new)` deleted via `execBodyMetaTuples` with
+  `deleteBodyMetaSQL`, which matches `source = 'body'` only, then `parse.BodyTags(new)` inserted
+  with `insertBodyMetaSQL`'s `ON CONFLICT DO NOTHING` so an explicit row keeps its provenance;
+  FTS rebuilt. The source filter is what carries the semantics — without it an edit that drops an
+  inline `@bob` also deletes the `people=bob` an operator added by hand, the two being the same
+  row. Subtracting the delta is an optimisation on top, same end state either way, worth it
+  because most edits touch no tags and would otherwise rewrite every row), `Reparent` (set/clear
+  `parent_id`; rejects self and ancestry cycles via `ErrCycle`. Its upward walk carries a `seen`
+  set seeded with the starting node — that is a *bound*, not part of the cycle check: a cycle
+  sitting upstream of the walk never contains the moving event, so the `parent == id` test never
+  fires and the loop spun at full CPU forever inside an open transaction. A repeat means the
+  stored chain is already cyclic → `ErrCorruptTree`), and `Delete`.
+- `internal/event/meta.go` — Domain meta key constants (`MetaKeyAuthor`, etc.), the
+  `metaSourceBody` / `metaSourceExplicit` values of `event_meta.source`, and `MergeMeta`, which
+  merges all meta sources for a new event (author, body tags, explicit entries) with dedup.
+  `CollectMeta` is `MergeMeta` over `--meta key=value` strings. An explicit `author` *replaces*
+  the default rather than joining it; two distinct explicit authors are an error, and so is an
+  empty one (`-m author=` used to both blank the author and discard the real one). `author` is
+  single-valued because `AuthorOf` — the one lookup, used by `render` and the JSON import —
+  returns the first match in `ORDER BY key, value`, so a second row means the displayed author
+  is alphabetical rather than true. `requireOneAuthor` restates that at the writer, so an
+  `AddInput` built directly cannot create the state no meta verb is allowed to repair.
+  `requireStorableMeta` is the same argument for `parse.ValidateMeta`: the CLI checks are
+  pre-flights that can name a flag or a record index, this is the one nothing bypasses. Safe
+  against the paths that never see an argument parser because `parse.BodyTags` is bounded by
+  `metaNamePattern`, so neither a body-derived tuple nor a migration back-fill can carry an
+  empty value or a whitespace key. Reached by the minting writers only — `AddTags` directly, the
+  `Add` path through `validateAddInput`; `RemoveTags` is deliberately unchecked, so a row an older
+  build wrote stays removable. Also `metaSet` (used by `addInTx`, `addTagsInTx` and
+  `subtractMeta`) and `subtractMeta`, the tuple-set helpers behind `Add` and `Update`.
+
+  The storage verbs live here too — reads included, which is the one place the package's
+  read/write seam gives way to the domain one: `ListMeta` and `CountMeta` are queries, and they
+  are here rather than in `query.go` because a reader asking anything about metadata should have
+  one file to open. The rules above are what the verbs enforce. `AddTags` (inserts as
+  `'explicit'`, *promoting* an existing body-derived row, since a tag named on the command line
+  must survive the next body edit; the `DO UPDATE` is guarded on `source <> excluded.source` so
+  only that promotion rewrites a row, and the added count comes from a pre-read because
+  `RowsAffected` cannot tell the promotion from an insert) / `RemoveTags` (event-scoped meta CRUD
+  with FTS resync; both refuse `protectedMetaKeys`), `ListMeta` (filtered via
+  `ListMetaOpts{Key, Value}`), `CountMeta`, `UpdateMeta` (a *merge*, not a plain rename —
+  `UPDATE OR REPLACE` drops the row
   colliding with migration 2's `UNIQUE(key, value, event_id)`, so an event carrying both tags ends
   up with one. Plain `UPDATE` aborts the whole transaction there and renames nothing; any
   two-statement formulation instead needs an `old == new` guard, because its delete half would
@@ -574,28 +620,19 @@ make ci             # codefix + format + lint + test
   them correct, which is the reason to share rather than merely the saving: the affected ids
   must be read *before* the statement runs, because afterwards there is no tuple left to find
   them by and an event's FTS content includes its `key=value` tokens. The protected-key gate
-  stays at the call sites, since that is the one thing the two answer differently.
-  All functions accept
-  `context.Context`. `ErrNotFound`, `ErrCycle`, `ErrTimeRange` and `ErrCorruptTree` sentinels —
-  the last one distinct from `ErrCycle` on purpose: `ErrCycle` refuses a requested change,
-  `ErrCorruptTree` reports a chain that was already broken when fngr opened the file (a
-  hand-edit, a half-written database, or someone else's `.fngr.db` that `db.ResolvePath` picked
-  up from the current directory).
-  `loadMetaBatch` chunks the IN clause to stay under SQLite's parameter limit. Private helpers:
-  `requireEventExists` (existence check used by every mutation function), `rebuildEventFTS`
-  (used by Update/AddTags/RemoveTags to resync `events_fts`), `execBodyMetaTuples` (both halves
-  of Update's body-tag sync, driven by `deleteBodyMetaSQL` / `insertBodyMetaSQL`),
-  `requireUnprotectedMeta` / `requireUnprotectedTags` / `requireRenamableMeta` (the
-  `protectedMetaKeys` gate — currently just `author`, refused as the target of every meta verb
-  because no insert path can produce zero or two of them),
-  `formatTimestamp` (the only writer of
-  `created_at`; re-checks `timefmt.InRange` because a timestamp can bypass the CLI parser via
-  `--format=json` or a directly-built `AddInput`), and `scanEventRow` (the only reader — shared by
-  `scanEvents` and `ListSeq`). `created_at` is read through a `timeScanner` rather than scanned
-  straight into a `time.Time`: the driver hands back a raw string for a value it cannot parse, and
-  the default conversion then failed the *entire* result set, so one bad row written by an older
-  build broke list, show and delete alike (delete calls `Get` first). `timeScanner` never errors —
-  such a row reads as the zero time and stays deletable.
+  stays at the call sites, since that is the one thing the two answer differently. Private
+  helpers: `readMetaTx`, `metaEventIDs`, `execBodyMetaTuples` (both halves of `Update`'s
+  body-tag sync, driven by `deleteBodyMetaSQL` / `insertBodyMetaSQL`; it and `subtractMeta` are
+  what `mutate.go` reaches in here for), and `requireUnprotectedMeta` / `requireUnprotectedTags` /
+  `requireRenamableMeta` (the `protectedMetaKeys` gate — currently just `author`, refused as the
+  target of every meta verb because no insert path can produce zero or two of them).
+- `internal/event/tx.go` — The transaction layer: `inTx` / `inTxVoid`, plus the two cross-file
+  tx-taking helpers that belong to no one domain — `requireEventExists` (used by every mutation
+  that reads before it writes: `Update`, `Reparent`, `AddTags`, `RemoveTags`. Not `Delete`, whose
+  own `RowsAffected` already says whether the row was there) and `rebuildEventFTS` (used by
+  `Update`, `AddTags`, `RemoveTags` and `rewriteMetaTuple` to resync `events_fts`). Nothing else
+  opens a transaction here, which is what makes the begin/commit wording a single decision rather
+  than one repeated at seven call sites — see `inTx`'s own comment.
 - `internal/event/store.go` — `Store` wrapper that exposes the package functions as methods on a
   single `*sql.DB`, satisfying `cmd/fngr.eventStore`.
 - `internal/event/filter.go` — `-S` filter expressions: tokenizer → precedence-climbing parser
@@ -705,7 +742,9 @@ make ci             # codefix + format + lint + test
 - Tests use SQLite via per-test temp files (not bare `:memory:` — each pool connection sees its
   own empty in-memory database, which breaks streaming queries). CLI tests construct an
   `event.Store` via the `newTestStore` helper in `cmd/fngr/testhelpers_test.go`; the
-  `internal/event` package keeps its own `testDB` for data-access tests. No persistent fixtures
+  `internal/event` package keeps its own `testDB` for data-access tests, in a
+  `testhelpers_test.go` of its own — a fixture six test files reach for does not belong to
+  whichever verb's file happened to declare it first. No persistent fixtures
   on disk. A CLI test that needs a parser builds it with `newTestParser` from that same file,
   which is `kongOptions` plus redirected writers and exit — never a hand-rolled `kong.New`. Three
   hand-rolled copies is what `kongOptions` was introduced to end, and the oldest had already

@@ -2347,14 +2347,68 @@ No package-boundary changes recommended. The `cmd` → `event.Store` →
 work, and the streaming/buffered split in `render` is well-judged. Items below
 are local.
 
-- **`internal/event/event.go` is 976 LoC** and has crossed the ~1,000-line
+- ~~**`internal/event/event.go` is 976 LoC** and has crossed the ~1,000-line
   threshold the last review set as the trigger to split. A read/write boundary
   is the natural seam: `event.go` (types, Add/AddMany/addInTx),
   `query.go` (List/ListSeq/Get/GetSubtree/buildListQuery/scanEvents),
   `mutate.go` (Update/Reparent/Delete), `meta.go` (AddTags/RemoveTags/
   ListMeta/CountMeta/UpdateMeta/DeleteMeta), `internal.go` (requireEventExists,
   rebuildEventFTS, loadMetaBatch/loadMetaChunk, deleteMetaTuples/
-  insertMetaTuples).
+  insertMetaTuples).~~ **Fixed:** split along exactly that seam. `event.go` had
+  reached 1 396 lines since the review, and it came apart beside the 188-line
+  `meta.go` that already existed: `event.go` 310, `query.go` 429, `mutate.go`
+  201, `tx.go` 99, `meta.go` 188 → 605.
+
+  Three departures from the suggested allocation, all deliberate. The review
+  named a new `meta.go` for the meta CRUD, but that file already existed
+  holding the meta *domain* rules those verbs enforce — `requireOneAuthor`,
+  `requireStorableMeta`, `protectedMetaKeys`, `MergeMeta`. A second file a
+  reader has to tell apart by name is worse than one that answers every
+  metadata question, so the two altitudes were merged rather than separated,
+  and the file now reads rules first, then the verbs. That is also why
+  `ListMeta`/`CountMeta` stayed there rather than joining the reads in
+  `query.go`: metadata's domain seam outranks the package's read/write one for
+  exactly the file named after it. Second, `loadMetaBatch`/`loadMetaChunk` went
+  to `query.go`: they are reached only by `scanEvents` and `ListSeq`, so they
+  are part of the read path rather than shared plumbing.
+
+  Third, the suggested `internal.go` is `tx.go`. `internal.go` names a
+  *visibility*, which every declaration in a package already under `internal/`
+  has — a criterion nothing can fail is a misc bucket nothing will ever be
+  moved out of, and the first draft proved it by collecting the three least
+  shared private helpers while `inTx`, the most shared, stayed in `event.go`.
+  `tx.go`'s rule is a role — the one bracket that opens a transaction, and the
+  helpers that take one and touch a single event's rows — and it can refuse a
+  member: `inTx`/`inTxVoid` moved in, `formatTimestamp` moved out to `event.go`
+  beside the `ErrTimeRange` it is the sole producer of.
+  (`deleteMetaTuples`/`insertMetaTuples` no longer exist under those names; the
+  pair became `execBodyMetaTuples`, which lives in `meta.go`.)
+
+  The move is content-preserving, verified rather than asserted, by three
+  independent methods that agree — and the claim is worded so it reproduces,
+  because a verification paragraph whose headline number does not is worse than
+  none. **Code lines are unchanged exactly**: stripping blank, `package`,
+  `import` and comment lines, the two source files hold 994 lines before the
+  split and the five hold the same 994 after, zero lost and zero gained; tests
+  likewise 2 626 → 2 626. **Declarations are byte-identical**: an AST extract of
+  all 68 top-level production declaration groups (72 names) and all 100 test
+  declarations diffs clean against the pre-split source apart from two doc
+  comments deliberately corrected in this same commit (`requireEventExists` no
+  longer claims "every event-mutation function" — `Delete` uses `RowsAffected`
+  instead — and `TestInTx`'s "this file" followed the test into `tx_test.go`).
+  **Declaration sets match.** Per-function coverage is identical line-for-line.
+  Comment lines are the only thing that grew, by 25: the `event.go` package doc
+  and the `tx.go` / `testhelpers_test.go` headers.
+
+  The 2 959-line `event_test.go` (plus `meta_test.go`'s 220) was split the same
+  way and by the same checks, mirroring the source files the package already
+  pairs tests with — `event_test.go` 506, `query_test.go` 923, `mutate_test.go`
+  607, `meta_test.go` 991, `tx_test.go` 145 — plus a 55-line
+  `testhelpers_test.go` holding `testDB`, which every one of the seven test
+  files reaches for (`forgeParent` and `boundedCtx` are shared by two each).
+  The split files carry the same 91 top-level tests before and after;
+  package-wide it is 116 top-level and 162 subtests, with `t.Parallel()` called
+  at all 116 top level and 146 times in total.
 - **Per-record validation ran inside `addInTx`'s insert loop.** Not on the
   original list; found while fixing the two items below. A `--format=json`
   import of 10 000 records that failed on the last one inserted and rolled back
@@ -2815,10 +2869,16 @@ below the table). Each entry states why so we don't re-propose it.
   10-parallel-`add` loop from [C1](#c1), asserting 10 rows. Also assert
   `PRAGMA foreign_keys` on a *second* pooled connection, since that is the half
   a naive fix will miss.
-- **`internal/event/event.go` is 976 LoC** — past the ~1,000-line trigger the
+- ~~**`internal/event/event.go` is 976 LoC** — past the ~1,000-line trigger the
   last review set. The read/write split sketched in the Architecture section is
   the recommended seam. [H3](#h3) and [C3](#c3) both touch this file; splitting
-  first would make both diffs legible.
+  first would make both diffs legible.~~ **Done** — see the Architecture
+  section. The ordering advice was sound and was not followed: [H3](#h3) and
+  [C3](#c3) landed first and the file reached 1 396 lines before it came apart.
+  Nothing was lost by that, but the next review should read the recommendation
+  as a *sequencing* one. The new trigger is `meta.go` and `query.go` (605 and
+  429); neither is close, and `meta.go` is the one to watch since it carries
+  two altitudes by design.
 - **`internal/event/filter.go`** — after [C5](#c5)'s rewrite this becomes the
   most test-worthy file in the repo. Table-driven cases must cover: leading
   `!`, `!` with `|`, bare `!`, `!!!`, hyphenated terms, embedded quotes, empty
@@ -2867,3 +2927,39 @@ below the table). Each entry states why so we don't re-propose it.
   commands; a bulk refresh must not walk cosign-installer past v3.*
 - **`docs/PUBLISHING.md`** — the "Gotchas" section is the institutional memory
   of the v0.0.1 rollout. Add to it when shipping a sibling repo.
+- **Three deferred `internal/event` efficiency findings**, surfaced by the
+  pre-commit review of the file split and left out of it because the split was
+  a provably pure move and these change behaviour. The percentages are the
+  reviewer's estimates, not measurements — the first thing any of them needs is
+  a benchmark, since the repo's only one is `BenchmarkTree_DeepChain`.
+  1. `addInTx` prepares the meta, FTS and parent-lookup statements but sends
+     the `INSERT INTO events` unprepared, re-parsing it once per record
+     (est. ~13% of a 10 000-record import). The two-branch `CreatedAt`
+     nil/non-nil shape is why, so this means either two prepared statements or
+     one statement with a `COALESCE`.
+  2. `parse.BodyTags(parse.EventText(...))` is derived twice per added event —
+     once by `MergeMeta` upstream and again inside `addInTx` for the `source`
+     stamp (est. ~29% of `AddMany`). The re-derivation is deliberate
+     (`AddInput.Meta` arrives already merged, so provenance has to be
+     recovered), so a fix means carrying provenance on the input, which is an
+     API change: weigh it against the CLAUDE.md rationale before touching it.
+  3. `loadMetaChunk` rebuilds its `IN (?, ?, …)` statement per chunk and
+     allocates a fresh map per batch. Bounded work — `metaBatchSize` caps the
+     chunk — so this is the smallest of the three.
+- **`internal/event/tx.go`'s two helpers want direct tests.** Not `inTx` /
+  `inTxVoid`, which `tx_test.go` covers thoroughly — `requireEventExists`
+  (85.7%) and `rebuildEventFTS` (70%), both reached only transitively through
+  the mutation verbs. The error arms are the uncovered ones, which is where a
+  helper this shared is worth pinning. While there: 15 inline
+  `context.Background()` calls predate the package `ctx` fixture — 14 in
+  `mutate_test.go`, 1 in `event_test.go`, where it is that file's only
+  `context.` reference, so fixing it also drops an import. Left alone during
+  the split to keep it a pure move.
+- **`internal/event` reads `SELECT title, body FROM events WHERE id = ?` twice
+  per text-changing `Update`.** `updateInTx` (`mutate.go`) reads the pair to
+  compute the body-tag delta, then calls `rebuildEventFTS` (`tx.go`), which
+  reads the same two columns again inside the same transaction. The two sat
+  fifteen lines apart before the split and are now in different files, which is
+  the kind of thing a split makes easier to lose track of — hence the pointer.
+  A `readEventText(ctx, tx, id)` in `tx.go` fits that file's stated rule
+  exactly and would serve both.
