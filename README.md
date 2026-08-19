@@ -250,6 +250,10 @@ fngr --no-pager        # don't pipe through $PAGER even on a TTY
 # tree|flat|json|csv|md, a single event text|json|csv|md. `tree` and `flat`
 # need a set of events; `text` is the one-event detail view.
 #
+# A listing line is `<id> <when> <author> <title>` — tree and flat show the
+# title only, never the body. `fngr event N` is what shows a body; so do
+# json, csv and md, which carry every field.
+#
 # An empty result is empty per format, not a shared "nothing": tree, flat
 # and md write nothing at all, json writes `[]`, csv writes its header row.
 # Each is what a consumer of that format expects to parse. Every format also
@@ -259,9 +263,10 @@ fngr --format flat
 fngr --format json
 fngr --format csv
 
-# Markdown digest — local-date sections + bullet entries; multi-line
-# bodies and meta render as 2-space-indented continuation lines.
-# Designed for paste-into-wiki workflows.
+# Markdown digest — `## YYYY-MM-DD` sections, one `- <time> — <title>`
+# bullet per event. Unlike tree and flat, this format does carry the body:
+# it and the `key=value` meta line follow as 2-space-indented continuation
+# lines. Designed for paste-into-wiki workflows.
 fngr --format=md
 fngr --from 2026-04-15 --to 2026-04-22 --format=md > week.md
 
@@ -279,12 +284,18 @@ fngr event text 1 "fixed wording. for @sarah #urgent"
 # Or set just the title (body untouched)
 fngr event title 1 "fixed wording"
 
-# Or set just the body (title untouched; empty arg clears body)
+# Or set just the body (title untouched)
 fngr event body 1 "for @sarah #urgent"
+fngr event body 1 ""        # clears the body — the "" is required,
+                            # omitting the argument is a usage error
 
 # Edit clock time (date preserved) or full timestamp (replaces both)
 fngr event time 1 "09:30"
 fngr event time 1 "2026-04-15T09:30"
+# Only a bare clock preserves the date. Relative forms are anchored on now,
+# so `fngr event time 1 "3 hours ago"` moves a year-old event to today —
+# use `event date` afterwards, or say the timestamp in full. Date-only
+# values ("yesterday", 2026-04-15) are refused here rather than guessed at.
 
 # Edit date (clock preserved) or full timestamp (replaces both)
 fngr event date 1 "2026-05-01"
@@ -307,6 +318,10 @@ fngr event untag 1 "#urgent"
 fngr delete 3
 fngr delete 1 -r            # recursive: delete with children
 fngr delete 3 -f            # skip confirmation
+# `-f` is --force on the three verbs that prompt (delete, meta rename,
+# meta delete) and --format on `add`, where nothing prompts. Same letter,
+# different flag; `fngr add -f json` and `fngr delete 3 --force` are the
+# unambiguous spellings.
 
 # Metadata
 fngr meta                   # list every key=value pair with counts

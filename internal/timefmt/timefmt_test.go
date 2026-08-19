@@ -706,3 +706,68 @@ func TestInRange(t *testing.T) {
 		})
 	}
 }
+
+// formExample gives one parseable input per placeholder listed in the
+// absolute-form constants. The map is the drift guard: TestForms below fails on
+// a placeholder it has no example for, so a token added to the help without a
+// matching input the parser accepts cannot ship.
+var formExample = map[string]string{
+	"YYYY-MM-DD":       "2026-04-20",
+	"YYYY-MM-DDTHH:MM": "2026-04-20T09:30",
+	"RFC3339":          "2026-04-20T09:30:00Z",
+	"HH:MM":            "09:30",
+	"HH:MMpm":          "9:30pm",
+}
+
+// TestForms pins the promise each form constant makes. The halves exist so
+// `event time` and `event date` can name the subset they accept, and each verb
+// refuses on exactly hasTime / hasDate — so a token in the wrong constant puts
+// a value in the help that the verb it advertises will reject. The composed
+// AbsoluteForms and RelativeForms are checked as the concatenations they are,
+// which is what keeps a token from being listed twice or dropped.
+func TestForms(t *testing.T) {
+	t.Parallel()
+
+	for _, tt := range []struct {
+		name             string
+		forms            string
+		literal          bool // relative forms are inputs; absolute ones are placeholders
+		hasDate, hasTime bool
+	}{
+		{name: "DateForms", forms: DateForms, hasDate: true},
+		{name: "DateTimeForms", forms: DateTimeForms, hasDate: true, hasTime: true},
+		{name: "ClockForms", forms: ClockForms, hasTime: true},
+		{name: "RelativeDateForms", forms: RelativeDateForms, literal: true, hasDate: true},
+		{name: "RelativeTimeForms", forms: RelativeTimeForms, literal: true, hasDate: true, hasTime: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			for form := range strings.SplitSeq(tt.forms, ", ") {
+				input := strings.Trim(form, `"`)
+				if !tt.literal {
+					example, ok := formExample[form]
+					if !ok {
+						t.Errorf("no example input for form %q — add one to formExample", form)
+						continue
+					}
+					input = example
+				}
+				_, hasDate, hasTime, _, err := ParsePartial(input)
+				switch {
+				case err != nil:
+					t.Errorf("ParsePartial(%q) [form %q] = error %v, want it accepted", input, form, err)
+				case hasDate != tt.hasDate || hasTime != tt.hasTime:
+					t.Errorf("ParsePartial(%q) [form %q] hasDate=%v hasTime=%v, want %v/%v",
+						input, form, hasDate, hasTime, tt.hasDate, tt.hasTime)
+				}
+			}
+		})
+	}
+
+	if got, want := AbsoluteForms, DateForms+", "+DateTimeForms+", "+ClockForms; got != want {
+		t.Errorf("AbsoluteForms = %q, want the three halves joined: %q", got, want)
+	}
+	if got, want := RelativeForms, RelativeDateForms+", "+RelativeTimeForms; got != want {
+		t.Errorf("RelativeForms = %q, want the two halves joined: %q", got, want)
+	}
+}

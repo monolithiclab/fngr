@@ -89,7 +89,19 @@ make ci             # codefix + format + lint + test
   Every diagnosed error goes out through `fail` → `parser.Errorf`, so the two `db.Open` messages
   that used to print a bare `error: …` now match the `fngr: error: …` everything else has.
   `kongVars` carries `${TIME_ABSOLUTE}` / `${TIME_RELATIVE}` alongside the `${*_FORMATS}`
-  vocabularies, for the same reason: see `internal/timefmt`. `helpOptions` is a package var
+  vocabularies, for the same reason: see `internal/timefmt`. It also carries
+  `${AUTHOR_DEFAULT}`, which is `defaultAuthor()` — `$FNGR_AUTHOR`, then `$USER`, then the OS
+  account. `defaultAuthor` is the *only* reader of `$FNGR_AUTHOR`; `add`'s `--author` carries
+  no `env:` tag, which is the point. Kong applies `env:` when it *parses* but interpolates
+  `${AUTHOR_DEFAULT}` once at parser construction, so the two answered separately and
+  disagreed in both directions: with `FNGR_AUTHOR=zed` exported, `fngr add --help` printed
+  `--author="nicolasm"` while every event it wrote was authored `zed`; with it exported
+  *empty* — `docker run -e FNGR_AUTHOR`, or `env: FNGR_AUTHOR:` in CI — Kong's `os.LookupEnv`
+  took the empty string over the default and `fngr add` failed with `author is required` under
+  a help line still naming a real user. One lookup cannot diverge from itself, and treating an
+  empty value as unset is what makes the CI case add an event rather than refuse one. The cost
+  is the `($FNGR_AUTHOR)` note Kong appended from the tag, which the help string now states
+  itself. `helpOptions` is a package var
   rather than a literal inside `kongOptions` because `writeShortUsage` must pass Kong the same
   options `kong.ConfigureHelp` got, and Kong keeps its copy unexported.
 - `cmd/fngr/{add,list,event,delete,meta}.go` — Kong command structs with
@@ -366,7 +378,10 @@ make ci             # codefix + format + lint + test
   fd-exhausted process fails the probe too (and the latter is itself a reason SQLite returns
   CANTOPEN), and the hint *replaces* the driver text rather than joining it, so a guess there
   would swap a true diagnosis for a false one.
-- `internal/db/migrate.go` — Ordered list of migrations gated by `PRAGMA user_version`. Pre-migration
+- `internal/db/migrate.go` — Migration runner, gated by `PRAGMA user_version`. The steps are not a
+  Go literal: `loadMigrations` reads them off a `//go:embed migrations/*.sql` filesystem and sorts
+  by the number in the filename, so a new version is a new `internal/db/migrations/<N>.sql` file
+  and nothing else. Pre-migration
   databases are detected via the legacy v1 `events` table and bumped to `user_version = 1`.
   Migration 2 deduplicates `event_meta` and adds a UNIQUE index on `(key, value, event_id)` so
   `INSERT ... ON CONFLICT DO NOTHING` works in `AddTags` and the body-tag sync inside `Update`.
@@ -476,14 +491,21 @@ make ci             # codefix + format + lint + test
   text the user typed.
   `AbsoluteForms` / `RelativeForms` are the one place the accepted vocabulary is written down:
   the "unrecognized time" hint is built from them, and `kongVars` threads them into the `--time`
-  and `event time` help as `${TIME_ABSOLUTE}` / `${TIME_RELATIVE}`, the same shape
+  help as `${TIME_ABSOLUTE}` / `${TIME_RELATIVE}`, the same shape
   `render.ListFormats` reaches `--format` by. Every shape is a *placeholder*, `HH:MMpm` included:
   the 12-hour one used to be spelled `3:04PM` — Go's reference clock, a literal sitting in a list
   of patterns, and a Go layout shown to someone typing a time — and it was spelled that way in
-  all three sites, so the one-token fix took three hand edits. Sites that gesture at the grammar
-  without enumerating it (`event date`, list's `--from`/`--to`) are deliberately *not* built from
-  these: there is nothing there to drift, and interpolating the full list would put 100 characters
-  of placeholder in a flag summary.
+  all three sites, so the one-token fix took three hand edits. Both are *composed* from the
+  halves `DateForms` / `DateTimeForms` / `ClockForms` and `RelativeDateForms` /
+  `RelativeTimeForms`, which exist because `event time` and `event date` each accept a strict
+  subset — a clock splices, a date-only value is refused, and vice versa — and a help string
+  naming the full list promises forms the verb rejects. Exporting the subsets is the fix rather
+  than hand-listing four tokens in a struct tag, which is the drift these constants exist to
+  prevent; the two verbs interpolate `${TIME_CLOCK}` / `${TIME_DATETIME}` / `${TIME_REL_TIME}`
+  and `${TIME_DATE}` / `${TIME_DATETIME}` / `${TIME_REL_DATE}` accordingly. List's
+  `--from`/`--to` still gestures at the grammar without enumerating it and is deliberately *not*
+  built from these: interpolating a list would put 100 characters of placeholder in a flag
+  summary that only has to say "same as `--time`".
   Every wall clock is assembled through `localClock`, which reports whether that clock exists —
   a DST spring-forward skips an hour and both `time.Date` and `time.ParseInLocation` resolve a
   clock inside the gap to the hour before it with no error, so `fngr event time N 2:30` stored a
@@ -757,7 +779,7 @@ make ci             # codefix + format + lint + test
   learns it matched something from `noteAny`, a pass-through wrapper, rather than by
   materializing the result. Both that message and `fngr meta`'s go through
   `cmd/fngr/plural.go::reportNone`, which is what makes the choice of stream a single decision.
-  Markdown output groups events by local date as `## YYYY-MM-DD` sections; bullets are `- <time> — <body>` with multi-line bodies indented two spaces and meta on a separate continuation line of space-separated `key=value` tokens.
+  Markdown output groups events by local date as `## YYYY-MM-DD` sections; the bullet is `- <time> — <title>`, with the body (and any second title line) on two-space-indented continuation lines beneath it and meta on a final continuation line of space-separated `key=value` tokens.
   `Tree` drives a `treeWriter` whose `prefix []byte` is appended to on the way down and truncated
   on the way back up, and whose `line []byte` assembles prefix+connector+event so each node
   costs the writer exactly one `Write`. It used to concatenate two fresh strings per node, each
@@ -808,7 +830,8 @@ make ci             # codefix + format + lint + test
 - Table-driven tests with `t.Run` subtests.
 - Use modern Go idioms and features.
 - Try hard to prevent duplicated code.
-- Schema changes go in a new entry at the bottom of `migrations` in `internal/db/migrate.go`;
-  never edit a published migration.
+- Schema changes go in a new `internal/db/migrations/<N>.sql`, one past the highest number there;
+  `loadMigrations` picks it up from the embedded filesystem, so `migrate.go` needs no edit unless
+  the step also needs Go (then add it to `goMigrations`). Never edit a published migration.
 - Version injected via `-ldflags` at build time from git tags; surfaced via `--version`.
 - `common-go.mk` is shared across repos — don't modify it here.

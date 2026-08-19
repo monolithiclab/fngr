@@ -18,7 +18,7 @@ type EventCmd struct {
 	Text   EventTextCmd   `cmd:"" help:"Replace event text — re-splits on '. ' into title+body."`
 	Title  EventTitleCmd  `cmd:"" help:"Replace event title (body untouched)."`
 	Body   EventBodyCmd   `cmd:"" help:"Replace event body (title untouched; empty arg clears)."`
-	Time   EventTimeCmd   `cmd:"" help:"Replace clock time (or full timestamp)."`
+	Time   EventTimeCmd   `cmd:"" help:"Replace clock time — a value carrying a date moves that too."`
 	Date   EventDateCmd   `cmd:"" help:"Replace date (or full timestamp)."`
 	Attach EventAttachCmd `cmd:"" help:"Set parent event."`
 	Detach EventDetachCmd `cmd:"" help:"Clear parent."`
@@ -107,11 +107,18 @@ func (c *EventBodyCmd) Run(s eventStore, io ioStreams) error {
 	return nil
 }
 
-// EventTimeCmd replaces the clock time (or both date+time when given a
-// full timestamp).
+// EventTimeCmd replaces the clock time, or the whole timestamp when the value
+// carries a date of its own.
 type EventTimeCmd struct {
-	ID    int64  `arg:"" help:"Event ID."`
-	Value string `arg:"" help:"New time or full timestamp: absolute (${TIME_ABSOLUTE}) or relative (${TIME_RELATIVE})."`
+	ID int64 `arg:"" help:"Event ID."`
+	// Which values move the date is spelled out because nothing about the
+	// verb's name says so and the answer surprises: only a bare clock splices.
+	// A relative value resolves against now, so `event time 5 "3 hours ago"`
+	// re-dates a year-old event to today and reports success.
+	//
+	// It interpolates the *subset* vars rather than ${TIME_ABSOLUTE} /
+	// ${TIME_RELATIVE}, which include the date-only forms this verb refuses.
+	Value string `arg:"" help:"New time. A bare clock (${TIME_CLOCK}) keeps the stored date; every other accepted form carries one and replaces it — a full timestamp (${TIME_DATETIME}) or a relative value (${TIME_REL_TIME}), which resolve against now. Date-only values are refused; use 'event date'."`
 }
 
 func (c *EventTimeCmd) Run(s eventStore, io ioStreams) error {
@@ -148,8 +155,10 @@ func (c *EventTimeCmd) Run(s eventStore, io ioStreams) error {
 // EventDateCmd replaces the date (or both date+time when given a full
 // timestamp).
 type EventDateCmd struct {
-	ID    int64  `arg:"" help:"Event ID."`
-	Value string `arg:"" help:"New date (YYYY-MM-DD), full timestamp, or relative (\"today\", \"yesterday\", \"2 days ago\")."`
+	ID int64 `arg:"" help:"Event ID."`
+	// The mirror of EventTimeCmd.Value: same subset vars, other halves. A
+	// clock-only value is what this verb refuses.
+	Value string `arg:"" help:"New date (${TIME_DATE}), full timestamp (${TIME_DATETIME}), or relative (${TIME_REL_DATE}). The stored time-of-day is kept unless the value carries one."`
 }
 
 func (c *EventDateCmd) Run(s eventStore, io ioStreams) error {
