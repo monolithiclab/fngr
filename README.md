@@ -152,6 +152,16 @@ don't work inside the image:
 fngr add deployed v1.2 to staging '#ops' @alice
 fngr add "fixed login bug #bugfix" --meta env=prod
 
+# The text is split into title + body at the first ". " (period + space);
+# with no such break the whole thing is the title. A period with no space
+# after it -- v1.2, 3.14 -- is not a break.
+fngr add "deploy failed. rolled back to v1.1"   # title "deploy failed"
+
+# An abbreviation in the first few words is therefore read as the title:
+# "Dr. Smith called" stores the title "Dr". There is no escape at add time;
+# set the halves explicitly instead, which does not re-split.
+fngr event title 1 "Dr. Smith called about the thing"
+
 # From a pipe
 echo "build broken on main" | fngr add
 
@@ -465,7 +475,22 @@ Resolved in order:
 2. `.fngr.db` in the current directory
 3. `~/.fngr.db`
 
-The database is created automatically on the first `fngr add`.
+The database is created automatically on the first `fngr add` — but only at
+the path fngr *resolved*, and rung 2 is consulted only if `.fngr.db` already
+exists. So `fngr add` in a fresh project directory writes to `~/.fngr.db`, not
+to a new local file.
+
+To start a project-local journal, create the file first:
+
+```
+cd ~/src/my-project
+touch .fngr.db      # a 0-byte file is a valid empty SQLite database
+fngr add "first project note"
+```
+
+From then on every fngr command run from that directory (or given `--db`)
+uses it. `touch` is the whole idiom — fngr migrates the empty file into a full
+schema on the next command.
 
 ## Troubleshooting
 
@@ -506,6 +531,15 @@ so the row stays usable: repair it with `fngr event date <id> <date>`
 followed by `fngr event time <id> <time>` (the date verb keeps the old
 time-of-day, which is also meaningless here), or just delete it. New
 input is rejected at parse time.
+
+**My title got cut off at an abbreviation** — `fngr add "Dr. Smith
+called"` stores the title `Dr` and the body `Smith called`. `add` splits
+its text at the first `". "`, and it cannot tell an abbreviation from the
+end of a sentence. A period with no space after it (`v1.2`, `3.14`) is
+safe; `Dr.`, `e.g.` and initials are not. There is no escape at add time.
+Repair it with `fngr event title <id> "Dr. Smith called"` — `event title`
+and `event body` set their half verbatim, where `event text` re-splits
+and would land you back here.
 
 **`event title cannot be empty`** — `fngr add` (no args, no piped
 stdin) launches `$VISUAL` / `$EDITOR`; saving an empty buffer is
