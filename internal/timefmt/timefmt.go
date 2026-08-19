@@ -180,20 +180,38 @@ func parsePartial(s string, now time.Time) (t time.Time, hasDate, hasTime, exist
 
 // AbsoluteForms and RelativeForms name every shape ParsePartial accepts, and
 // are the one place that list is written down. They are exported because the
-// same vocabulary has to appear in the `--time` and `event time` help text, and
-// spelling it out at each site is what let the three disagree: the 12-hour form
-// was `3:04PM` in all of them — Go's reference clock, a literal sitting in a
-// list of placeholders, and a Go layout shown to someone typing a time. Kong
-// interpolates these through kongVars, the same way render.ListFormats reaches
-// the `--format` help.
+// same vocabulary has to appear in the `--time`, `event time` and `event date`
+// help text, and spelling it out at each site is what let the three disagree:
+// the 12-hour form was `3:04PM` in all of them — Go's reference clock, a
+// literal sitting in a list of placeholders, and a Go layout shown to someone
+// typing a time. Kong interpolates these through kongVars, the same way
+// render.ListFormats reaches the `--format` help.
+//
+// The halves are exported too, and the two full lists are built from them, so
+// that a verb accepting a *subset* still spells its tokens once. `event time`
+// refuses a value with no clock in it and `event date` one with no date, and a
+// help string listing forms the verb rejects is worse than none — it is what
+// makes `fngr event time 1 yesterday` read as supported. Splitting on that
+// same line keeps the answer beside layoutHasTime, which is what decides it.
 //
 // Placeholders, not layouts: a caller wanting a layout wants DateFormat or
 // DateTimeFormat. Sites that gesture at the grammar without enumerating it
-// (`event date`, list's --from/--to) are deliberately not built from these —
-// there is nothing there to drift.
+// (list's --from/--to) are deliberately not built from these — there is
+// nothing there to drift.
 const (
-	AbsoluteForms = "YYYY-MM-DD, YYYY-MM-DDTHH:MM, RFC3339, HH:MM, HH:MMpm"
-	RelativeForms = `"today", "yesterday", "2 days ago", "yesterday at 9am", "now"`
+	// DateForms names no clock; ClockForms no date; DateTimeForms both.
+	DateForms     = "YYYY-MM-DD"
+	DateTimeForms = "YYYY-MM-DDTHH:MM, RFC3339"
+	ClockForms    = "HH:MM, HH:MMpm"
+	AbsoluteForms = DateForms + ", " + DateTimeForms + ", " + ClockForms
+
+	// A relative form always resolves against `now`, so every one of them
+	// carries a date; the split is over whether it also carries a clock of its
+	// own. RelativeDateForms take now's time-of-day and report date-only,
+	// which is what lets `event time` refuse them.
+	RelativeDateForms = `"today", "yesterday", "2 days ago"`
+	RelativeTimeForms = `"yesterday at 9am", "now", "3 hours ago"`
+	RelativeForms     = RelativeDateForms + ", " + RelativeTimeForms
 )
 
 // layoutHasTime reports whether layout (one of fullFormats) carries a time

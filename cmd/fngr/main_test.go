@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"os"
 	"os/user"
 	"slices"
 	"strings"
@@ -466,25 +467,93 @@ func TestCreatesDB_NothingSelected(t *testing.T) {
 	}
 }
 
-func TestCurrentUser_PrefersTheEnvironment(t *testing.T) {
-	t.Setenv("USER", "from-env")
-	if got := currentUser(); got != "from-env" {
-		t.Errorf("currentUser() = %q, want %q", got, "from-env")
+// TestDefaultAuthor_Rungs walks the resolution order. The two FNGR_AUTHOR rows
+// are the reason `add` no longer carries an `env:` tag: Kong reads env with
+// os.LookupEnv, so a set-but-empty value beat the default and `fngr add` failed
+// with `author is required` under a help line naming a real user. Here empty
+// and unset answer the same thing, which is the only reading that lets
+// `docker run -e FNGR_AUTHOR` and `env: FNGR_AUTHOR:` in CI write an event.
+func TestDefaultAuthor_Rungs(t *testing.T) {
+	for _, tt := range []struct {
+		name               string
+		set                bool // whether FNGR_AUTHOR is in the environment at all
+		author, user, want string
+	}{
+		{name: "FNGR_AUTHOR wins", set: true, author: "zed", user: "from-env", want: "zed"},
+		{name: "USER when FNGR_AUTHOR is empty", set: true, user: "from-env", want: "from-env"},
+		{name: "USER when FNGR_AUTHOR is unset", user: "from-env", want: "from-env"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			// NOTE: no t.Parallel() — t.Setenv forbids it.
+			// t.Setenv first either way: it is what registers the restore, and
+			// os.Unsetenv on its own would leak the host's value into the
+			// following tests.
+			t.Setenv("FNGR_AUTHOR", tt.author)
+			if !tt.set {
+				_ = os.Unsetenv("FNGR_AUTHOR")
+			}
+			t.Setenv("USER", tt.user)
+			if got := defaultAuthor(); got != tt.want {
+				t.Errorf("defaultAuthor() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
-// TestCurrentUser_FallsBackWhenUSERIsUnset pins the fallback against os/user
-// itself rather than against a literal: the account the test runs as is the
-// host's to decide, and an empty answer is legitimate in a container with no
-// passwd entry. Both branches of the fallback are covered — whichever one this
-// host takes, the expectation is derived the same way.
-func TestCurrentUser_FallsBackWhenUSERIsUnset(t *testing.T) {
+// TestDefaultAuthor_FallsBackWhenBothAreUnset pins the last rung against
+// os/user itself rather than against a literal: the account the test runs as is
+// the host's to decide, and an empty answer is legitimate in a container with
+// no passwd entry. Both branches are covered — whichever one this host takes,
+// the expectation is derived the same way.
+func TestDefaultAuthor_FallsBackWhenBothAreUnset(t *testing.T) {
+	t.Setenv("FNGR_AUTHOR", "")
 	t.Setenv("USER", "")
 	want := ""
 	if u, err := user.Current(); err == nil {
 		want = u.Username
 	}
-	if got := currentUser(); got != want {
-		t.Errorf("currentUser() = %q, want %q", got, want)
+	if got := defaultAuthor(); got != want {
+		t.Errorf("defaultAuthor() = %q, want %q", got, want)
+	}
+}
+
+// TestAddHelp_ShowsTheEffectiveAuthorDefault is the dispatch-layer half of the
+// rungs above: the name in the help text has to be the one a run would use.
+// It goes through runCLI — the real run(), which is where defaultAuthor() is
+// paired with kongOptions — because the defect was in that wiring and not in
+// either end of it. A test that resolved the author itself and handed it to a
+// parser would pass with run() still wired to $USER alone.
+func TestAddHelp_ShowsTheEffectiveAuthorDefault(t *testing.T) {
+	t.Setenv("FNGR_AUTHOR", "zed")
+	t.Setenv("USER", "someone-else")
+
+	res := runCLI(t, "add", "--help")
+	if !strings.Contains(res.stdout, `--author="zed"`) {
+		t.Errorf("add --help = %q, want it to show --author=\"zed\"", res.stdout)
+	}
+}
+
+// TestAdd_SetButEmptyAuthorEnvFallsBackToUser is the regression itself, and it
+// takes both halves of the divergence to state: an exported-but-empty
+// FNGR_AUTHOR (`docker run -e FNGR_AUTHOR`, `env: FNGR_AUTHOR:` in CI) used to
+// make `add --help` print the host user while `add` refused to write anything,
+// because Kong's `env:` tag reads with os.LookupEnv and the empty string won.
+// Asserting only on the help text would pass against the old build.
+func TestAdd_SetButEmptyAuthorEnvFallsBackToUser(t *testing.T) {
+	t.Setenv("FNGR_AUTHOR", "")
+	t.Setenv("USER", "hostuser")
+	path := tempDB(t)
+
+	help := runCLI(t, "add", "--help")
+	if !strings.Contains(help.stdout, `--author="hostuser"`) {
+		t.Errorf("add --help = %q, want it to show --author=\"hostuser\"", help.stdout)
+	}
+
+	res := runCLI(t, "--db", path, "add", "hello")
+	if res.status != exitOK {
+		t.Fatalf("add = %d (%q), want %d", res.status, res.stderr, exitOK)
+	}
+	if !strings.Contains(res.stdout, "Added event 1") {
+		t.Errorf("add stdout = %q, want it to report the new event", res.stdout)
 	}
 }

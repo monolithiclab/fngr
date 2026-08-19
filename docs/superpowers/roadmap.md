@@ -27,8 +27,8 @@ cycle. Specs land under `docs/superpowers/specs/`, plans under
   `{key: [values]}` map.
 - **Markdown output** (`--format=md`) — `fngr list` and `fngr event N`
   emit a Markdown digest grouped by local date: one `## YYYY-MM-DD`
-  header per date followed by `- <time> — <body>` bullets. Multi-line
-  bodies and meta render as 2-space-indented continuation lines.
+  header per date followed by `- <time> — <title>` bullets. Bodies (and
+  meta) render beneath as 2-space-indented continuation lines.
 - **GitHub Actions CI + release pipeline** — every push to `main` and
   every PR validates against `make lint test` on a Linux + macOS
   matrix; every `v*.*.*` tag triggers a GoReleaser-driven multi-channel

@@ -16,7 +16,7 @@ type AddCmd struct {
 	Args   []string `arg:"" optional:"" help:"Event text (joined with spaces). A leading \"<time>: \" prefix sets the timestamp (e.g. \"9:30: had coffee\"), unless --time is given. Omit and pipe to stdin, or use -e."`
 	Edit   bool     `short:"e" help:"Open $VISUAL or $EDITOR for the body."`
 	Format string   `short:"f" help:"Input format: one of ${ADD_FORMATS}. Under json, body is parsed as one event object or an array; per-record fields override the matching CLI flag, and absent fields fall back to it." enum:"${ADD_FORMATS}" default:"${ADD_FORMAT_DEFAULT}"`
-	Author string   `help:"Event author (used as default if JSON record omits meta.author)." env:"FNGR_AUTHOR" default:"${USER}"`
+	Author string   `help:"Event author, defaulting to $FNGR_AUTHOR then $USER (used as default if JSON record omits meta.author)." default:"${AUTHOR_DEFAULT}"`
 	Parent *int64   `help:"Parent event ID (used as default if JSON record omits parent_id)."`
 	Meta   []string `help:"Metadata key=value pairs (used as defaults if JSON record omits meta)." short:"m"`
 	Time   string   `help:"Override event timestamp: absolute (${TIME_ABSOLUTE}) or relative (${TIME_RELATIVE}). Used as default if JSON record omits created_at." short:"t"`

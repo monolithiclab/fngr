@@ -31,7 +31,25 @@ type CLI struct {
 	Help   HelpCmd   `cmd:"" help:"Show help for a command."`
 }
 
-func currentUser() string {
+// defaultAuthor resolves the author `fngr add` uses when --author is absent:
+// $FNGR_AUTHOR, then $USER, then the OS account.
+//
+// It is the *only* reader of $FNGR_AUTHOR; `add`'s --author carries no `env:`
+// tag, which is the point. Kong applies `env:` when it parses but interpolates
+// `${AUTHOR_DEFAULT}` once at parser construction, so the two answered
+// separately and disagreed in both directions: with FNGR_AUTHOR=zed exported,
+// `fngr add --help` printed `--author="nicolasm"` while every event it wrote
+// was authored `zed`; with it exported *empty* — `docker run -e FNGR_AUTHOR`,
+// or `env: FNGR_AUTHOR:` in CI — Kong's os.LookupEnv took the empty string
+// over the default and `fngr add` failed with `author is required` under a
+// help line still naming a real user. One lookup cannot diverge from itself,
+// and treating an empty value as unset is what makes the CI case add an event
+// rather than refuse one. The cost is the `($FNGR_AUTHOR)` note in the help,
+// which Kong appended from the tag and the help string now states.
+func defaultAuthor() string {
+	if a := os.Getenv("FNGR_AUTHOR"); a != "" {
+		return a
+	}
 	if u := os.Getenv("USER"); u != "" {
 		return u
 	}
@@ -49,10 +67,10 @@ func currentUser() string {
 // value, so `", "` reads as prose in the help and parses the same as `","`.
 // Spelling the accepted formats out in prose instead let the two disagree, and
 // the help is the only place a user finds out `markdown` is a spelling at all.
-func kongVars(version, username string) kong.Vars {
+func kongVars(version, author string) kong.Vars {
 	return kong.Vars{
 		"version":              version,
-		"USER":                 username,
+		"AUTHOR_DEFAULT":       author,
 		"ADD_FORMATS":          strings.Join(render.AddFormats, ", "),
 		"ADD_FORMAT_DEFAULT":   render.FormatText,
 		"LIST_FORMATS":         strings.Join(render.ListFormats, ", "),
@@ -61,6 +79,11 @@ func kongVars(version, username string) kong.Vars {
 		"EVENT_FORMAT_DEFAULT": render.FormatText,
 		"TIME_ABSOLUTE":        timefmt.AbsoluteForms,
 		"TIME_RELATIVE":        timefmt.RelativeForms,
+		"TIME_DATE":            timefmt.DateForms,
+		"TIME_DATETIME":        timefmt.DateTimeForms,
+		"TIME_CLOCK":           timefmt.ClockForms,
+		"TIME_REL_DATE":        timefmt.RelativeDateForms,
+		"TIME_REL_TIME":        timefmt.RelativeTimeForms,
 	}
 }
 
@@ -112,11 +135,11 @@ var helpOptions = kong.HelpOptions{Compact: true}
 // No kong.ShortUsageOnError: it configures FatalIfErrorf, which fngr does not
 // call. writeShortUsage prints the same two lines, on stderr — see
 // reportParseError.
-func kongOptions(version, username string, exit func(int)) []kong.Option {
+func kongOptions(version, author string, exit func(int)) []kong.Option {
 	return []kong.Option{
 		kong.Name("fngr"),
 		kong.Description("A CLI to log and track events."),
-		kongVars(version, username),
+		kongVars(version, author),
 		kong.ConfigureHelp(helpOptions),
 		kong.Exit(func(status int) { exit(exitCode(status)) }),
 	}
@@ -164,7 +187,7 @@ func run(args []string, streams ioStreams, exit func(int)) int {
 		}
 		exit(status)
 	}
-	parser, err := kong.New(&cli, append(kongOptions(version, currentUser(), exitFlushed),
+	parser, err := kong.New(&cli, append(kongOptions(version, defaultAuthor(), exitFlushed),
 		kong.Writers(streams.Out, streams.Err),
 	)...)
 	if err != nil {

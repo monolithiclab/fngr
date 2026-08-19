@@ -2806,78 +2806,117 @@ completion, backup, vacuum, filtered delete, `add -`.
 
 ## Documentation gaps
 
+**All resolved.** Every bullet below was re-checked against the shipped
+binary — not against the source — since the whole class of defect here is a
+document that describes an older build.
+
 **`README.md`**
 
-- Troubleshooting `database is locked` — the claim that WAL + `busy_timeout`
+- ~~Troubleshooting `database is locked` — the claim that WAL + `busy_timeout`
   makes transient locks self-heal is **false today** ([C1](#c1)). It currently
-  sends users hunting a nonexistent stuck holder.
-- "JSON is the only round-trip format", the quick-start pipe recipe, and the
+  sends users hunting a nonexistent stuck holder.~~ *[C1](#c1) moved the
+  pragmas into the DSN, so the sentence is now true as written and needed no
+  edit.*
+- ~~"JSON is the only round-trip format", the quick-start pipe recipe, and the
   container round-trip recipe are all **false** ([C3](#c3)). Three separate
-  occurrences.
-- Filter syntax section describes intent, not behavior: `!` first in a
+  occurrences.~~ *All three true after [C3](#c3); verified end to end —
+  `fngr --db src --format=json | fngr --db dst add --format=json` re-creates
+  the parent link and every meta row.*
+- ~~Filter syntax section describes intent, not behavior: `!` first in a
   conjunction discards the rest of the expression, `!` alone panics, hyphenated
   terms and stray quotes error. Needs a known-limitations note until
-  [C5](#c5) lands.
-- Filter table has no `author=` row, and doesn't say `@name` matches key
-  `people` while `--author` writes key `author`.
-- "Database location" — add that the cwd rung requires an *existing*
+  [C5](#c5) lands.~~ *[C5](#c5) landed; the section was rewritten with it and
+  carries no stale limitation note.*
+- ~~Filter table has no `author=` row, and doesn't say `@name` matches key
+  `people` while `--author` writes key `author`.~~ *Both added: the table has
+  the `key=value` row and the paragraph under it spells out that `@person` is
+  `people=person`, which is not `author=`.*
+- ~~"Database location" — add that the cwd rung requires an *existing*
   `.fngr.db`, and that `touch .fngr.db` starts a project-local journal
-  ([M11](#m11)).
-- Nothing documents the ASCII-only restriction on `@person`/`#tag`
-  ([C4](#c4)) — and once [C4](#c4) is fixed, nothing needs to.
-- Quick start doesn't mention that `". "` splitting eats abbreviations
-  (`Dr.`, `e.g.`) or that `fngr event title` is the fix ([M10](#m10)).
-- Date ranges section doesn't state that `--from`/`--to` accept *only*
+  ([M11](#m11)).~~ *Added with [M11](#m11).*
+- ~~Nothing documents the ASCII-only restriction on `@person`/`#tag`
+  ([C4](#c4)) — and once [C4](#c4) is fixed, nothing needs to.~~ *[C4](#c4)
+  fixed; nothing needed.*
+- ~~Quick start doesn't mention that `". "` splitting eats abbreviations
+  (`Dr.`, `e.g.`) or that `fngr event title` is the fix ([M10](#m10)).~~
+  *Added with [M10](#m10), in the quick start and again in troubleshooting.*
+- ~~Date ranges section doesn't state that `--from`/`--to` accept *only*
   `YYYY-MM-DD`, unlike `--time` — and it sits directly below the relative-time
-  section, so readers will assume parity.
-- Bulk-import examples don't state that JSON `created_at` is RFC3339-only.
-- `--format=markdown` is rejected; only `md`. Not stated.
-- No mention that `list`/`flat` show titles only, nor that `event show`'s
-  `--format` vocabulary differs from `list`'s.
-- `fngr event body 1 ""` requires the explicit empty string; omitting the arg
-  is a usage error, not a clear.
+  section, so readers will assume parity.~~ *[M12](#m12) gave them the full
+  `--time` grammar, so parity is now the truth; the section says so and shows
+  a pasted-back `created_at`.*
+- ~~Bulk-import examples don't state that JSON `created_at` is
+  RFC3339-only.~~ *No longer true — `created_at` goes through
+  `timefmt.Parse`, a superset. The JSON-import section says exactly that.*
+- ~~`--format=markdown` is rejected; only `md`. Not stated.~~ *`markdown` is
+  now an alias, and the output-formats block says so.*
+- ~~No mention that `list`/`flat` show titles only, nor that `event show`'s
+  `--format` vocabulary differs from `list`'s.~~ *Both stated in the
+  output-formats block, with the listing line's shape spelled out.*
+- ~~`fngr event body 1 ""` requires the explicit empty string; omitting the arg
+  is a usage error, not a clear.~~ *Now its own example line.*
 
 **`--help`**
 
-- `fngr add --help` prints `--author="nicolasm"` — the machine's `$USER`, not
+- ~~`fngr add --help` prints `--author="nicolasm"` — the machine's `$USER`, not
   the effective default. With `FNGR_AUTHOR=zed` exported, help still shows
-  `nicolasm` while events are authored `zed`.
-- `event time --help` ("Replace clock time (or full timestamp)") gives no way
+  `nicolasm` while events are authored `zed`.~~ *Fixed by making `defaultAuthor`
+  the only reader of `$FNGR_AUTHOR` — `add`'s `env:` tag is gone, so help and
+  run cannot diverge, and a set-but-empty value now falls through to `$USER`
+  instead of failing `author is required`.*
+- ~~`event time --help` ("Replace clock time (or full timestamp)") gives no way
   to predict that `"3 hours ago"` is a full timestamp and **moves the date** by
-  months.
-- `list --help`'s `-S` text says "no grouping parentheses" but doesn't warn
-  that `!` cannot lead a conjunction.
-- `-f` means `--format` on `add` but `--force` on `delete` / `meta rename` /
-  `meta delete`.
+  months.~~ *Both the verb summary and the `<value>` help now say which values
+  move the date, and that date-only ones are refused; `timefmt` gained the
+  per-half form constants so the arg help interpolates the subset it accepts
+  rather than hand-copying tokens. README gained the same warning beside the
+  `event time` examples.*
+- ~~`list --help`'s `-S` text says "no grouping parentheses" but doesn't warn
+  that `!` cannot lead a conjunction.~~ *[C5](#c5) made `!` a real prefix
+  operator, so there is nothing left to warn about; the help now states the
+  precedence instead.*
+- ~~`-f` means `--format` on `add` but `--force` on `delete` / `meta rename` /
+  `meta delete`.~~ *Documented rather than renamed — each command's own
+  `--help` is already correct, and moving a short flag at v0.0.2 breaks
+  scripts to fix a collision that only bites someone reading across commands.
+  The README's delete block names both spellings.*
 
 **`CLAUDE.md`** — stale, verified against source:
 
-- The `internal/db/migrate.go` bullet says "Ordered list of migrations." They
+- ~~The `internal/db/migrate.go` bullet says "Ordered list of migrations." They
   are embedded `.sql` files: `//go:embed migrations/*.sql` + `loadMigrations()`
   over `migrations/{1,2,3}.sql`. The `loadMigrations` doc-comment in the code
-  already says this correctly, so CLAUDE.md contradicts the source.
-- Describes migration 2 as newest; `3.sql` exists and does the
-  `text` → `title`+`body` split.
-- "Schema changes go in a new entry at the bottom of `migrations` in
+  already says this correctly, so CLAUDE.md contradicts the source.~~ *The
+  bullet now leads with the embed and what it means for adding a version.*
+- ~~Describes migration 2 as newest; `3.sql` exists and does the
+  `text` → `title`+`body` split.~~ *Migrations 3–6 each have their own bullet
+  now, written as the work landed.*
+- ~~"Schema changes go in a new entry at the bottom of `migrations` in
   `internal/db/migrate.go`" → should be "drop a new `<N>.sql` into
-  `internal/db/migrations/`".
-- The `internal/db/db.go` bullet says "connection setup (FK + WAL +
+  `internal/db/migrations/`".~~ *Conventions bullet rewritten, including when
+  a `goMigrations` entry is also needed.*
+- ~~The `internal/db/db.go` bullet says "connection setup (FK + WAL +
   busy_timeout + synchronous=NORMAL)" as if these are pool-wide. They are
   per-connection `Exec`s on a pool and are **not reliably in effect**
-  ([C1](#c1)). This bullet is what future work will trust.
-- The `cmd/fngr/body.go` bullet says bare non-interactive `add` errors
+  ([C1](#c1)). This bullet is what future work will trust.~~ *Rewritten with
+  [C1](#c1); it now says the pragmas ride in the DSN and why they must not
+  move back.*
+- ~~The `cmd/fngr/body.go` bullet says bare non-interactive `add` errors
   `event text cannot be empty`; the actual string is `event title cannot be
-  empty`.
-- The `internal/render/render.go` bullet says markdown bullets are
+  empty`.~~ *Corrected.*
+- ~~The `internal/render/render.go` bullet says markdown bullets are
   `- <time> — <body>`; they are `- <time> — <title>`, with the body on
-  indented continuation lines.
-- The `internal/parse/parse.go` bullet doesn't mention `SplitTitleBody`, which
+  indented continuation lines.~~ *Corrected.*
+- ~~The `internal/parse/parse.go` bullet doesn't mention `SplitTitleBody`, which
   `3.sql`'s comment explicitly references as the behavior it mirrors, nor that
-  `metaNamePattern` is ASCII-only.
+  `metaNamePattern` is ASCII-only.~~ *`SplitTitleBody` is named; the
+  ASCII-only half went away with [C4](#c4), and the bullet now records the
+  Unicode classes and warns against reintroducing `\w`.*
 
 **`docs/superpowers/roadmap.md`**
 
-- The "Markdown output" entry repeats the `- <time> — <body>` error.
+- ~~The "Markdown output" entry repeats the `- <time> — <body>` error.~~
+  *Corrected to `- <time> — <title>`.*
 - ~~The "Considered (not pursued)" entry for bulk operations rests on
   `fngr -S … --format json | jq | xargs`, which doesn't work for metadata
   (`fngr meta` has no `--format`). Footnote it or fix the gap.~~
@@ -2920,6 +2959,9 @@ below the table). Each entry states why so we don't re-propose it.
 | Cache `pagerCommand()` via `sync.OnceValue` | Memoization breaks `t.Setenv` isolation in pager tests. Sub-microsecond per one-shot invocation. |
 | Org-level Actions secret with `--visibility selected` for `HOMEBREW_TAP_TOKEN` | Arrived **empty** in the runner despite passing every visibility check. Workaround: repo-level secret. Root cause unknown; documented in `docs/PUBLISHING.md`. |
 | REST API for ghcr.io package visibility flip | None exists — the toggle is UI-only. `gh api -X PATCH …` returns 404. Documented in `docs/PUBLISHING.md`. |
+| `fngr meta -S 'k='` widening to every value of `k` | **Verified this round**, and intended. `parseMetaFilter` leaves `ListMetaOpts.Value` empty for a trailing `=`, and `ListMeta` drops the `value = ?` clause, so `-S 'tag='` lists `tag=a` and `tag=b` alike — the same answer as the bare-key form `-S tag`. Refusing it would mean rejecting the one spelling that reads as "the key, with its values"; matching a literal empty value would mean matching rows `parse.ValidateMeta` now forbids anyone to create. |
+| `-S ''` / `-S '   '` matching the whole journal | **Verified this round**, and intended. An empty expression is no filter, which is what `fngr` with no `-S` already means, so `-S "$MAYBE_EMPTY"` in a script degrades to the unfiltered listing rather than erroring. The alternative — an empty filter matching nothing — is the one that silently loses events. |
+| Zero-author `AddInput` accepted by the writer | Deliberate. `requireOneAuthor` refuses an *empty* author value and two conflicting ones, but not the absence of the key: every CLI path supplies one (`--author` defaults through `defaultAuthor`, the JSON import validates per record), so the only caller that can produce an authorless event is Go code building an `AddInput` directly, which is a library caller stating what it wants. |
 
 **Retired this round:**
 
