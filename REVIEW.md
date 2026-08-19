@@ -19,6 +19,14 @@ says" and "what it says is right."
 The single most important sentence in this document: **`fngr` loses events
 under concurrent writes, and the README states the opposite.**
 
+**Status: closed.** Everything below is resolved — fixed, documented, or
+recorded as won't-fix with the reasoning. Coverage is now **92.5%** total
+(cmd 96.1 / event 90.2 / render 94.6 / db 80.9 / parse 100 / timefmt 100),
+`make lint` and `govulncheck` green. The findings are kept in full rather
+than deleted: each one's *why* is the argument a future change has to
+answer, and several fixes are only intelligible beside the transcript that
+motivated them. Read this file as a record, not a backlog.
+
 ---
 
 ## Severity summary
