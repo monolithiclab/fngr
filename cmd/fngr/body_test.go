@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"os"
@@ -64,10 +65,6 @@ func TestReadStdin_ExceedsLimit(t *testing.T) {
 		t.Errorf("err = %v, want 'exceeds' error", err)
 	}
 }
-
-type errReader struct{}
-
-func (errReader) Read(_ []byte) (int, error) { return 0, errors.New("boom") }
 
 // forbiddenReader fails the test if anything reads it. It stands in for a
 // non-TTY stdin that is open but idle — a terminal misdetected as a pipe, or
@@ -403,5 +400,49 @@ func TestResolveBody(t *testing.T) {
 				t.Errorf("editor initial = %q, want %q", gotInit, tc.wantInit)
 			}
 		})
+	}
+}
+
+// TestEditBody_FlushesBeforeLaunchingTheEditor is the editor's half of the
+// buffered-stdout contract, the same one confirm keeps: a child that takes the
+// screen must not leave fngr's own output stranded behind it.
+func TestEditBody_FlushesBeforeLaunchingTheEditor(t *testing.T) {
+	// NOTE: no t.Parallel() — stubEditor swaps package-level state.
+	var dest bytes.Buffer
+	out := newBufferedOut(&dest)
+	if _, err := io.WriteString(out, "already written\n"); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	stubEditor(t, func(string) (string, error) {
+		if got := dest.String(); got != "already written\n" {
+			t.Errorf("stdout = %q when the editor took the terminal, want it flushed", got)
+		}
+		return "edited", nil
+	})
+
+	got, err := editBody("", out)
+	if err != nil {
+		t.Fatalf("editBody: %v", err)
+	}
+	if got != "edited" {
+		t.Errorf("body = %q, want %q", got, "edited")
+	}
+}
+
+// TestEditBody_ReportsAFailedFlush pins the other direction: output that could
+// not be written is an error, and there is no point handing the terminal to an
+// editor whose result is going nowhere either.
+func TestEditBody_ReportsAFailedFlush(t *testing.T) {
+	// NOTE: no t.Parallel() — forbidEditor swaps package-level state.
+	forbidEditor(t)
+	wantErr := errors.New("disk full")
+	out := newBufferedOut(errWriter{err: wantErr})
+	if _, err := io.WriteString(out, "held back\n"); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	if _, err := editBody("", out); !errors.Is(err, wantErr) {
+		t.Errorf("editBody err = %v, want %v", err, wantErr)
 	}
 }

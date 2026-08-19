@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 )
@@ -87,9 +88,53 @@ func TestConfirm_IOErrors(t *testing.T) {
 			t.Error("confirm returned true alongside an error")
 		}
 	})
+
+	// A buffered Out is the only way to reach the flush: writing the prompt
+	// through it cannot fail, so the error the user never saw surfaces here or
+	// nowhere.
+	t.Run("prompt flush fails", func(t *testing.T) {
+		t.Parallel()
+		got, err := confirm(strings.NewReader("y\n"), newBufferedOut(errWriter{err: wantErr}), "Continue? ", true)
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("err = %v, want %v", err, wantErr)
+		}
+		if got {
+			t.Error("confirm returned true alongside an error")
+		}
+	})
 }
 
-// errWriter fails every Write, standing in for a closed stdout.
-type errWriter struct{ err error }
+// TestConfirm_FlushesThePromptBeforeReading is confirm's half of the buffered
+// stdout contract: it blocks on stdin, so a prompt still sitting in the buffer
+// is a question the user is never shown.
+func TestConfirm_FlushesThePromptBeforeReading(t *testing.T) {
+	t.Parallel()
+	const prompt = "Continue? [y/N] "
+	var dest bytes.Buffer
 
-func (w errWriter) Write(_ []byte) (int, error) { return 0, w.err }
+	in := checkedReader{t: t, dest: &dest, want: prompt, src: strings.NewReader("y\n")}
+	got, err := confirm(in, newBufferedOut(&dest), prompt, false)
+	if err != nil {
+		t.Fatalf("confirm: %v", err)
+	}
+	if !got {
+		t.Error("confirm = false, want true")
+	}
+}
+
+// checkedReader fails the test unless dest already holds want by the time the
+// first byte of the answer is asked for.
+type checkedReader struct {
+	t    *testing.T
+	dest *bytes.Buffer
+	want string
+	src  io.Reader
+}
+
+func (r checkedReader) Read(p []byte) (int, error) {
+	r.t.Helper()
+	if got := r.dest.String(); got != r.want {
+		r.t.Errorf("stdout = %q when the answer was read, want the prompt %q", got, r.want)
+	}
+	return r.src.Read(p)
+}

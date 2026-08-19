@@ -42,7 +42,10 @@ make ci             # codefix + format + lint + test
   a mistyped command is diagnosed at all. The parser configuration is `kongOptions`, one list
   because the tests build their own parser and a difference between the two is a difference they
   cannot see; `exit` is a *parameter* rather than an appended override, since a test supplying its
-  own `kong.Exit` steps over the mapping it came to check.
+  own `kong.Exit` steps over the mapping it came to check. Returning is also what lets `run` flush
+  the buffered stdout it handed to Kong and to the command — the `exit` it passes down is wrapped
+  as `exitFlushed` for the one path that does not return, Kong's `--help`/`--version` hooks
+  calling it from inside `Parse`. See `cmd/fngr/output.go` for both.
   The status vocabulary is `exitOK` / `exitError` (`1`) / `exitUsage` (`2`) — see README
   "Exit codes" — and it is closed *structurally*, because `run` returns one of the three and
   nothing else. The version that mapped was the version that leaked: with `kong.Parse` the status
@@ -175,7 +178,12 @@ make ci             # codefix + format + lint + test
   of stream is made once — that choice is the whole reason the note can be printed for every
   format including the two (`[]`, a lone CSV header) that already say it themselves.
 - `cmd/fngr/store.go` — Defines the narrow `eventStore` interface that commands depend on plus the
-  injectable `ioStreams` (`In io.Reader`, `Out io.Writer`, `Err io.Writer`, `IsTTY bool`).
+  injectable `ioStreams` (`In io.Reader`, `Out io.Writer`, `Err io.Writer`, `IsTTY bool`). `Out`
+  is a `*bufferedOut` in every production run and a plain writer under test — see
+  `cmd/fngr/output.go` for what that buys and what has to flush it. It stays an `io.Writer`
+  rather than being narrowed to that type: the two places that care ask by assertion
+  (`flushOut`, `withPager`) and both fall back rather than fail, which is what keeps a test
+  handing a command a `bytes.Buffer` from being a special case anywhere else.
 - `cmd/fngr/clock.go` — `warnSkippedClock(w, exists, asked, stored)`, the single formatter for the
   DST-gap warning described under `internal/timefmt`. Called by `add` (both `--time` and the title
   prefix), by `event time` / `event date`, and by the `--format=json` import (`buildCLIDefaults`
@@ -194,7 +202,11 @@ make ci             # codefix + format + lint + test
   `ReadString` also returns `io.EOF` for a final line with no trailing newline, so a bare `y`
   must still confirm. The read itself blocks by design — unlike `resolveBody`, a prompt reading
   stdin *is* the point, so `echo y | fngr delete 1` keeps working and `sleep 30 | fngr meta
-  delete '#wip'` waits (REVIEW H6, won't fix; `-f` is the unattended form).
+  delete '#wip'` waits (REVIEW H6, won't fix; `-f` is the unattended form). Blocking is also why
+  `confirm` flushes `out` between writing the prompt and reading the answer: stdout is buffered
+  (see `cmd/fngr/output.go`) and 16 KiB of nothing else is coming, so without it the user is
+  answering a question they were never shown. In `confirm` itself rather than at the call sites,
+  so no new prompt can forget.
 - `cmd/fngr/body.go` — Body-source dispatch for `fngr add`. `resolveBody` returns the body string
   from one of {joined args, stdin, editor}: args win, then `-e`, then a TTY opens the editor, and
   stdin is read only when nothing else can supply a body — all of it downstream of the
@@ -210,6 +222,12 @@ make ci             # codefix + format + lint + test
   catches the `fngr add -e </dev/null` case the old checks never did. Launching anyway handed
   `$EDITOR` a non-terminal stdin — vim bails, a non-interactive `$EDITOR` saves nothing, and
   `fngr add` then reported a cancel at exit 0 while silently dropping the piped body.
+  Both editor branches go through `editBody`, which flushes stdout before handing the terminal
+  over: fngr's stdout is buffered (see `cmd/fngr/output.go`), and anything still held back when a
+  child takes the screen surfaces after the editor exits, or not at all if the editor clears the
+  screen on the way out. It is `confirm`'s rule in the other place a child takes over, in one
+  function so neither branch can forget it. Nothing writes to `Out` before `resolveBody` today,
+  which is a fact about `AddCmd.Run`'s statement order rather than a property of the stream.
   `launchEditor` is a `var` for test stubbing; `realLaunchEditor` execs `$VISUAL`/`$EDITOR` on a
   temp file and inherits `os.Stdin`, so the veto must stay upstream of it; `errCancel` signals
   empty-save (handled as exit-0 by `AddCmd.Run`). The argv comes from `envCommand` (see
@@ -268,21 +286,57 @@ make ci             # codefix + format + lint + test
   reports, so a `*int64` field arrives as `int64` and the arm would be dead code carrying a
   recursion. The byte offset rides along because it is the only locator `encoding/json` keeps — a
   batch runs to 10 000 records and the field name alone cannot say which.
-- `cmd/fngr/pager.go` — `withPager(io, disabled) (ioStreams, closer)` wraps `Out` in a 16 KiB
-  `bufio.Writer` over whatever `pagerWriter` hands back: a pipe to `$PAGER` (fallback
-  `less -FRX`, tokenized by the `envCommand` the editor launcher shares) when stdout is a TTY,
-  else `Out` itself. Used by `list`. The buffer is *outside*
-  the pager branch on purpose — rendering wrote one line per syscall, 250 000 of them for a 250k
-  list and 10-19% of the wall clock (every format but CSV, whose `csv.Writer` buffers on its
-  own), and the redirect/pipe path that pays that is exactly the one the old function
-  early-returned on. 16 KiB rather than 64 because the buffer is also the
-  latency floor for `fngr | head -3`. The closer *returns* its flush error, and `ListCmd.Run`
-  promotes it to the command's error through a named return (without masking an error already on
-  its way out): with `Out` buffered the tail of a listing is written there and nowhere else, so
-  logging past it would exit 0 over output the user never received. The pager's own exit status
-  stays a stderr warning — a pager quit early is a decision, not a lost write. `isTerminal` is a
-  `var` for test stubbing (like `launchEditor`): it is the only gate on the pager branch and no
-  test process has a terminal on stdout, so stubbing it is what lets the branch be tested at all.
+- `cmd/fngr/pager.go` — `withPager(io, disabled) closer` splices `$PAGER` (fallback `less -FRX`,
+  tokenized by the `envCommand` the editor launcher shares) underneath the buffer `ioStreams`
+  already carries, when stdout is a terminal and `--no-pager` is absent. Used by `list`. It
+  *redirects* that buffer rather than installing one of its own — buffering is a stream property
+  now (see `cmd/fngr/output.go`), so all the pager changes is where the flushed bytes land, and
+  the alternative is a second buffer stacked on the first. An `Out` that is not a `*bufferedOut`
+  therefore gets no pager: in production it always is, and a test writing into a `bytes.Buffer`
+  has no terminal to page to. `withPager` binds `s.Err` and `buf.dest` into the closer rather
+  than closing over the whole `ioStreams`, which would keep the stdin reader reachable for the
+  life of the listing. The closer *returns* its flush error, and `ListCmd.Run` promotes it to the
+  command's error through a named return (without masking an error already on its way out): the
+  listing has to reach the pager before its pipe closes, so it flushes here even though `run`
+  flushes again on the way out, and those bytes are written nowhere else. The pager's own exit
+  status stays a stderr warning — a pager quit early is a decision, not a lost write.
+  `newPagerCmd` takes that same `dest` and gives the child *its* stdout, rather than reaching for
+  `os.Stdout`: they are the same file in every production run, and taking the parameter is what
+  keeps that an observation rather than two independent guesses.
+  `isTerminalWriter` asserts `*os.File` before consulting `isTerminal`, since only a file can be
+  a terminal and that makes every pipe and every test buffer answer no without a syscall; the
+  question itself is `isTerminalFile`, shared with `main`'s `IsTTY` for stdin, so the stub seam
+  and the fd-overflow annotation exist once. `isTerminal` itself is a `var` for test stubbing
+  (like `launchEditor`): it is the last gate on the pager branch and no test process has a
+  terminal on stdout, so stubbing it is what lets the branch be tested at all.
+- `cmd/fngr/output.go` — `newBufferedOut(os.Stdout)` is what `main` puts in `ioStreams.Out`, so
+  every byte fngr writes to stdout goes through one 16 KiB `bufio.Writer`. Buffering belongs to
+  the stream and is installed once where the process's streams are built, rather than by
+  whichever command remembers to ask: it started inside `withPager`, and `list` was consequently
+  the only command that had it — rendering writes one line per syscall, 250 000 of them for a
+  250k list, and `fngr event N -t --format=json` paid 2N+1 for +19% wall clock over the same
+  rows buffered. 16 KiB rather than the usual 64 because the buffer is also the latency floor for
+  `fngr | head -3`. `bufferedOut` keeps its raw `dest` alongside the writer so `redirect(w)` can
+  swap the destination underneath a command already holding the stream; both halves flush before
+  switching, because `bufio.Writer.Reset` discards silently and the whole point of a buffer is
+  that its contents exist nowhere else, and the restore reports the first error either flush saw
+  via `cmp.Or`. The `*bufio.Writer` is a *field*, not an embed, and `point(w)` is the only thing
+  that moves the sink: `Reset` promoted onto `bufferedOut` is the one method that moves it
+  without telling `dest`, and a stale `dest` points the pager at the wrong file.
+  `flushOut(w)` is a type assertion on `interface{ Flush() error }` rather than a
+  field on `ioStreams`, because commands hold an `io.Writer` and tests hand them a
+  `bytes.Buffer` — so, like `withPager`'s own assertion, it falls back rather than failing when
+  the stream is not the one `main` installs. Five places flush, each for its own reason: `run`'s
+  catch-all `defer`, which covers every way out and is why the others are about *when* rather
+  than whether; `run` again explicitly before `fail`, since stderr is unbuffered and diagnosing
+  first prints the verdict above the output it describes; `run`'s `exitFlushed` wrapper around
+  Kong's exit (the `--help`/`--version` hooks call it from inside `Parse` and never return, so
+  `fngr --help` would otherwise print nothing at all — and since `run` never regains control
+  there, a failed flush can only be reported by bumping the status it hands Kong to `exitError`);
+  `withPager`'s closer (see `cmd/fngr/pager.go`); and the two places a child takes the screen,
+  `confirm` (see `cmd/fngr/prompt.go`) and `editBody` (see `cmd/fngr/body.go`). A failed flush is
+  the command's error wherever it is seen — exiting 0 over output the user never received is the
+  failure mode the buffer introduced — but an error already on its way out says more and wins.
 - `internal/db/db.go` — DB path resolution (explicit > `.fngr.db` in cwd > `~/.fngr.db`) and
   connection setup. The FK + WAL + busy_timeout + synchronous=NORMAL pragmas ride in the DSN
   (`file:<path>?_pragma=...`, built with `net/url`) rather than post-open `db.Exec` calls —

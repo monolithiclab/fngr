@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -14,7 +15,6 @@ import (
 	"github.com/monolithiclab/fngr/internal/event"
 	"github.com/monolithiclab/fngr/internal/render"
 	"github.com/monolithiclab/fngr/internal/timefmt"
-	"golang.org/x/term"
 )
 
 var version = "dev"
@@ -125,9 +125,9 @@ func kongOptions(version, username string, exit func(int)) []kong.Option {
 func main() {
 	streams := ioStreams{
 		In:    os.Stdin,
-		Out:   os.Stdout,
+		Out:   newBufferedOut(os.Stdout),
 		Err:   os.Stderr,
-		IsTTY: term.IsTerminal(int(os.Stdin.Fd())), // #nosec G115 -- fd is a small int, cannot overflow
+		IsTTY: isTerminalFile(os.Stdin),
 	}
 	os.Exit(run(os.Args[1:], streams, os.Exit))
 }
@@ -148,7 +148,23 @@ func main() {
 // they can leave without unwinding.
 func run(args []string, streams ioStreams, exit func(int)) int {
 	var cli CLI
-	parser, err := kong.New(&cli, append(kongOptions(version, currentUser(), exit),
+	out := streams.Out
+	// Every byte fngr writes to stdout is held in a buffer (see output.go), so
+	// every way out of run has to empty it. This defer is the one that covers
+	// all of them; the two explicit flushes below are about *when*, not whether.
+	defer func() { _ = flushOut(out) }()
+	// Kong's --help and --version hooks call exit from inside Parse and never
+	// return, so that defer is not one of the ways out: `fngr --help` would
+	// exit 0 having printed nothing at all. A failed flush there is the same
+	// lost output it is anywhere else, and the status is the only place left to
+	// report it.
+	exitFlushed := func(status int) {
+		if err := flushOut(out); err != nil {
+			status = exitError
+		}
+		exit(status)
+	}
+	parser, err := kong.New(&cli, append(kongOptions(version, currentUser(), exitFlushed),
 		kong.Writers(streams.Out, streams.Err),
 	)...)
 	if err != nil {
@@ -193,7 +209,16 @@ func run(args []string, streams ioStreams, exit func(int)) int {
 		return event.NewStore(opened), nil
 	})
 
-	if err := ctx.Run(); err != nil {
+	// Flushed here rather than by each command, which is the whole reason the
+	// buffer moved out of withPager, and *before* anything is said about the
+	// result: stderr is unbuffered, so diagnosing first would print the verdict
+	// above the output it is about. A failed flush is itself the command's error
+	// — those bytes were written nowhere else, and exiting 0 over output the
+	// user never received is the failure mode — but an error already on its way
+	// out says more, so it wins. cmp.Or is that rule, and Go's left-to-right
+	// argument order is what makes ctx.Run happen first and the flush happen
+	// regardless.
+	if err := cmp.Or(ctx.Run(), flushOut(out)); err != nil {
 		return fail(parser, err)
 	}
 	return exitOK

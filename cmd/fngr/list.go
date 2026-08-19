@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -40,14 +41,13 @@ func (c *ListCmd) Run(s eventStore, io ioStreams) (err error) {
 			c.From, c.To)
 	}
 
-	io, closeOut := withPager(io, c.NoPager)
+	closeOut := withPager(io, c.NoPager)
 	defer func() {
-		// Out is buffered, so the tail of a listing is written only here:
-		// reporting a failed flush as anything but an error would exit 0 over
-		// truncated output. An error already on its way out says more, though.
-		if cerr := closeOut(); cerr != nil && err == nil {
-			err = cerr
-		}
+		// The listing has to reach the pager before its pipe is closed, so this
+		// closer flushes even though run flushes again on the way out. Reporting
+		// a failure as anything but an error would exit 0 over truncated output;
+		// an error already on its way out says more, though.
+		err = cmp.Or(err, closeOut())
 	}()
 
 	// Tree is the one format that has to see every row before it can draw a

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -150,3 +151,33 @@ func newTestIOFull(stdin string, isTTY bool) (ioStreams, *bytes.Buffer, *bytes.B
 		IsTTY: isTTY,
 	}, out, errBuf
 }
+
+// newTestIOBuffered is the shape production actually has: Out wrapped in the
+// *bufferedOut main installs. The two helpers above hand back a bare
+// *bytes.Buffer that reads correctly the instant a command writes to it, which
+// is what almost every CLI test wants — but it means those tests cannot see a
+// missing flush, since there is nothing holding anything back. Returns
+// (io, the buffer, the destination behind it, stderr): read dest to assert on
+// what a user would have received, out to reach the flush.
+func newTestIOBuffered(stdin string) (ioStreams, *bufferedOut, *bytes.Buffer, *bytes.Buffer) {
+	dest := &bytes.Buffer{}
+	errBuf := &bytes.Buffer{}
+	out := newBufferedOut(dest)
+	return ioStreams{
+		In:  strings.NewReader(stdin),
+		Out: out,
+		Err: errBuf,
+	}, out, dest, errBuf
+}
+
+// errWriter fails every Write, standing in for a closed stdout. Here rather
+// than in whichever verb's test file first needed it: five files reach for it
+// now, the same reason newTestParser and newTestStore live here.
+type errWriter struct{ err error }
+
+func (w errWriter) Write(_ []byte) (int, error) { return 0, w.err }
+
+// errReader fails every Read, standing in for an unreadable stdin.
+type errReader struct{}
+
+func (errReader) Read(_ []byte) (int, error) { return 0, errors.New("boom") }

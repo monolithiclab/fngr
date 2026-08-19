@@ -19,6 +19,12 @@ func confirm(in io.Reader, out io.Writer, prompt string, defaultVal bool) (bool,
 	if _, err := fmt.Fprint(out, prompt); err != nil {
 		return false, err
 	}
+	// Out is buffered, and a prompt is the one write that must land before the
+	// process blocks: 16 KiB of nothing else is coming, so without this the user
+	// would be answering a question they never saw.
+	if err := flushOut(out); err != nil {
+		return false, err
+	}
 	answer, err := bufio.NewReader(in).ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
 		return false, err

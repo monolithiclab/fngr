@@ -1867,6 +1867,11 @@ and `fngr event N -t`; both are left alone here because handing them `withPager`
 also switches paging on for them, which is a product decision rather than a
 perf fix. Tracked as follow-up, not as part of M15.
 
+**Follow-up done** — see the architecture item on the buffer being bolted into
+`withPager`. Buffering is now an `ioStreams` property installed in `main`, so
+`meta` and `event N -t` get it without getting a pager: the two were only
+coupled because the buffer lived in the function that decides about paging.
+
 <a name="m16"></a>
 ### M16 — Release workflow: broad privileges on mutable action tags
 
@@ -2492,13 +2497,41 @@ are local.
 - ~~**Inconsistent empty-result messaging in `list.go`**~~ — **Done** with the
   "Output and formatting" batch above: one `reportNone`, both branches, and
   `fngr meta` too.
-- **The 16 KiB output buffer is bolted into `withPager`, so only `list` has
+- ~~**The 16 KiB output buffer is bolted into `withPager`, so only `list` has
   one.** `fngr event N -t --format=json` writes straight to `os.Stdout` — 2N+1
   syscalls, measured at +19% wall clock over a buffered run of the same 50k
   rows. Buffering is an `ioStreams` concern, not a pager one; hoisting it to
   where `ioStreams` is built means no future command has to remember, at the
-  cost of every command needing `list`'s flush-error promotion. Deferred to the
-  `main.go` restructure below, which is already opening that constructor.
+  cost of every command needing `list`'s flush-error promotion.~~
+  **Resolved** — `newBufferedOut(os.Stdout)` is now what `main` puts in
+  `ioStreams.Out`, so every command is buffered and no future one has to ask.
+  The buffer moved rather than multiplied: `bufferedOut` keeps its raw `dest`
+  beside the writer, and `withPager` *redirects* it (`redirect(w)` returns the
+  restore) instead of stacking a second buffer on top. Both halves of the swap
+  flush before switching — `bufio.Writer.Reset` discards silently — and the
+  restore reports the first error either flush saw.
+
+  The flush-error promotion turned out to be five flushes, not one per command.
+  A `defer` in `run` covers every way out of it, which is what makes the other
+  four about *when* rather than whether. `run` flushes again explicitly before
+  `fail` writes to the unbuffered stderr, or the verdict prints above the
+  output it describes. `exitFlushed` covers Kong's `--help`/`--version` hooks,
+  which call `exit` from inside `Parse` and never return: without it
+  `fngr --help` exits 0 having printed nothing at all, a regression this fix
+  would otherwise have shipped — and since `run` never regains control there,
+  a failed flush can only be reported by bumping the status handed to Kong.
+  Then the two places a child takes the screen: `confirm`, between writing its
+  prompt and blocking on stdin (16 KiB of nothing else is coming, so the user
+  would be answering a question they never saw), and `editBody`, before
+  handing the terminal to `$EDITOR`. `list`'s own closer still flushes too,
+  since the listing has to reach the pager before its pipe closes.
+
+  `flushOut` is a type assertion on `interface{ Flush() error }` rather than a
+  field on `ioStreams`: commands hold an `io.Writer` and tests hand them a
+  `bytes.Buffer`. The same reasoning makes `withPager` a no-op on an `Out` that
+  is not a `*bufferedOut`, and `isTerminalWriter` assert `*os.File` before
+  consulting the stubbable `isTerminal` — only a file can be a terminal, so
+  every pipe and every test buffer answers no without a syscall.
 - **`internal/db/db.go` has no per-connection init hook**, which is the root of
   [C1](#c1). Moving to a DSN removes the need for one.
 

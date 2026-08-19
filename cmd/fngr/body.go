@@ -37,7 +37,7 @@ func resolveBody(args []string, useEditor bool, io ioStreams) (string, error) {
 		// editor without a terminal did instead.
 		return "", errEditNeedsTTY
 	case len(args) > 0 && useEditor:
-		return launchEditor(strings.Join(args, " "))
+		return editBody(strings.Join(args, " "), io.Out)
 	case len(args) > 0:
 		body := strings.Join(args, " ")
 		if strings.TrimSpace(body) == "" {
@@ -48,7 +48,7 @@ func resolveBody(args []string, useEditor bool, io ioStreams) (string, error) {
 		// Bare interactive `fngr add`, or -e with no args: the guard above
 		// has already established that -e implies a TTY, so this one case
 		// covers both. Editor on an empty buffer either way.
-		return launchEditor("")
+		return editBody("", io.Out)
 	default:
 		// Nothing else can supply a body, so stdin is it. Reading it blocks
 		// until EOF, and an open-but-idle pipe (`sleep 30 | fngr add`, a CI
@@ -59,6 +59,25 @@ func resolveBody(args []string, useEditor bool, io ioStreams) (string, error) {
 		// `event title cannot be empty`.
 		return readStdin(io.In)
 	}
+}
+
+// editBody hands the terminal to $EDITOR, flushing stdout first. It is the
+// other half of confirm's rule: fngr's stdout is buffered (see output.go), and
+// anything still held back when a child takes the screen surfaces after the
+// editor exits, or not at all if the editor clears it on the way out. Both
+// editor branches of resolveBody go through here so neither can forget, and
+// the flush error is returned rather than logged past for the reason every
+// other flush error is — those bytes were written nowhere else.
+//
+// Nothing writes to Out before resolveBody today. That is a fact about
+// AddCmd.Run's current statement order, not a property of the stream, and it
+// is not the kind of fact a later warning line should be able to invalidate
+// silently.
+func editBody(initial string, out io.Writer) (string, error) {
+	if err := flushOut(out); err != nil {
+		return "", err
+	}
+	return launchEditor(initial)
 }
 
 // maxStdinBytes caps stdin reads to bound memory when something large
