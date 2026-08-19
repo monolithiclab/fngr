@@ -46,8 +46,8 @@ under concurrent writes, and the README states the opposite.**
 | [M7](#m7) | Medium | event | FTS conflates content with metadata → body text forges tag matches | ✅ fixed |
 | [M8](#m8) | Medium | render | `--limit` on tree format promotes orphaned children to roots, unmarked | ✅ fixed |
 | [M9](#m9) | Medium | cmd | `fngr meta` output amplification: 1 MB stored → 202 MB printed | ✅ fixed |
-| [M10](#m10) | Medium | parse | `". "` split eats abbreviations — `Dr. Smith` → title `Dr` | open |
-| [M11](#m11) | Medium | db | `fngr add` never creates a project-local `.fngr.db`; first add lands in `~/.fngr.db` | open |
+| [M10](#m10) | Medium | parse | `". "` split eats abbreviations — `Dr. Smith` → title `Dr` | 📝 documented |
+| [M11](#m11) | Medium | db | `fngr add` never creates a project-local `.fngr.db`; first add lands in `~/.fngr.db` | 📝 documented |
 | [M12](#m12) | Medium | timefmt | `--from`/`--to` reject both relative forms and fngr's own emitted timestamps | ✅ fixed |
 | [M13](#m13) | Medium | timefmt | DST spring-forward silently shifts `event time` to the prior hour | ✅ fixed |
 | [M14](#m14) | Medium | event | `-n N -r` returns the N **oldest** events | ✅ fixed |
@@ -1628,6 +1628,23 @@ preserve `". "`.
 adding abbreviation heuristics. A `--title`/`--body` pair on `add` is the
 clean alternative if the friction proves real in daily use.
 
+**Documented, not fixed.** README now states the `". "` rule where `add` is
+first introduced — including that a period with no space after it is safe —
+and carries a Troubleshooting entry under the symptom rather than the cause
+("My title got cut off at an abbreviation"), since the cause is exactly what
+the user does not know yet. Both point at `fngr event title`, and say why it
+is the repair and `event text` is not: `title` and `body` set their half
+verbatim, `text` re-splits.
+
+An abbreviation heuristic was rejected rather than deferred. `Dr.`/`e.g.` is
+not a closed set — initials, `a.m.`, `vs.`, non-English honorifics, and any
+domain's own abbreviations all sit in it — so every list is wrong somewhere,
+and a *wrong* heuristic is worse than a rule you can state in one sentence:
+it splits correctly until the day it doesn't, and by then nobody remembers
+there was a rule. `--title`/`--body` on `add` stays the clean answer if daily
+use shows the friction is real; it is new surface area, and this repo is at a
+feature plateau.
+
 <a name="m11"></a>
 ### M11 — `fngr add` never creates a project-local `.fngr.db`
 
@@ -1659,6 +1676,25 @@ With `$HOME` unreachable it doesn't fall back or explain — it leaks SQLite:
 **Fix:** document the `touch .fngr.db` idiom in the "Database location"
 section — one line. Optionally add `fngr init` or a `--here` flag, though that
 is new surface area.
+
+**Documented, not fixed.** README's "Database location" section no longer
+states the two true-in-isolation facts side by side: it now says outright that
+the file is created at the path fngr *resolved*, that rung 2 is consulted only
+when `.fngr.db` already exists, and therefore that a fresh project directory
+gets `~/.fngr.db`. The `touch .fngr.db` idiom follows as a worked example.
+
+Auto-creating a local file was rejected, not deferred. It would make `cd` a
+silent write-target switch: `fngr add` from a directory you happened to be in
+would start a second journal instead of appending to the one you have, and the
+failure is invisible — the event is stored, `fngr list` from that directory
+shows it, and it is simply missing from everywhere else. That is a worse
+version of the trap this item reports, with no error to notice. `fngr init` is
+the honest form of the affordance and remains open as new surface area.
+
+The `$HOME`-unreachable leak in the last paragraph is separately fixed: the
+pragma-in-DSN change (see [C1](#c1)) removed the `cannot set pragma
+foreign_keys` wording, and `db.openHint` now names the filesystem object at
+fault instead of the SQLite result code.
 
 <a name="m12"></a>
 ### M12 — `--from`/`--to` reject relative forms *and* fngr's own timestamps
