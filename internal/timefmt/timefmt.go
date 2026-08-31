@@ -4,6 +4,7 @@ package timefmt
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -73,6 +74,21 @@ func FormatRelative(t, now time.Time) string {
 	// time.Format emits "AM"/"PM"; lowercase only that suffix so month
 	// abbreviations stay capitalized.
 	return strings.Replace(strings.Replace(out, "AM", "am", 1), "PM", "pm", 1)
+}
+
+// singleDigitHourRe matches an isolated 1-9 immediately before the
+// hour/minute separator: \b excludes the tens digit of a two-digit hour
+// (there's no boundary between two adjacent digits), so "12.00am" is left
+// alone while "9.32pm" is not.
+var singleDigitHourRe = regexp.MustCompile(`\b([1-9])(\.\d\d(?:am|pm))`)
+
+// FormatRelativePadded is FormatRelative with a single-digit hour left-padded
+// by one space, so a column of list-view stamps stays aligned ("11.32pm"
+// beside " 9.32pm"). Go's time layout has a space-pad verb for day-of-month
+// ("_2") but none for a 12-hour hour, so this pads FormatRelative's own
+// output rather than formatting from a second layout.
+func FormatRelativePadded(t, now time.Time) string {
+	return singleDigitHourRe.ReplaceAllString(FormatRelative(t, now), " $1$2")
 }
 
 func sameDay(a, b time.Time) bool {

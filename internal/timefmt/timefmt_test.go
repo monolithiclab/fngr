@@ -85,6 +85,31 @@ func TestFormatRelative(t *testing.T) {
 	}
 }
 
+func TestFormatRelativePadded(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 18, 14, 30, 0, 0, time.Local)
+	tests := []struct {
+		name string
+		t    time.Time
+		want string
+	}{
+		{"single-digit hour today gets padded", time.Date(2026, 4, 18, 9, 32, 0, 0, time.Local), " 9.32am"},
+		{"double-digit hour today is untouched", time.Date(2026, 4, 18, 22, 30, 0, 0, time.Local), "10.30pm"},
+		{"single-digit hour this year gets padded", time.Date(2026, 1, 5, 8, 5, 0, 0, time.Local), "Jan 05  8.05am"},
+		{"single-digit hour prior year gets padded", time.Date(2024, 12, 9, 3, 32, 0, 0, time.Local), "Dec 09 2024  3.32am"},
+		{"noon and midnight are double-digit, untouched", time.Date(2026, 4, 18, 0, 0, 0, 0, time.Local), "12.00am"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := FormatRelativePadded(tt.t, now); got != tt.want {
+				t.Errorf("FormatRelativePadded(%v, %v) = %q, want %q", tt.t, now, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestParsePartial(t *testing.T) {
 	t.Parallel()
 	now := time.Now()

@@ -67,8 +67,8 @@ func TestTree_FlatList(t *testing.T) {
 	}
 
 	want := "" +
-		"1   Apr 10 2026 12.00am  nicolas  First event\n" +
-		"2   Apr 11 2026 12.00am  nicolas  Second event\n"
+		"Apr 10 2026 12.00am  nicolas  First event\n" +
+		"Apr 11 2026 12.00am  nicolas  Second event\n"
 
 	got := renderTreeString(t, events)
 	if got != want {
@@ -86,9 +86,9 @@ func TestTree_NestedChildren(t *testing.T) {
 	}
 
 	want := "" +
-		"1   Apr 10 2026 12.00am  nicolas  Parent event\n" +
-		"\u251c\u2500 2   Apr 10 2026 12.00am  nicolas  First child\n" +
-		"\u2514\u2500 3   Apr 11 2026 12.00am  nicolas  Second child\n"
+		"Apr 10 2026 12.00am  nicolas  Parent event\n" +
+		"\u251c\u2500 Apr 10 2026 12.00am  nicolas  First child\n" +
+		"\u2514\u2500 Apr 11 2026 12.00am  nicolas  Second child\n"
 
 	got := renderTreeString(t, events)
 	if got != want {
@@ -107,9 +107,9 @@ func TestTree_DeepNesting(t *testing.T) {
 	}
 
 	want := "" +
-		"1   Apr 10 2026 12.00am  nicolas  Root\n" +
-		"\u2514\u2500 2   Apr 10 2026 12.00am  nicolas  Child\n" +
-		"   \u2514\u2500 3   Apr 11 2026 12.00am  nicolas  Grandchild\n"
+		"Apr 10 2026 12.00am  nicolas  Root\n" +
+		"\u2514\u2500 Apr 10 2026 12.00am  nicolas  Child\n" +
+		"   \u2514\u2500 Apr 11 2026 12.00am  nicolas  Grandchild\n"
 
 	got := renderTreeString(t, events)
 	if got != want {
@@ -130,11 +130,11 @@ func TestTree_MixedRootsAndChildren(t *testing.T) {
 	}
 
 	want := "" +
-		"1   Apr 10 2026 12.00am  nicolas  Sprint 12 #work\n" +
-		"\u251c\u2500 2   Apr 10 2026 12.00am  nicolas  Planning meeting\n" +
-		"\u2502  \u2514\u2500 4   Apr 10 2026 12.00am  nicolas  Decided on architecture\n" +
-		"\u2514\u2500 3   Apr 11 2026 12.00am  nicolas  Deploy v2.0 #ops\n" +
-		"5   Apr 12 2026 12.00am  nicolas  Lunch with Sarah\n"
+		"Apr 10 2026 12.00am  nicolas  Sprint 12 #work\n" +
+		"\u251c\u2500 Apr 10 2026 12.00am  nicolas  Planning meeting\n" +
+		"\u2502  \u2514\u2500 Apr 10 2026 12.00am  nicolas  Decided on architecture\n" +
+		"\u2514\u2500 Apr 11 2026 12.00am  nicolas  Deploy v2.0 #ops\n" +
+		"Apr 12 2026 12.00am  nicolas  Lunch with Sarah\n"
 
 	got := renderTreeString(t, events)
 	if got != want {
@@ -156,8 +156,8 @@ func TestTree_OrphanedChildren(t *testing.T) {
 	}
 
 	want := "" +
-		"⋯└─ 1   Apr 10 2026 12.00am  nicolas  Filtered child\n" +
-		"⋯└─ 2   Apr 11 2026 12.00am  nicolas  Another orphan\n"
+		"⋯└─ Apr 10 2026 12.00am  nicolas  Filtered child\n" +
+		"⋯└─ Apr 11 2026 12.00am  nicolas  Another orphan\n"
 
 	got := renderTreeString(t, events)
 	if got != want {
@@ -181,10 +181,10 @@ func TestTree_OrphanSubtreeAligns(t *testing.T) {
 	}
 
 	want := "" +
-		"⋯└─ 1   Apr 10 2026 12.00am  nicolas  Orphan root\n" +
-		"    ├─ 2   Apr 10 2026 12.00am  nicolas  Child of orphan\n" +
-		"    │  └─ 3   Apr 10 2026 12.00am  nicolas  Grandchild\n" +
-		"    └─ 4   Apr 10 2026 12.00am  nicolas  Second child\n"
+		"⋯└─ Apr 10 2026 12.00am  nicolas  Orphan root\n" +
+		"    ├─ Apr 10 2026 12.00am  nicolas  Child of orphan\n" +
+		"    │  └─ Apr 10 2026 12.00am  nicolas  Grandchild\n" +
+		"    └─ Apr 10 2026 12.00am  nicolas  Second child\n"
 
 	got := renderTreeString(t, events)
 	if got != want {
@@ -206,9 +206,9 @@ func TestTree_RootAfterOrphanResetsPrefix(t *testing.T) {
 	}
 
 	want := "" +
-		"⋯└─ 1   Apr 10 2026 12.00am  nicolas  Orphan\n" +
-		"2   Apr 11 2026 12.00am  nicolas  True root\n" +
-		"└─ 3   Apr 11 2026 12.00am  nicolas  Its child\n"
+		"⋯└─ Apr 10 2026 12.00am  nicolas  Orphan\n" +
+		"Apr 11 2026 12.00am  nicolas  True root\n" +
+		"└─ Apr 11 2026 12.00am  nicolas  Its child\n"
 
 	got := renderTreeString(t, events)
 	if got != want {
@@ -233,8 +233,8 @@ func TestTree_CycleStillRendersEveryEvent(t *testing.T) {
 	// but not above it — and 2 hangs off it. Recursing from 2 back into 1
 	// stops at the visited check, so 1 is not drawn twice.
 	want := "" +
-		"⋯└─ 1   Apr 10 2026 12.00am  nicolas  First half\n" +
-		"    └─ 2   Apr 11 2026 12.00am  nicolas  Second half\n"
+		"⋯└─ Apr 10 2026 12.00am  nicolas  First half\n" +
+		"    └─ Apr 11 2026 12.00am  nicolas  Second half\n"
 
 	got := renderTreeString(t, events)
 	if got != want {
@@ -255,9 +255,9 @@ func TestTree_CycleBesideRealRoots(t *testing.T) {
 	}
 
 	want := "" +
-		"1   Apr 10 2026 12.00am  nicolas  True root\n" +
-		"└─ 2   Apr 10 2026 12.00am  nicolas  Its child\n" +
-		"⋯└─ 3   Apr 11 2026 12.00am  nicolas  Its own parent\n"
+		"Apr 10 2026 12.00am  nicolas  True root\n" +
+		"└─ Apr 10 2026 12.00am  nicolas  Its child\n" +
+		"⋯└─ Apr 11 2026 12.00am  nicolas  Its own parent\n"
 
 	got := renderTreeString(t, events)
 	if got != want {
@@ -374,8 +374,8 @@ func TestFlat(t *testing.T) {
 	}
 
 	want := "" +
-		"1   Apr 10 2026 12.00am  nicolas  Parent event\n" +
-		"2   Apr 11 2026 12.00am  nicolas  Child event\n"
+		"Apr 10 2026 12.00am  nicolas  Parent event\n" +
+		"Apr 11 2026 12.00am  nicolas  Child event\n"
 
 	var b bytes.Buffer
 	if err := Flat(&b, events); err != nil {
@@ -429,13 +429,13 @@ func TestEvents_Dispatch(t *testing.T) {
 		format string
 		check  func(string) bool
 	}{
-		{"tree", func(s string) bool { return strings.Contains(s, "1   Apr 10 2026 12.00am  nicolas  hi") }},
-		{"flat", func(s string) bool { return strings.Contains(s, "1   Apr 10 2026 12.00am  nicolas  hi") }},
+		{"tree", func(s string) bool { return strings.Contains(s, "Apr 10 2026 12.00am  nicolas  hi") }},
+		{"flat", func(s string) bool { return strings.Contains(s, "Apr 10 2026 12.00am  nicolas  hi") }},
 		{"json", func(s string) bool { return strings.HasPrefix(s, "[\n") }},
 		{"csv", func(s string) bool { return strings.HasPrefix(s, "id,parent_id,") }},
 		{"md", func(s string) bool { return strings.HasPrefix(s, "## ") }},
 		{"markdown", func(s string) bool { return strings.HasPrefix(s, "## ") }},
-		{"unknown", func(s string) bool { return strings.Contains(s, "1   Apr 10 2026 12.00am  nicolas  hi") }},
+		{"unknown", func(s string) bool { return strings.Contains(s, "Apr 10 2026 12.00am  nicolas  hi") }},
 	}
 
 	for _, tt := range tests {

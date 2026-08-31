@@ -87,7 +87,7 @@ func withAliases(formats ...string) []string {
 var nowFunc = time.Now
 
 func formatLocalStamp(t time.Time) string {
-	return timefmt.FormatRelative(t, nowFunc())
+	return timefmt.FormatRelativePadded(t, nowFunc())
 }
 
 func formatLocalDateTime(t time.Time) string {
@@ -97,12 +97,14 @@ func formatLocalDateTime(t time.Time) string {
 func eventAuthor(ev event.Event) string { return event.AuthorOf(ev.Meta) }
 
 // formatEventLine renders the one-line form shared by tree, flat and their
-// streaming variants. author and text are sanitized here rather than at each
-// call site, so no caller of this helper can forget. Formats that lay out
-// their own lines sanitize for themselves: Markdown here, and the `meta`
-// listing over in cmd/fngr.
-func formatEventLine(id int64, date, author, text string) string {
-	return fmt.Sprintf("%-4d%s  %s  %s", id, date, SanitizeLine(author), SanitizeLine(text))
+// streaming variants. It carries no event id: the id is how other verbs
+// (`event show`, `delete`, ...) address a row, not something the list view
+// needs to say about itself. author and text are sanitized here rather than
+// at each call site, so no caller of this helper can forget. Formats that
+// lay out their own lines sanitize for themselves: Markdown here, and the
+// `meta` listing over in cmd/fngr.
+func formatEventLine(date, author, text string) string {
+	return fmt.Sprintf("%s  %s  %s", date, SanitizeLine(author), SanitizeLine(text))
 }
 
 // Events writes a list of events in the requested format. Supported formats
@@ -264,7 +266,7 @@ func (t *treeWriter) node(id int64, connector, continuation string) error {
 	t.line = append(t.line[:0], t.prefix...)
 	t.line = append(t.line, connector...)
 	t.line = append(t.line,
-		formatEventLine(ev.ID, formatLocalStamp(ev.CreatedAt), eventAuthor(ev), ev.Title)...)
+		formatEventLine(formatLocalStamp(ev.CreatedAt), eventAuthor(ev), ev.Title)...)
 	t.line = append(t.line, '\n')
 	if _, err := t.w.Write(t.line); err != nil {
 		return err
@@ -313,7 +315,7 @@ func slicedSeq(events []event.Event) iter.Seq2[event.Event, error] {
 	}
 }
 
-// Flat writes one line per event in input order: `id  date  author  text`.
+// Flat writes one line per event in input order: `date  author  text`.
 // Parent/child topology is ignored; for that, use Tree.
 func Flat(w io.Writer, events []event.Event) error {
 	return FlatStream(w, slicedSeq(events))
@@ -435,7 +437,7 @@ func FlatStream(w io.Writer, seq iter.Seq2[event.Event, error]) error {
 		if err != nil {
 			return err
 		}
-		line := formatEventLine(ev.ID, formatLocalStamp(ev.CreatedAt), eventAuthor(ev), ev.Title)
+		line := formatEventLine(formatLocalStamp(ev.CreatedAt), eventAuthor(ev), ev.Title)
 		if _, err := fmt.Fprintln(w, line); err != nil {
 			return err
 		}

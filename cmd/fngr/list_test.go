@@ -251,8 +251,8 @@ func TestListCmd_Reverse(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	got := out.String()
-	if !strings.HasPrefix(got, "1 ") || !strings.Contains(got, "alpha") {
-		t.Errorf("reverse sort: expected alpha (id 1) first, got:\n%s", got)
+	if !strings.HasSuffix(strings.SplitN(got, "\n", 2)[0], "alpha") {
+		t.Errorf("reverse sort: expected alpha first, got:\n%s", got)
 	}
 }
 

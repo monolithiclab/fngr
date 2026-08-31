@@ -523,7 +523,14 @@ make ci             # codefix + format + lint + test
   `time.Local` in a **non-parallel** test with `t.Cleanup` restore, and `_ "time/tzdata"` embeds
   the zone database.
   `FormatRelative(t, now)` returns the compact list-line
-  stamp via the layout constants `LayoutToday` / `LayoutThisYear` / `LayoutOlder`. Canonical
+  stamp via the layout constants `LayoutToday` / `LayoutThisYear` / `LayoutOlder`.
+  `FormatRelativePadded` is the same stamp with a single-digit hour left-padded by one space, so a
+  column of list-view stamps stays aligned (`11.32pm` beside ` 9.32pm`); it post-processes
+  `FormatRelative`'s own output via `singleDigitHourRe` rather than a second set of layout
+  constants, because Go's layout language has a space-pad verb for day-of-month (`_2`) but none
+  for a 12-hour hour. `render.formatLocalStamp` is its only caller — Markdown's bullets format
+  `LayoutToday` directly, one event per line with no column to align, so padding it in place would
+  leak a stray leading space into every single-digit-hour digest entry. Canonical
   `DateFormat` / `DateTimeFormat` layouts used for storage and event-detail display.
   `FormatStorage` / `ParseStorage` are the encode/decode pair for the `created_at` TEXT column —
   the write path *and* the `--from`/`--to` bounds (compared lexically against stored text) must
@@ -735,9 +742,13 @@ make ci             # codefix + format + lint + test
 - `internal/render/render.go` — Output rendering to `io.Writer`. `Events(w, format, events)`,
   `SingleEvent(w, format, ev)`, and `EventsStream(w, format, seq)` are the dispatchers commands
   call; `Tree`, `Flat`/`FlatStream`, `JSON`/`JSONStream`, `CSV`/`CSVStream`,
-  `Markdown`/`MarkdownStream`, `Event` are the underlying writers. List/flat use a relative-aware compact stamp via `timefmt.FormatRelative`;
-  event detail keeps full ISO. Streaming variants consume `iter.Seq2[Event, error]` so memory
-  stays flat regardless of result size; tree still buffers because it needs the topology.
+  `Markdown`/`MarkdownStream`, `Event` are the underlying writers. List/flat use a relative-aware compact stamp via `timefmt.FormatRelativePadded`, a single-digit-hour-padded sibling of
+  `FormatRelative` (see `internal/timefmt/timefmt.go`); event detail keeps full ISO. Streaming
+  variants consume `iter.Seq2[Event, error]` so memory stays flat regardless of result size; tree
+  still buffers because it needs the topology. `formatEventLine(date, author, text)` — the one-line
+  form both share — carries no id: the id is how other verbs (`event show`, `delete`, ...) address
+  a row, not something the list view states about itself: it is columns of date/author/title, newest
+  first.
   All three dispatchers switch on `Canonical(format)`, which resolves the `formatAliases`
   table — currently just `markdown` → `md` — and passes anything else through untouched.
   `AddCmd.Run` and `list.go`'s tree branch canonicalize too, being the two places that test a
