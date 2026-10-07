@@ -1965,7 +1965,7 @@ anything. Every action is pinned to a commit SHA with the version in a trailing
 comment, `checkout` passes `persist-credentials: false`, and `goreleaser-action`
 runs `version: v2.17.1` rather than `latest`. `sigstore/cosign-installer` is
 pinned on the **v3** line (`v3.9.1`) — v4 installs cosign v3, which breaks the
-`signs:` args, see `docs/PUBLISHING.md`.
+`signs:` args, see `docs/publishing.md`.
 
 Pinning an action is not enough on its own where the action then pulls an image:
 `docker/setup-qemu-action` defaults to `tonistiigi/binfmt:latest`, which it runs
@@ -2965,8 +2965,8 @@ below the table). Each entry states why so we don't re-propose it.
 | `sync.Once`-memoize `loadMigrations()` | Three migrations today; `embed.FS.ReadDir` + sort is sub-millisecond — **measured**: the entire migration load is inside the +0.43 ms "open + PRAGMA + user_version" bucket. Becomes interesting at ~10 migrations. |
 | CSV header row dedup between `CSV` and `CSVStream` | Five-element string slice repeated twice. Not worth the import scope. |
 | Cache `pagerCommand()` via `sync.OnceValue` | Memoization breaks `t.Setenv` isolation in pager tests. Sub-microsecond per one-shot invocation. |
-| Org-level Actions secret with `--visibility selected` for `HOMEBREW_TAP_TOKEN` | Arrived **empty** in the runner despite passing every visibility check. Workaround: repo-level secret. Root cause unknown; documented in `docs/PUBLISHING.md`. |
-| REST API for ghcr.io package visibility flip | None exists — the toggle is UI-only. `gh api -X PATCH …` returns 404. Documented in `docs/PUBLISHING.md`. |
+| Org-level Actions secret with `--visibility selected` for `HOMEBREW_TAP_TOKEN` | Arrived **empty** in the runner despite passing every visibility check. Workaround: repo-level secret. Root cause unknown; documented in `docs/publishing.md`. |
+| REST API for ghcr.io package visibility flip | None exists — the toggle is UI-only. `gh api -X PATCH …` returns 404. Documented in `docs/publishing.md`. |
 | `fngr meta -S 'k='` widening to every value of `k` | **Verified this round**, and intended. `parseMetaFilter` leaves `ListMetaOpts.Value` empty for a trailing `=`, and `ListMeta` drops the `value = ?` clause, so `-S 'tag='` lists `tag=a` and `tag=b` alike — the same answer as the bare-key form `-S tag`. Refusing it would mean rejecting the one spelling that reads as "the key, with its values"; matching a literal empty value would mean matching rows `parse.ValidateMeta` now forbids anyone to create. |
 | `-S ''` / `-S '   '` matching the whole journal | **Verified this round**, and intended. An empty expression is no filter, which is what `fngr` with no `-S` already means, so `-S "$MAYBE_EMPTY"` in a script degrades to the unfiltered listing rather than erroring. The alternative — an empty filter matching nothing — is the one that silently loses events. |
 | Zero-author `AddInput` accepted by the writer | Deliberate. `requireOneAuthor` refuses an *empty* author value and two conflicting ones, but not the absence of the key: every CLI path supplies one (`--author` defaults through `defaultAuthor`, the JSON import validates per record), so the only caller that can produce an authorless event is Go code building an `AddInput` directly, which is a library caller stating what it wants. |
@@ -3042,9 +3042,9 @@ below the table). Each entry states why so we don't re-propose it.
   `sigstore/cosign-installer` stays on `@v3` deliberately (v4 has a real
   behavior break — see roadmap).
   *Done: everything network-facing is pinned. The pins go stale silently, so
-  `docs/PUBLISHING.md` grew a "Refreshing the pins" section with the resolve
+  `docs/publishing.md` grew a "Refreshing the pins" section with the resolve
   commands; a bulk refresh must not walk cosign-installer past v3.*
-- **`docs/PUBLISHING.md`** — the "Gotchas" section is the institutional memory
+- **`docs/publishing.md`** — the "Gotchas" section is the institutional memory
   of the v0.0.1 rollout. Add to it when shipping a sibling repo.
 - **Three deferred `internal/event` efficiency findings**, surfaced by the
   pre-commit review of the file split and left out of it because the split was

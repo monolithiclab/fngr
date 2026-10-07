@@ -1,0 +1,17 @@
+# GoReleaser builds the image from its own context holding only the cross-compiled
+# binary, so this guards a plain `docker build .`: keep the tree, history and
+# local databases out of the context.
+.git
+.github
+.claude
+build/
+dist/
+*.db
+*.md
+!README.md
+Makefile
+common.mk
+go.mk
+tools/
+docs/
+cover.out

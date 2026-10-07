@@ -42,7 +42,7 @@ cycle. Specs land under `docs/superpowers/specs/`, plans under
   pull and the distroless `nonroot` base to digests, GoReleaser and the
   linters to exact versions — with `make lint-pins` guarding the two
   shapes a grep can see and the refresh procedure in
-  `docs/PUBLISHING.md`.
+  `docs/publishing.md`.
 - **CLI surface alignment** — `fngr help [<cmd>...]` is a verb-form alias
   for `--help` (multi-arg paths supported: `fngr help event show`); every
   help screen uses Kong's `HelpOptions{Compact: true}` layout (one line
@@ -295,7 +295,7 @@ before it is worth the CLI surface.
 ## Publishing pipeline polish
 
 Follow-ups from the v0.0.1 release rollout (full context in
-`docs/PUBLISHING.md` "Gotchas"). Each is functional today; the
+`docs/publishing.md` "Gotchas"). Each is functional today; the
 migrations are quality-of-life cleanups that can wait until the
 deprecated keys are actually removed by upstream.
 
@@ -310,16 +310,6 @@ deprecated keys are actually removed by upstream.
   `brew install --cask`, which would break the cross-platform install
   path we promise (`brew install monolithiclab/tap/fngr` from Linux
   too). Wait for GoReleaser to ship a `homebrew_formulas:` key.
-- **Cosign `signs:` → bundle format** — pinned to the
-  `sigstore/cosign-installer` **v3** line (by SHA), which installs
-  cosign v2.x; the installer's v4 line installs cosign v3.x, which
-  deprecated the
-  `--output-signature` / `--output-certificate` flags in favor of a
-  single `.sigstore.json` bundle. Migration touches the
-  `.goreleaser.yaml` `signs:` block, the README's verification
-  example (current `cosign verify-blob --signature SHA256SUMS.sig
---certificate SHA256SUMS.pem` would become a single `--bundle`
-  flag), and `docs/PUBLISHING.md`'s downstream-verification section.
 - **Brew formula path** — GoReleaser writes `<name>.rb` at the tap
   root by default. Both layouts work for `brew install`, but
   `Formula/<name>.rb` is the conventional Homebrew tap structure.

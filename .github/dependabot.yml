@@ -26,9 +26,9 @@ updates:
     groups:
       actions-minor-patch:
         update-types: [minor, patch]
-    # cosign-installer v4 installs cosign v3, which drops the detached
-    # .sig/.pem that .goreleaser.yaml's signs args write (see release.yml).
-    # That move is a signing change made by hand, not a dependency bump.
+    # A cosign-installer major can change the cosign major and with it the
+    # signature format (v4 moved us from .sig/.pem to a .sigstore.json
+    # bundle). That is a signing change made by hand, not a dependency bump.
     ignore:
       - dependency-name: sigstore/cosign-installer
         update-types: ["version-update:semver-major"]

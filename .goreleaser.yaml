@@ -39,15 +39,17 @@ sboms:
 checksum:
   name_template: "SHA256SUMS"
 
+# cosign v3 (cosign-installer v4) writes one Sigstore bundle holding the
+# signature, the certificate and the transparency-log proof; the detached
+# .sig/.pem pair of cosign v2 is deprecated. Signing SHA256SUMS covers every
+# archive and SBOM, since each is listed there by hash.
 signs:
   - id: cosign-checksums
     cmd: cosign
-    signature: "${artifact}.sig"
-    certificate: "${artifact}.pem"
+    signature: "${artifact}.sigstore.json"
     args:
       - sign-blob
-      - "--output-certificate=${certificate}"
-      - "--output-signature=${signature}"
+      - "--bundle=${signature}"
       - "${artifact}"
       - "--yes"
     artifacts: checksum

@@ -24,13 +24,13 @@ go install github.com/monolithiclab/fngr/cmd/fngr@latest
 
 Download the right tarball for your OS/arch from the
 [releases page](https://github.com/monolithiclab/fngr/releases).
-SHA256 checksums and cosign signatures are attached to every release;
-verify with:
+Every release attaches `SHA256SUMS` and its cosign Sigstore bundle,
+`SHA256SUMS.sigstore.json` (signature, certificate and transparency-log
+proof in one file; needs cosign v2.4 or later). Verify with:
 
 ```
 cosign verify-blob \
-  --signature SHA256SUMS.sig \
-  --certificate SHA256SUMS.pem \
+  --bundle SHA256SUMS.sigstore.json \
   --certificate-identity-regexp 'https://github.com/monolithiclab/fngr' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
   SHA256SUMS

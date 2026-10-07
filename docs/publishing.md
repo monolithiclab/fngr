@@ -195,7 +195,7 @@ Before tagging the first release:
 
 ```bash
 goreleaser check                                          # validates config; deprecation warnings on dockers/brews are intentional (see Gotchas)
-goreleaser release --snapshot --skip=publish,sign --clean # full local build (add --skip=sbom if syft isn't installed)
+goreleaser release --snapshot --skip=publish,sign --clean # full local build (add --skip=sbom if syft isn't installed, docker without a daemon)
 ls dist/                                                  # 4 archives + 4 .sbom.json, SHA256SUMS, dist/homebrew/<name>.rb, multi-arch images
 rm -rf dist/
 ```
@@ -227,8 +227,7 @@ gh release view v0.0.1-rc1 --repo monolithiclab/<new-repo> \
 # cosign verify the SHA256SUMS file
 gh release download v0.0.1-rc1 --repo monolithiclab/<new-repo> --pattern 'SHA256SUMS*' --dir /tmp/verify
 cosign verify-blob \
-  --signature /tmp/verify/SHA256SUMS.sig \
-  --certificate /tmp/verify/SHA256SUMS.pem \
+  --bundle /tmp/verify/SHA256SUMS.sigstore.json \
   --certificate-identity-regexp 'https://github.com/monolithiclab/<new-repo>' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
   /tmp/verify/SHA256SUMS
@@ -313,7 +312,8 @@ same action pinned to two different SHAs across the workflows — it is
 the only thing standing between this section and a silent regression.
 `.github/dependabot.yml` proposes the routine bumps weekly (actions,
 Go modules, the base image), holding `sigstore/cosign-installer` to
-its major. Neither can see the rest: GoReleaser's `version:`, the
+its major (a new cosign major has changed the signature format once
+already; see the gotcha below). Neither can see the rest: GoReleaser's `version:`, the
 linter versions in `tools/go.mod`, and the two image digests passed
 as `with:` values in `release.yml` are literals guarded by review.
 
@@ -333,10 +333,9 @@ grep -hoE 'uses: [^ ]+@[0-9a-f]{40} # v[0-9]+' .github/workflows/*.y*ml \
 ```
 
 Because the alias comes from the pin's own comment, this re-resolves
-each action within the major it is on — which is what keeps
-`sigstore/cosign-installer` on `v3`, where it is deliberately held
-(`v4` breaks our signing args, see the gotcha below). Don't hand-edit
-it forward.
+each action within the major it is on. `sigstore/cosign-installer`
+ships no moving major tag, only patch tags (`v4.1.2`), so bump it by
+hand to the latest `v4.x.y` and check the cosign major it installs.
 
 **Images the actions pull.** `setup-qemu-action` and
 `setup-buildx-action` are pinned by SHA but each defaults to a mutable
@@ -378,7 +377,7 @@ docker run --rm ghcr.io/monolithiclab/<name>:0.0.1 --version
 gh release download v0.0.1 --repo monolithiclab/<name> --pattern 'SHA256SUMS*' --dir /tmp/v
 gh release download v0.0.1 --repo monolithiclab/<name> --pattern '*_linux_amd64.tar.gz' --dir /tmp/v
 cosign verify-blob \
-  --signature /tmp/v/SHA256SUMS.sig --certificate /tmp/v/SHA256SUMS.pem \
+  --bundle /tmp/v/SHA256SUMS.sigstore.json \
   --certificate-identity-regexp 'https://github.com/monolithiclab/<name>' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
   /tmp/v/SHA256SUMS
@@ -420,24 +419,20 @@ printf '%s' '<PAT>' | gh secret set HOMEBREW_TAP_TOKEN --repo monolithiclab/<new
 If you find the root cause of the org-level breakage and fix it,
 update this playbook.
 
-### `cosign-installer@v4` broke our signing args
+### `cosign-installer@v4` changed the signature format
 
 Installer major and cosign major are not the same number, which makes
 this easy to misread: the action's **v3** line installs cosign
-**v2.x** (`v3.9.1` → cosign v2.5.2), and its v4 line installs cosign
-v3.x. That cosign defaults to `--new-bundle-format`, which:
-
-- Deprecates `--output-signature` and `--output-certificate` (the
-  flags `.goreleaser.yaml`'s `signs:` config passes).
-- Produces a single `.sigstore.json` bundle instead of the
-  `.sig` + `.pem` pair we publish on each release and reference in
-  the README's verification example.
-
-Pin `sigstore/cosign-installer@v3` until you migrate the
-`signs:` config to the new bundle shape and update the README's
-`cosign verify-blob` command. (Note: `sigstore/cosign-installer`
-doesn't ship a moving `v4` major-alias tag — only specific patch
-tags like `v4.1.1`. If you do migrate, pin the patch.)
+**v2.x**, and its **v4** line installs cosign **v3.x**. cosign v3's
+`sign-blob` requires `--bundle` and writes one `.sigstore.json`
+bundle (signature, certificate and transparency-log proof) instead of
+the detached `.sig` + `.pem` pair; `--output-signature` and
+`--output-certificate` are deprecated. Releases up to v0.0.4 carry the
+`.sig`/`.pem` pair; later ones carry `SHA256SUMS.sigstore.json`, and
+`.goreleaser.yaml`'s `signs:` block, the README and the verification
+commands above all use `--bundle`. A future installer major gets the
+same check before it is taken: the signing args, then every
+`verify-blob` example.
 
 ### The `nonroot` base needs a directory mount, not a file mount
 

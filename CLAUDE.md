@@ -7,7 +7,7 @@ modernc.org/sqlite (pure-Go, CGo-free) for storage. Events support parent-child 
 metadata, and FTS5 full-text search.
 
 When touching the release pipeline (`.goreleaser.yaml`, `.github/workflows/{ci,release}.yml`,
-`Dockerfile`, the brew tap, ghcr.io image, cosign signing), see `docs/PUBLISHING.md` for the full
+`Dockerfile`, the brew tap, ghcr.io image, cosign signing), see `docs/publishing.md` for the full
 operational playbook + every gotcha hit shipping v0.0.1. Everything in there that reaches the
 network is pinned — actions and the images they pull, the base image, GoReleaser, the lint tools
 — so an edit that reintroduces a floating tag is a regression, not a tidy-up; the playbook's
