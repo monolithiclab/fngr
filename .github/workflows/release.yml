@@ -24,7 +24,7 @@ jobs:
       # release, push to ghcr.io and sign with our OIDC identity — whoever
       # can move a tag inherits all three. The trailing comment names the
       # version each SHA is; docs/PUBLISHING.md has the refresh recipe.
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0  # GoReleaser needs full history for changelog
           # Don't leave the token in .git/config for the rest of the job:
@@ -33,7 +33,7 @@ jobs:
           # GitHub Release and the Homebrew tap are both API calls with
           # their own tokens, and the changelog reads local history.
           persist-credentials: false
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
@@ -41,10 +41,10 @@ jobs:
       # runs privileged on the runner, and buildkit:buildx-stable-1, which
       # builds every layer we push. Pinning the action alone leaves the hole
       # one level down, inside the job holding all three write scopes.
-      - uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+      - uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4.3.0
         with:
           image: docker.io/tonistiigi/binfmt:latest@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
-      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
         with:
           driver-opts: image=moby/buildkit:buildx-stable-1@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0

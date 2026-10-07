@@ -1,0 +1,44 @@
+version: 2
+
+# Minor/patch bumps land as one grouped PR per ecosystem; majors get their own
+# review. Every prefix is chore(...): .goreleaser.yaml's changelog excludes
+# ^chore, so dependency bumps stay out of release notes.
+updates:
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      go-minor-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "chore(ci-deps)"
+    groups:
+      actions-minor-patch:
+        update-types: [minor, patch]
+    # cosign-installer v4 installs cosign v3, which drops the detached
+    # .sig/.pem that .goreleaser.yaml's signs args write (see release.yml).
+    # That move is a signing change made by hand, not a dependency bump.
+    ignore:
+      - dependency-name: sigstore/cosign-installer
+        update-types: ["version-update:semver-major"]
+
+  # The release image is built FROM gcr.io/distroless/static-debian13:nonroot;
+  # base-image CVEs are the main reason to rebuild between releases.
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "chore(docker)"

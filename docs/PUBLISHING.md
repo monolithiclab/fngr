@@ -306,13 +306,15 @@ an OIDC signing identity handed to whoever can move it — but it also
 means the pins go stale silently. Refresh them on purpose, in their
 own commit, and let CI prove the new set works.
 
-fngr's `Makefile` carries a `lint-pins` target, hung off `lint` so
+The lab's shared `go.mk` carries a `lint-pins` step, part of `lint` so
 `make ci` and CI both run it, that fails on an action without a
 `@<40-hex> # vX.Y.Z` suffix, on a `FROM` without a digest, and on the
-same action pinned to two different SHAs across the workflows. Copy it
-into new repos — it is the only thing standing between this section and
-a silent regression. It cannot see the rest: GoReleaser's `version:`,
-the linter versions in the `Makefile`, and the two image digests passed
+same action pinned to two different SHAs across the workflows — it is
+the only thing standing between this section and a silent regression.
+`.github/dependabot.yml` proposes the routine bumps weekly (actions,
+Go modules, the base image), holding `sigstore/cosign-installer` to
+its major. Neither can see the rest: GoReleaser's `version:`, the
+linter versions in `tools/go.mod`, and the two image digests passed
 as `with:` values in `release.yml` are literals guarded by review.
 
 **GitHub Actions.** Resolve each pinned action's major alias to the
