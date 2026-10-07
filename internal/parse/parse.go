@@ -1,3 +1,9 @@
+// Package parse holds the text rules that every write path and the -S search
+// filter must agree on: how @person, #tag and key=value become metadata, how
+// an event's text splits into title and body, and the tokens the full-text
+// index stores. Add, edit, import, the migrations and the filter parser all
+// call these instead of restating them, so a tag one path stores is the tag
+// the others find.
 package parse
 
 import (

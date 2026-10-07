@@ -1,3 +1,8 @@
+// Package db finds, opens and migrates fngr's SQLite file. Open returns a
+// *sql.DB whose every pooled connection carries the pragmas fngr relies on
+// (see dsn), and migrates it forward through the embedded, never-edited
+// `migrations/<N>.sql` steps — some with a Go follow-up (goMigrations) —
+// tracked in SQLite's user_version.
 package db
 
 import (
