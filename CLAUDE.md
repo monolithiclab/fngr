@@ -21,8 +21,8 @@ Dockerfile `FROM`. The rest are literals — the tool versions in `tools/go.mod`
 ```bash
 make build          # Build binary to build/fngr
 make test           # Run tests with -race and coverage (.covignore filters the profile)
-make lint           # Every non-mutating check: gofmt, vet, staticcheck, golangci-lint, gosec, gocritic,
-                    # govulncheck, go mod tidy -diff, pins
+make lint           # Every non-mutating check: golangci-lint (gofmt -s, vet, staticcheck, gosec, gocritic
+                    # shadows, one .golangci.yml), govulncheck, go mod tidy -diff, pins
 make lint-fix       # go fix + gofmt -s (mutates; never part of ci)
 make bench          # Run benchmarks (bench-save / bench-compare against bench-base.txt)
 make ci             # The gate: lint + test, what CI runs

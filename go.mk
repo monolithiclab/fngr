@@ -61,34 +61,12 @@ bench-compare: ## Compare the benchmarks against bench-base.txt with benchstat
 	@$(TOOLS) benchstat bench-base.txt bench-new.txt
 
 .PHONY: lint
-lint: lint-format lint-vet lint-staticcheck lint-golangci lint-gosec lint-gocritic lint-vulncheck lint-mod lint-pins ## Run every non-mutating check (needs network for govulncheck)
+lint: lint-golangci lint-vulncheck lint-mod lint-pins ## Run every non-mutating check (needs network for govulncheck)
 
-.PHONY: lint-format
-lint-format:
-	@files=$$($(GO_FILES) | xargs -0 gofmt -s -l); \
-	if [ -n "$$files" ]; then echo "Not gofmt -s clean (run make lint-fix):"; echo "$$files"; exit 1; fi
-
-.PHONY: lint-vet
-lint-vet:
-	@go vet ./...
-
-.PHONY: lint-staticcheck
-lint-staticcheck:
-	@$(TOOLS) staticcheck ./...
-
+# One .golangci.yml runs gofmt -s, govet, staticcheck (ST1000 on), gosec and gocritic's shadow checks.
 .PHONY: lint-golangci
 lint-golangci:
 	@$(TOOLS) golangci-lint run --allow-serial-runners ./...
-
-.PHONY: lint-gosec
-lint-gosec:
-	@$(TOOLS) gosec -quiet ./...
-
-# builtinShadow/importShadow are off by default: a local named min, path or url silently outranks the builtin or
-# the package for the rest of its scope, and nothing else reports it.
-.PHONY: lint-gocritic
-lint-gocritic:
-	@$(TOOLS) gocritic check -enable=builtinShadow,importShadow ./...
 
 .PHONY: lint-vulncheck
 lint-vulncheck:

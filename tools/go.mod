@@ -3,12 +3,9 @@ module github.com/monolithiclab/fngr/tools
 go 1.26.0
 
 tool (
-	github.com/go-critic/go-critic/cmd/gocritic
 	github.com/golangci/golangci-lint/v2/cmd/golangci-lint
-	github.com/securego/gosec/v2/cmd/gosec
 	golang.org/x/perf/cmd/benchstat
 	golang.org/x/vuln/cmd/govulncheck
-	honnef.co/go/tools/cmd/staticcheck
 )
 
 require (
