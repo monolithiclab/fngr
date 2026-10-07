@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -61,23 +62,29 @@ func TestParseJSONAddInput(t *testing.T) {
 // encoding/json's type errors. Untranslated they read `cannot unmarshal object
 // into Go struct field jsonAddInput.meta of type [][2]string` — a private Go
 // type name and a Go declaration, in an error about a JSON file.
+//
+// It asserts the wire facts, not encoding/json's location spelling: since Go
+// 1.27 UnmarshalTypeError.Field carries array indices too ("1.id" inside a
+// batch, "0" for a top-level element), so where names a regexp that accepts
+// the path with or without them.
 func TestParseJSONAddInput_TypeErrorsNameTheWireShape(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		name  string
-		input string
-		want  string
+		name      string
+		input     string
+		where     string // regexp for the location prefix
+		got, want string
 	}{
-		{"object for an array field", `{"title":"t","meta":{"a":"b"}}`, `field "meta": got object, want array`},
-		{"string for an array field", `{"title":"t","meta":"ops"}`, `field "meta": got string, want array`},
-		{"number for a string field", `{"title":5}`, `field "title": got number, want string`},
-		{"string for a number field", `{"title":"t","parent_id":"3"}`, `field "parent_id": got string, want number`},
-		{"inside a batch", `[{"title":"a"},{"title":"b","id":"x"}]`, `field "id": got string, want number`},
+		{"object for an array field", `{"title":"t","meta":{"a":"b"}}`, `field "meta"`, "object", "array"},
+		{"string for an array field", `{"title":"t","meta":"ops"}`, `field "meta"`, "string", "array"},
+		{"number for a string field", `{"title":5}`, `field "title"`, "number", "string"},
+		{"string for a number field", `{"title":"t","parent_id":"3"}`, `field "parent_id"`, "string", "number"},
+		{"inside a batch", `[{"title":"a"},{"title":"b","id":"x"}]`, `field "(1\.)?id"`, "string", "number"},
 		// No field name to prefix, and the case that leaked worst: untranslated
 		// these read `cannot unmarshal number into Go value of type
 		// main.jsonAddInput`, naming the private type outright.
-		{"top-level scalar", `42`, `input: got number, want object`},
-		{"top-level array of scalars", `["a"]`, `input: got string, want object`},
+		{"top-level scalar", `42`, `input`, "number", "object"},
+		{"top-level array of scalars", `["a"]`, `(input|field "0")`, "string", "object"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -86,11 +93,11 @@ func TestParseJSONAddInput_TypeErrorsNameTheWireShape(t *testing.T) {
 				t.Fatalf("parseJSONAddInput(%s) succeeded, want a type error", tc.input)
 			}
 			got := err.Error()
-			if !strings.Contains(got, tc.want) {
-				t.Errorf("err = %q, want substring %q", got, tc.want)
-			}
-			if !strings.Contains(got, "at byte ") {
-				t.Errorf("err = %q, want a byte offset — the field name alone cannot locate a record in a batch", got)
+			shape := regexp.MustCompile(tc.where + ": got " + tc.got + ", want " + tc.want + ` \(at byte \d+\)`)
+			if !shape.MatchString(got) {
+				t.Errorf("err = %q, want it to match %q — the location, the JSON kind found and the "+
+					"one wanted, and a byte offset, since a field name alone cannot locate a record in a batch",
+					got, shape)
 			}
 			for _, leak := range []string{"jsonAddInput", "[][2]string", "Go struct", "Go value"} {
 				if strings.Contains(got, leak) {
