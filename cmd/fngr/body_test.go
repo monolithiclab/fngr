@@ -296,21 +296,28 @@ func runSignalHelper(t *testing.T) {
 // where it resets a caught one, so an editor launched under Ignore inherits
 // SIG_IGN and cannot be Ctrl-C'd — least of all `EDITOR="code -w"`, a wrapper
 // script with no SIGINT handling of its own.
+//
+// The child is sleep itself, not `sh -c "sleep 30"`: a shell between the
+// test and sleep brings SIGINT handling of its own, and with Ubuntu's dash a
+// SIGINT landing around its exec of sleep was lost, failing about 1 run in 150
+// under CPU load. sleep never touches SIGINT, so it dies of it exactly when
+// the disposition it inherited is the default.
 func TestIgnoreTerminalSignals_ChildIsStillInterruptible(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX signals only")
 	}
 	defer ignoreTerminalSignals()()
 
-	child := exec.Command("/bin/sh", "-c", "sleep 30")
+	child := exec.Command("sleep", "30")
 	if err := child.Start(); err != nil {
 		t.Fatalf("start child: %v", err)
 	}
 	done := make(chan error, 1)
 	go func() { done <- child.Wait() }()
 
-	// Started, not necessarily scheduled; a signal to a live process is
-	// delivered either way, so no wait for readiness is needed.
+	// Start returns once the exec has succeeded, so the disposition under
+	// test is already in place; a signal to a live process is delivered
+	// whether or not it has been scheduled yet.
 	if err := child.Process.Signal(os.Interrupt); err != nil {
 		t.Fatalf("signal child: %v", err)
 	}
