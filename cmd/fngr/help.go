@@ -33,7 +33,7 @@ func (c *HelpCmd) Run(realCtx *kong.Context) error {
 		return err
 	}
 	args := append(slices.Clone(c.Args), "--help")
-	_, err := realCtx.Kong.Parse(args)
+	_, err := realCtx.Parse(args)
 	return err
 }
 

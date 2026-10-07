@@ -240,15 +240,12 @@ func jsonInputToAddInput(
 	// it is only consulted when the record itself says nothing.
 	var parent *int64
 	var parentIndex *int
-	switch {
-	case in.ParentID == nil:
+	if in.ParentID == nil {
 		parent = defaults.parent
-	default:
-		if i, ok := byIndex[*in.ParentID]; ok {
-			parentIndex = &i
-		} else {
-			parent = in.ParentID
-		}
+	} else if i, ok := byIndex[*in.ParentID]; ok {
+		parentIndex = &i
+	} else {
+		parent = in.ParentID
 	}
 
 	var createdAt *time.Time

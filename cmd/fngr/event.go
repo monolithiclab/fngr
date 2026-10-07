@@ -277,10 +277,10 @@ func (c *EventTagCmd) Run(s eventStore, io ioStreams) error {
 		return err
 	}
 	requested := int64(len(tags))
-	switch {
-	case added == 0:
+	switch added {
+	case 0:
 		fmt.Fprintf(io.Out, "Tagged event %d (already tagged)\n", c.ID)
-	case added == requested:
+	case requested:
 		fmt.Fprintf(io.Out, "Tagged event %d (%d added)\n", c.ID, added)
 	default:
 		fmt.Fprintf(io.Out, "Tagged event %d (%d added, %d already present)\n", c.ID, added, requested-added)
