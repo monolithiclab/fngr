@@ -8,3 +8,5 @@
 build/
 cover.out
 GEMINI.md
+bench-*.txt
+dist/

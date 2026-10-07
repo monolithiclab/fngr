@@ -130,9 +130,9 @@ new project name):
   below before documenting `docker run` for your CLI.
 - `.goreleaser.yaml` — the load-bearing release config. Search-
   replace `fngr` and `monolithiclab/fngr` and `homebrew-tap`.
-- `.github/workflows/ci.yml` — push-to-main + PR matrix on
-  ubuntu+macOS, `make lint-tools` then `make lint test`, coverage
-  artifact, plus a `make vuln` (govulncheck) job.
+- `.github/workflows/ci.yml` — push-to-main + PR on ubuntu,
+  `setup-go` from `go.mod`, then exactly `make ci` (lint, including
+  govulncheck and the pin check, plus tests).
 - `.github/workflows/release.yml` — tag-triggered, QEMU + Buildx
   + ghcr.io login + cosign-installer + syft + goreleaser-action.
 
@@ -351,24 +351,14 @@ then update both the tag and the digest in the `Dockerfile`.
 same version locally (`brew upgrade goreleaser`) so `goreleaser check`
 and snapshot rehearsals test what CI will run.
 
-**Lint tools.** The `*_VERSION` variables in the `Makefile` exist
-because `common-go.mk` installs each linter at `@latest` when it is
-missing, and that file is shared across repos — `make lint-tools` puts
-the version this repo chose in `GOPATH/bin` so its `which` check finds
-that one instead. CI runs the same target, so there is one list, not
-two. Latest for each:
-
-```bash
-for m in honnef.co/go/tools github.com/golangci/golangci-lint \
-         github.com/securego/gosec/v2 github.com/go-critic/go-critic \
-         golang.org/x/vuln; do
-  echo "$m $(curl -s "https://proxy.golang.org/$m/@latest" | jq -r .Version)"
-done
-```
-
-Bump your local copies to match (`FORCE_UPDATE=1 make lint` reinstalls
-at `@latest`, which is not the same thing — use `go install <mod>@<ver>`
-so local and CI agree).
+**Lint tools.** Pinned as `tool` directives in `tools/go.mod` and run
+through `go tool -modfile=tools/go.mod`, so local and CI runs use the
+same versions with nothing installed into `GOPATH/bin`. Bump one with
+`go get -tool -modfile=tools/go.mod <module>@<version>` — never `go mod
+tidy -modfile=tools/go.mod`, which pulls this module's own dependencies
+into the tools module. Go itself is pinned by `go.mod`'s `toolchain`
+line, which `go.mk` exports as `GOTOOLCHAIN` and CI reads through
+`go-version-file`.
 
 ---
 

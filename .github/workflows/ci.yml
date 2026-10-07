@@ -33,11 +33,7 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      # Versions live in the Makefile so this run and a local one lint with the
-      # same tools; setup-go has already put GOPATH/bin on PATH, which is what
-      # makes common-go.mk's `which` check find them.
-      - run: make lint-tools
-      - run: make lint test
+      - run: make ci
       - if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -65,4 +61,4 @@ jobs:
           cache: false
       # govulncheck reports only vulnerabilities the build actually reaches, so
       # an advisory in a package we never call does not fail CI.
-      - run: make vuln
+      - run: make lint-vulncheck

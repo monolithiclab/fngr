@@ -13,20 +13,24 @@ network is pinned — actions and the images they pull, the base image, GoReleas
 — so an edit that reintroduces a floating tag is a regression, not a tidy-up; the playbook's
 "Refreshing the pins" section is how they move. `make lint-pins` (a prerequisite of `lint`,
 so both CI and `make ci` run it) guards the two shapes a grep can see: `uses:` lines and the
-Dockerfile `FROM`. The rest are literals — the tool versions in this `Makefile`, GoReleaser's
+Dockerfile `FROM`. The rest are literals — the tool versions in `tools/go.mod`, GoReleaser's
 `version:` and the two `with:` image digests in `release.yml` — and are on review.
 
 ## Commands
 
 ```bash
 make build          # Build binary to build/fngr
-make test           # Run tests with -race, -cover, coverage report
-make lint           # Run all linters (gofmt, vet, staticcheck, golangci-lint, gosec, gocritic, pins)
-make lint-tools     # Install the pinned linter versions into GOPATH/bin
-make vuln           # Report known vulnerabilities reachable from this module's code
-make format         # Format source code
-make bench          # Run benchmarks
-make ci             # codefix + format + lint + test
+make test           # Run tests with -race and coverage (.covignore filters the profile)
+make lint           # Every non-mutating check: gofmt, vet, staticcheck, golangci-lint, gosec, gocritic,
+                    # govulncheck, go mod tidy -diff, pins
+make lint-fix       # go fix + gofmt -s (mutates; never part of ci)
+make bench          # Run benchmarks (bench-save / bench-compare against bench-base.txt)
+make ci             # The gate: lint + test, what CI runs
+```
+
+`make help` lists every target. The lint tools are pinned in `tools/go.mod` and run through
+`go tool -modfile=tools/go.mod`; Go itself is pinned by go.mod's `toolchain` line, which `go.mk`
+exports as `GOTOOLCHAIN`.
 ```
 
 > Always use make targets for linting, testing, building, etc.
@@ -845,4 +849,6 @@ make ci             # codefix + format + lint + test
   `loadMigrations` picks it up from the embedded filesystem, so `migrate.go` needs no edit unless
   the step also needs Go (then add it to `goMigrations`). Never edit a published migration.
 - Version injected via `-ldflags` at build time from git tags; surfaced via `--version`.
-- `common-go.mk` is shared across repos — don't modify it here.
+- `common.mk` and `go.mk` are byte-identical copies of the canonical files in the `lab-repo-standards`
+  and `go-cli-development` skills — edit them only there, then re-copy. Repo overrides and `run` go
+  in the `Makefile` after the includes.

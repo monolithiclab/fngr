@@ -1,0 +1,25 @@
+# golangci-lint v2 config, the Monolithic Lab default (canonical copy: go-cli-development skill).
+#
+# v2 dropped v1's built-in issue exclusions (EXC0001 etc.), the ones that keep errcheck quiet about unchecked
+# defer f.Close(), os.Remove() and fmt.Fprint* returns. The presets below put them back, so v2 lints what v1 did.
+# This is `golangci-lint migrate`'s output against a v1 config equivalent to the old implicit defaults.
+version: "2"
+linters:
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
