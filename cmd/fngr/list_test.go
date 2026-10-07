@@ -21,7 +21,7 @@ import (
 func TestListCmd_DefaultTree(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out := newTestIO("")
+	streams, out := newTestIO("")
 
 	if _, err := s.Add(context.Background(), event.AddInput{Title: "deploy #ops", Meta: []parse.Meta{
 		{Key: "author", Value: "alice"},
@@ -31,7 +31,7 @@ func TestListCmd_DefaultTree(t *testing.T) {
 	}
 
 	cmd := &ListCmd{Format: "tree"}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if got := out.String(); !strings.Contains(got, "deploy #ops") {
@@ -48,10 +48,10 @@ func TestListCmd_FilterSyntaxError(t *testing.T) {
 		t.Run(format, func(t *testing.T) {
 			t.Parallel()
 			s := newTestStore(t)
-			io, _ := newTestIO("")
+			streams, _ := newTestIO("")
 
 			cmd := &ListCmd{Format: format, Search: "#ops &"}
-			err := cmd.Run(s, io)
+			err := cmd.Run(s, streams)
 			if err == nil {
 				t.Fatal("expected an error for a dangling operator, got nil")
 			}
@@ -79,10 +79,10 @@ func TestListCmd_QueryErrorKeepsItsOwnMessage(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 	s := event.NewStore(database)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
 	cmd := &ListCmd{Format: "tree", Search: "#ops"}
-	err = cmd.Run(s, io)
+	err = cmd.Run(s, streams)
 	if err == nil {
 		t.Fatal("expected an error from the closed database, got nil")
 	}
@@ -134,10 +134,10 @@ func TestListCmd_EmptyReportsNoEvents(t *testing.T) {
 	for _, format := range render.ListFormats {
 		t.Run(format, func(t *testing.T) {
 			t.Parallel()
-			io, out, errBuf := newTestIOFull("", false)
+			streams, out, errBuf := newTestIOFull("", false)
 
 			cmd := &ListCmd{Format: format}
-			if err := cmd.Run(s, io); err != nil {
+			if err := cmd.Run(s, streams); err != nil {
 				t.Fatalf("Run: %v", err)
 			}
 			if got := errBuf.String(); !strings.Contains(got, "No events found") {
@@ -166,10 +166,10 @@ func TestListCmd_NonEmptyStaysQuiet(t *testing.T) {
 	for _, format := range render.ListFormats {
 		t.Run(format, func(t *testing.T) {
 			t.Parallel()
-			io, out, errBuf := newTestIOFull("", false)
+			streams, out, errBuf := newTestIOFull("", false)
 
 			cmd := &ListCmd{Format: format}
-			if err := cmd.Run(s, io); err != nil {
+			if err := cmd.Run(s, streams); err != nil {
 				t.Fatalf("Run: %v", err)
 			}
 			if strings.Contains(errBuf.String(), "No events found") {
@@ -185,7 +185,7 @@ func TestListCmd_NonEmptyStaysQuiet(t *testing.T) {
 func TestListCmd_JSON(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out := newTestIO("")
+	streams, out := newTestIO("")
 
 	if _, err := s.Add(context.Background(), event.AddInput{Title: "json me", Meta: []parse.Meta{
 		{Key: "author", Value: "alice"},
@@ -194,7 +194,7 @@ func TestListCmd_JSON(t *testing.T) {
 	}
 
 	cmd := &ListCmd{Format: "json"}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -210,7 +210,7 @@ func TestListCmd_JSON(t *testing.T) {
 func TestListCmd_LimitAndDefaultSort(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out := newTestIO("")
+	streams, out := newTestIO("")
 
 	for _, text := range []string{"alpha", "beta", "gamma"} {
 		if _, err := s.Add(context.Background(), event.AddInput{Title: text, Meta: []parse.Meta{
@@ -221,7 +221,7 @@ func TestListCmd_LimitAndDefaultSort(t *testing.T) {
 	}
 
 	cmd := &ListCmd{Format: "flat", Limit: 1}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	got := out.String()
@@ -236,7 +236,7 @@ func TestListCmd_LimitAndDefaultSort(t *testing.T) {
 func TestListCmd_Reverse(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out := newTestIO("")
+	streams, out := newTestIO("")
 
 	for _, text := range []string{"alpha", "beta", "gamma"} {
 		if _, err := s.Add(context.Background(), event.AddInput{Title: text, Meta: []parse.Meta{
@@ -247,7 +247,7 @@ func TestListCmd_Reverse(t *testing.T) {
 	}
 
 	cmd := &ListCmd{Format: "flat", Reverse: true}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	got := out.String()
@@ -263,7 +263,7 @@ func TestListCmd_Reverse(t *testing.T) {
 func TestListCmd_ReverseKeepsTheNewestUnderALimit(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out := newTestIO("")
+	streams, out := newTestIO("")
 
 	base := time.Date(2026, 4, 20, 9, 0, 0, 0, time.Local)
 	for i, text := range []string{"alpha", "beta", "gamma"} {
@@ -276,7 +276,7 @@ func TestListCmd_ReverseKeepsTheNewestUnderALimit(t *testing.T) {
 	}
 
 	cmd := &ListCmd{Format: "flat", Limit: 2, Reverse: true}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	got := out.String()
@@ -291,10 +291,10 @@ func TestListCmd_ReverseKeepsTheNewestUnderALimit(t *testing.T) {
 func TestListCmd_InvalidFromDate(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
 	cmd := &ListCmd{From: "not-a-date"}
-	err := cmd.Run(s, io)
+	err := cmd.Run(s, streams)
 	if err == nil || !strings.Contains(err.Error(), "--from") {
 		t.Errorf("error = %v, want --from parse error", err)
 	}
@@ -303,10 +303,10 @@ func TestListCmd_InvalidFromDate(t *testing.T) {
 func TestListCmd_InvalidToDate(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
 	cmd := &ListCmd{To: "nope"}
-	err := cmd.Run(s, io)
+	err := cmd.Run(s, streams)
 	if err == nil || !strings.Contains(err.Error(), "--to") {
 		t.Errorf("error = %v, want --to parse error", err)
 	}
@@ -315,7 +315,7 @@ func TestListCmd_InvalidToDate(t *testing.T) {
 func TestListCmd_FilterAndDateRange(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out := newTestIO("")
+	streams, out := newTestIO("")
 
 	if _, err := s.Add(context.Background(), event.AddInput{Title: "match", Meta: []parse.Meta{
 		{Key: "author", Value: "alice"},
@@ -334,7 +334,7 @@ func TestListCmd_FilterAndDateRange(t *testing.T) {
 	// what does the selecting. --to is inclusive of its whole day.
 	today := time.Now().Format(timefmt.DateFormat)
 	cmd := &ListCmd{Format: "flat", Search: "#ops", From: today, To: today}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -347,7 +347,7 @@ func TestListCmd_FilterAndDateRange(t *testing.T) {
 func TestListCmd_JSONUsesStreamingPath(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out := newTestIO("")
+	streams, out := newTestIO("")
 
 	for i := range 3 {
 		if _, err := s.Add(context.Background(), event.AddInput{Title: fmt.Sprintf("e%d", i), Meta: []parse.Meta{
@@ -358,7 +358,7 @@ func TestListCmd_JSONUsesStreamingPath(t *testing.T) {
 	}
 
 	cmd := &ListCmd{Format: "json"}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -374,7 +374,7 @@ func TestListCmd_JSONUsesStreamingPath(t *testing.T) {
 func TestListCmd_NoPagerStillRendersToBuffer(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out := newTestIO("")
+	streams, out := newTestIO("")
 
 	if _, err := s.Add(context.Background(), event.AddInput{Title: "evt", Meta: []parse.Meta{
 		{Key: "author", Value: "alice"},
@@ -383,7 +383,7 @@ func TestListCmd_NoPagerStillRendersToBuffer(t *testing.T) {
 	}
 
 	cmd := &ListCmd{Format: "flat", NoPager: true}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if !strings.Contains(out.String(), "evt") {
@@ -568,10 +568,10 @@ func TestListCmd_WarnsOnEmptyRange(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			s := newTestStore(t)
-			io, _, errBuf := newTestIOFull("", false)
+			streams, _, errBuf := newTestIOFull("", false)
 
 			cmd := &ListCmd{Format: "flat", From: tt.from, To: tt.to, NoPager: true}
-			if err := cmd.Run(s, io); err != nil {
+			if err := cmd.Run(s, streams); err != nil {
 				t.Fatalf("Run: %v", err)
 			}
 			if got := strings.Contains(errBuf.String(), "empty range"); got != tt.wantWarn {
@@ -586,7 +586,7 @@ func TestListCmd_WarnsOnEmptyRange(t *testing.T) {
 func TestListCmd_ToIsInclusiveOfItsSecond(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out := newTestIO("")
+	streams, out := newTestIO("")
 
 	at := time.Date(2026, 4, 22, 14, 30, 0, 0, time.Local)
 	if _, err := s.Add(context.Background(), event.AddInput{Title: "on the bound", CreatedAt: &at, Meta: []parse.Meta{
@@ -596,7 +596,7 @@ func TestListCmd_ToIsInclusiveOfItsSecond(t *testing.T) {
 	}
 
 	cmd := &ListCmd{Format: "flat", From: "2026-04-22 14:30", To: "2026-04-22 14:30", NoPager: true}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if !strings.Contains(out.String(), "on the bound") {

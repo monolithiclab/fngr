@@ -108,8 +108,8 @@ func TestResolveBody_NeverTouchesStdinWhenBodyIsDecided(t *testing.T) {
 			// NOTE: no t.Parallel() — launchEditor is package-level state.
 			stubEditor(t, func(initial string) (string, error) { return initial + "::edited", nil })
 
-			io := ioStreams{In: forbiddenReader{t: t}, IsTTY: tc.isTTY}
-			got, err := resolveBody(tc.args, tc.useEditor, io)
+			streams := ioStreams{In: forbiddenReader{t: t}, IsTTY: tc.isTTY}
+			got, err := resolveBody(tc.args, tc.useEditor, streams)
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 					t.Fatalf("err = %v, want substring %q", err, tc.wantErr)
@@ -379,8 +379,8 @@ func TestResolveBody(t *testing.T) {
 				return tc.stubBody, tc.stubErr
 			})
 
-			io, _, _ := newTestIOFull(tc.stdin, tc.isTTY)
-			got, err := resolveBody(tc.args, tc.useEditor, io)
+			streams, _, _ := newTestIOFull(tc.stdin, tc.isTTY)
+			got, err := resolveBody(tc.args, tc.useEditor, streams)
 
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {

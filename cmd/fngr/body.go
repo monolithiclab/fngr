@@ -29,26 +29,26 @@ var launchEditor = realLaunchEditor
 // (docs/superpowers/specs/2026-04-20-add-body-input-modes-design.md).
 // Returns the body string or an error. errCancel signals a deliberate
 // editor cancel.
-func resolveBody(args []string, useEditor bool, io ioStreams) (string, error) {
+func resolveBody(args []string, useEditor bool, streams ioStreams) (string, error) {
 	switch {
-	case useEditor && !io.IsTTY:
+	case useEditor && !streams.IsTTY:
 		// A capability check, not a content one: IsTTY is already known, so
 		// asking it costs no read. See docs/reviews/2026-07-27-deep-audit.md
 		// H7 for what launching an editor without a terminal did instead.
 		return "", errEditNeedsTTY
 	case len(args) > 0 && useEditor:
-		return editBody(strings.Join(args, " "), io.Out)
+		return editBody(strings.Join(args, " "), streams.Out)
 	case len(args) > 0:
 		body := strings.Join(args, " ")
 		if strings.TrimSpace(body) == "" {
 			return "", fmt.Errorf("event title cannot be empty")
 		}
 		return body, nil
-	case io.IsTTY:
+	case streams.IsTTY:
 		// Bare interactive `fngr add`, or -e with no args: the guard above
 		// has already established that -e implies a TTY, so this one case
 		// covers both. Editor on an empty buffer either way.
-		return editBody("", io.Out)
+		return editBody("", streams.Out)
 	default:
 		// Nothing else can supply a body, so stdin is it. Reading it blocks
 		// until EOF, and an open-but-idle pipe (`sleep 30 | fngr add`, a CI
@@ -57,7 +57,7 @@ func resolveBody(args []string, useEditor bool, io ioStreams) (string, error) {
 		// and -e already answer the question and must not consult stdin at
 		// all. An empty /dev/null hits EOF at once and readStdin reports
 		// `event title cannot be empty`.
-		return readStdin(io.In)
+		return readStdin(streams.In)
 	}
 }
 

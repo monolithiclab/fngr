@@ -161,11 +161,11 @@ func applyMigration(db *sql.DB, m migration) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	sql, err := io.ReadAll(m.up)
+	script, err := io.ReadAll(m.up)
 	if err != nil {
 		return fmt.Errorf("read migration: %w", err)
 	}
-	if _, err := tx.Exec(string(sql)); err != nil {
+	if _, err := tx.Exec(string(script)); err != nil {
 		return fmt.Errorf("apply: %w", err)
 	}
 	if m.fn != nil {

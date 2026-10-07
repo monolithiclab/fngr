@@ -15,7 +15,7 @@ import (
 func TestEventCmd_ShowText(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out := newTestIO("")
+	streams, out := newTestIO("")
 
 	id, err := s.Add(context.Background(), event.AddInput{Title: "show me", Meta: []parse.Meta{
 		{Key: "author", Value: "alice"},
@@ -25,7 +25,7 @@ func TestEventCmd_ShowText(t *testing.T) {
 	}
 
 	cmd := &EventShowCmd{ID: id, Format: "text"}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	got := out.String()
@@ -37,7 +37,7 @@ func TestEventCmd_ShowText(t *testing.T) {
 func TestEventCmd_ShowSubtree(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out := newTestIO("")
+	streams, out := newTestIO("")
 
 	parent, err := s.Add(context.Background(), event.AddInput{Title: "parent", Meta: []parse.Meta{
 		{Key: "author", Value: "alice"},
@@ -52,7 +52,7 @@ func TestEventCmd_ShowSubtree(t *testing.T) {
 	}
 
 	cmd := &EventShowCmd{ID: parent, Tree: true, Format: "tree"}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	got := out.String()
@@ -64,10 +64,10 @@ func TestEventCmd_ShowSubtree(t *testing.T) {
 func TestEventCmd_ShowNotFound(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
 	cmd := &EventShowCmd{ID: 9999}
-	err := cmd.Run(s, io)
+	err := cmd.Run(s, streams)
 	if !errors.Is(err, event.ErrNotFound) {
 		t.Errorf("err = %v, want ErrNotFound", err)
 	}
@@ -76,11 +76,11 @@ func TestEventCmd_ShowNotFound(t *testing.T) {
 func TestEventCmd_TextRequiresNonEmpty(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
 	id, _ := s.Add(context.Background(), event.AddInput{Title: "x"})
 	cmd := &EventTextCmd{ID: id, Text: ""}
-	err := cmd.Run(s, io)
+	err := cmd.Run(s, streams)
 	if err == nil || !strings.Contains(err.Error(), "cannot be empty") {
 		t.Errorf("err = %v, want empty-text error", err)
 	}
@@ -89,7 +89,7 @@ func TestEventCmd_TextRequiresNonEmpty(t *testing.T) {
 func TestEventCmd_TextSyncs(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out := newTestIO("")
+	streams, out := newTestIO("")
 
 	id, _ := s.Add(context.Background(), event.AddInput{Title: "first @alice", Meta: []parse.Meta{
 		{Key: "author", Value: "alice"},
@@ -97,7 +97,7 @@ func TestEventCmd_TextSyncs(t *testing.T) {
 	}})
 
 	cmd := &EventTextCmd{ID: id, Text: "second @bob"}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if !strings.Contains(out.String(), "Updated event") {
@@ -122,13 +122,13 @@ func TestEventCmd_TextSyncs(t *testing.T) {
 func TestEventCmd_TimePreservesDate(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
 	orig := time.Date(2026, 4, 15, 14, 0, 0, 0, time.UTC)
 	id, _ := s.Add(context.Background(), event.AddInput{Title: "x", CreatedAt: &orig})
 
 	cmd := &EventTimeCmd{ID: id, Value: "09:30"}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -145,11 +145,11 @@ func TestEventCmd_TimePreservesDate(t *testing.T) {
 func TestEventCmd_TimeRejectsDateOnly(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
 	id, _ := s.Add(context.Background(), event.AddInput{Title: "x"})
 	cmd := &EventTimeCmd{ID: id, Value: "2026-04-15"}
-	err := cmd.Run(s, io)
+	err := cmd.Run(s, streams)
 	if err == nil || !strings.Contains(err.Error(), "date-only") {
 		t.Errorf("err = %v, want date-only rejection", err)
 	}
@@ -158,13 +158,13 @@ func TestEventCmd_TimeRejectsDateOnly(t *testing.T) {
 func TestEventCmd_DatePreservesTime(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
 	orig := time.Date(2026, 4, 15, 14, 30, 0, 0, time.Local)
 	id, _ := s.Add(context.Background(), event.AddInput{Title: "x", CreatedAt: &orig})
 
 	cmd := &EventDateCmd{ID: id, Value: "2026-05-01"}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -181,11 +181,11 @@ func TestEventCmd_DatePreservesTime(t *testing.T) {
 func TestEventCmd_DateRejectsTimeOnly(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
 	id, _ := s.Add(context.Background(), event.AddInput{Title: "x"})
 	cmd := &EventDateCmd{ID: id, Value: "09:30"}
-	err := cmd.Run(s, io)
+	err := cmd.Run(s, streams)
 	if err == nil || !strings.Contains(err.Error(), "time-only") {
 		t.Errorf("err = %v, want time-only rejection", err)
 	}
@@ -202,23 +202,23 @@ func TestEventCmd_ClockVerbsRejectUnparseableValues(t *testing.T) {
 		name  string
 		value string
 		want  string
-		verb  func(s eventStore, io ioStreams, id int64, value string) error
+		verb  func(s eventStore, streams ioStreams, id int64, value string) error
 	}{
-		{"time", "half past nope", "event time:", func(s eventStore, io ioStreams, id int64, v string) error {
-			return (&EventTimeCmd{ID: id, Value: v}).Run(s, io)
+		{"time", "half past nope", "event time:", func(s eventStore, streams ioStreams, id int64, v string) error {
+			return (&EventTimeCmd{ID: id, Value: v}).Run(s, streams)
 		}},
-		{"date", "the 32nd of Maytember", "event date:", func(s eventStore, io ioStreams, id int64, v string) error {
-			return (&EventDateCmd{ID: id, Value: v}).Run(s, io)
+		{"date", "the 32nd of Maytember", "event date:", func(s eventStore, streams ioStreams, id int64, v string) error {
+			return (&EventDateCmd{ID: id, Value: v}).Run(s, streams)
 		}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			s := newTestStore(t)
-			io, _ := newTestIO("")
+			streams, _ := newTestIO("")
 
 			id, _ := s.Add(context.Background(), event.AddInput{Title: "x"})
-			err := tt.verb(s, io, id, tt.value)
+			err := tt.verb(s, streams, id, tt.value)
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Errorf("err = %v, want it prefixed %q", err, tt.want)
 			}
@@ -229,12 +229,12 @@ func TestEventCmd_ClockVerbsRejectUnparseableValues(t *testing.T) {
 func TestEventCmd_AttachAndDetach(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out := newTestIO("")
+	streams, out := newTestIO("")
 
 	a, _ := s.Add(context.Background(), event.AddInput{Title: "a"})
 	b, _ := s.Add(context.Background(), event.AddInput{Title: "b"})
 
-	if err := (&EventAttachCmd{ID: b, Parent: a}).Run(s, io); err != nil {
+	if err := (&EventAttachCmd{ID: b, Parent: a}).Run(s, streams); err != nil {
 		t.Fatalf("Attach: %v", err)
 	}
 	ev, _ := s.Get(context.Background(), b)
@@ -242,7 +242,7 @@ func TestEventCmd_AttachAndDetach(t *testing.T) {
 		t.Fatalf("ParentID = %v, want %d", ev.ParentID, a)
 	}
 
-	if err := (&EventDetachCmd{ID: b}).Run(s, io); err != nil {
+	if err := (&EventDetachCmd{ID: b}).Run(s, streams); err != nil {
 		t.Fatalf("Detach: %v", err)
 	}
 	ev, _ = s.Get(context.Background(), b)
@@ -265,7 +265,7 @@ func TestEventCmd_AttachAndDetach(t *testing.T) {
 func TestEventAttachCmd_NamesTheDisplacedParent(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out := newTestIO("")
+	streams, out := newTestIO("")
 	ctx := context.Background()
 
 	a, _ := s.Add(ctx, event.AddInput{Title: "a"})
@@ -275,7 +275,7 @@ func TestEventAttachCmd_NamesTheDisplacedParent(t *testing.T) {
 		t.Fatalf("Add c: %v", err)
 	}
 
-	if err := (&EventAttachCmd{ID: c, Parent: b}).Run(s, io); err != nil {
+	if err := (&EventAttachCmd{ID: c, Parent: b}).Run(s, streams); err != nil {
 		t.Fatalf("Attach: %v", err)
 	}
 	want := fmt.Sprintf("Attached event %d to event %d (was event %d)", c, b, a)
@@ -290,7 +290,7 @@ func TestEventAttachCmd_NamesTheDisplacedParent(t *testing.T) {
 func TestEventAttachCmd_ReattachToTheSameParentNamesNothing(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out := newTestIO("")
+	streams, out := newTestIO("")
 	ctx := context.Background()
 
 	a, _ := s.Add(ctx, event.AddInput{Title: "a"})
@@ -299,7 +299,7 @@ func TestEventAttachCmd_ReattachToTheSameParentNamesNothing(t *testing.T) {
 		t.Fatalf("Add b: %v", err)
 	}
 
-	if err := (&EventAttachCmd{ID: b, Parent: a}).Run(s, io); err != nil {
+	if err := (&EventAttachCmd{ID: b, Parent: a}).Run(s, streams); err != nil {
 		t.Fatalf("Attach: %v", err)
 	}
 	if got := out.String(); strings.Contains(got, "(was event") {
@@ -312,10 +312,10 @@ func TestEventAttachCmd_ReattachToTheSameParentNamesNothing(t *testing.T) {
 func TestEventAttachCmd_UnknownEvent(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
 	a, _ := s.Add(context.Background(), event.AddInput{Title: "a"})
-	err := (&EventAttachCmd{ID: 9999, Parent: a}).Run(s, io)
+	err := (&EventAttachCmd{ID: 9999, Parent: a}).Run(s, streams)
 	if !errors.Is(err, event.ErrNotFound) {
 		t.Errorf("err = %v, want ErrNotFound", err)
 	}
@@ -327,11 +327,11 @@ func TestEventAttachCmd_UnknownEvent(t *testing.T) {
 func TestEventDetachCmd_NoParentIsAnExplicitNoop(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out := newTestIO("")
+	streams, out := newTestIO("")
 
 	id, _ := s.Add(context.Background(), event.AddInput{Title: "rootless"})
 
-	if err := (&EventDetachCmd{ID: id}).Run(s, io); err != nil {
+	if err := (&EventDetachCmd{ID: id}).Run(s, streams); err != nil {
 		t.Fatalf("Detach: %v", err)
 	}
 	got := out.String()
@@ -348,9 +348,9 @@ func TestEventDetachCmd_NoParentIsAnExplicitNoop(t *testing.T) {
 func TestEventDetachCmd_UnknownEvent(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
-	err := (&EventDetachCmd{ID: 999}).Run(s, io)
+	err := (&EventDetachCmd{ID: 999}).Run(s, streams)
 	if !errors.Is(err, event.ErrNotFound) {
 		t.Errorf("Detach = %v, want ErrNotFound", err)
 	}
@@ -359,12 +359,12 @@ func TestEventDetachCmd_UnknownEvent(t *testing.T) {
 func TestEventCmd_AttachRejectsCycle(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
 	a, _ := s.Add(context.Background(), event.AddInput{Title: "a"})
 	b, _ := s.Add(context.Background(), event.AddInput{Title: "b", ParentID: &a})
 
-	err := (&EventAttachCmd{ID: a, Parent: b}).Run(s, io)
+	err := (&EventAttachCmd{ID: a, Parent: b}).Run(s, streams)
 	if !errors.Is(err, event.ErrCycle) {
 		t.Errorf("err = %v, want ErrCycle", err)
 	}
@@ -373,14 +373,14 @@ func TestEventCmd_AttachRejectsCycle(t *testing.T) {
 func TestEventCmd_TagAddsAndDedups(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
 	id, _ := s.Add(context.Background(), event.AddInput{Title: "x", Meta: []parse.Meta{
 		{Key: "tag", Value: "ops"},
 	}})
 
 	cmd := &EventTagCmd{ID: id, Args: []string{"#ops", "@alice", "env=prod"}}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Tag: %v", err)
 	}
 
@@ -432,11 +432,11 @@ func TestEventCmd_TagMessage(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			s := newTestStore(t)
-			io, out := newTestIO("")
+			streams, out := newTestIO("")
 
 			id, _ := s.Add(context.Background(), event.AddInput{Title: "x", Meta: tc.seed})
 			cmd := &EventTagCmd{ID: id, Args: tc.args}
-			if err := cmd.Run(s, io); err != nil {
+			if err := cmd.Run(s, streams); err != nil {
 				t.Fatalf("Tag: %v", err)
 			}
 			got := out.String()
@@ -452,11 +452,11 @@ func TestEventCmd_TagMessage(t *testing.T) {
 func TestEventCmd_TagInvalidArgErrors(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
 	id, _ := s.Add(context.Background(), event.AddInput{Title: "x"})
 	cmd := &EventTagCmd{ID: id, Args: []string{"#ops", "bare-word", "env=prod"}}
-	err := cmd.Run(s, io)
+	err := cmd.Run(s, streams)
 	if err == nil {
 		t.Fatal("expected error for bare-word arg")
 	}
@@ -470,7 +470,7 @@ func TestEventCmd_TagInvalidArgErrors(t *testing.T) {
 func TestEventCmd_UntagRemovesAndReportsCount(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out := newTestIO("")
+	streams, out := newTestIO("")
 
 	id, _ := s.Add(context.Background(), event.AddInput{Title: "x", Meta: []parse.Meta{
 		{Key: "tag", Value: "ops"},
@@ -478,7 +478,7 @@ func TestEventCmd_UntagRemovesAndReportsCount(t *testing.T) {
 	}})
 
 	cmd := &EventUntagCmd{ID: id, Args: []string{"#ops", "@alice"}}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Untag: %v", err)
 	}
 	if !strings.Contains(out.String(), "Untagged event") {
@@ -493,11 +493,11 @@ func TestEventCmd_UntagRemovesAndReportsCount(t *testing.T) {
 func TestEventCmd_UntagNothingMatches(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
 	id, _ := s.Add(context.Background(), event.AddInput{Title: "x"})
 	cmd := &EventUntagCmd{ID: id, Args: []string{"#ghost"}}
-	err := cmd.Run(s, io)
+	err := cmd.Run(s, streams)
 	if err == nil || !strings.Contains(err.Error(), "nothing to untag") {
 		t.Errorf("err = %v, want 'nothing to untag'", err)
 	}
@@ -506,7 +506,7 @@ func TestEventCmd_UntagNothingMatches(t *testing.T) {
 func TestEventCmd_TitleVerb(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
 	id, err := s.Add(context.Background(), event.AddInput{
 		Title: "old", Body: "body stays",
@@ -517,7 +517,7 @@ func TestEventCmd_TitleVerb(t *testing.T) {
 	}
 
 	cmd := &EventTitleCmd{ID: id, Title: "new title"}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -530,14 +530,14 @@ func TestEventCmd_TitleVerb(t *testing.T) {
 func TestEventCmd_TitleRejectsEmpty(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
 	id, _ := s.Add(context.Background(), event.AddInput{
 		Title: "x",
 		Meta:  []parse.Meta{{Key: "author", Value: "alice"}},
 	})
 	cmd := &EventTitleCmd{ID: id, Title: ""}
-	if err := cmd.Run(s, io); err == nil {
+	if err := cmd.Run(s, streams); err == nil {
 		t.Error("expected empty-title error")
 	}
 }
@@ -545,7 +545,7 @@ func TestEventCmd_TitleRejectsEmpty(t *testing.T) {
 func TestEventCmd_BodyVerb(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
 	id, _ := s.Add(context.Background(), event.AddInput{
 		Title: "title stays", Body: "old",
@@ -553,7 +553,7 @@ func TestEventCmd_BodyVerb(t *testing.T) {
 	})
 
 	cmd := &EventBodyCmd{ID: id, Body: "new body"}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	ev, _ := s.Get(context.Background(), id)
@@ -565,14 +565,14 @@ func TestEventCmd_BodyVerb(t *testing.T) {
 func TestEventCmd_BodyAcceptsEmpty(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 	id, _ := s.Add(context.Background(), event.AddInput{
 		Title: "stays", Body: "to clear",
 		Meta: []parse.Meta{{Key: "author", Value: "alice"}},
 	})
 
 	cmd := &EventBodyCmd{ID: id, Body: ""}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	ev, _ := s.Get(context.Background(), id)
@@ -584,7 +584,7 @@ func TestEventCmd_BodyAcceptsEmpty(t *testing.T) {
 func TestEventCmd_TextVerbResplits(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
 	id, _ := s.Add(context.Background(), event.AddInput{
 		Title: "old", Body: "old body",
@@ -592,7 +592,7 @@ func TestEventCmd_TextVerbResplits(t *testing.T) {
 	})
 
 	cmd := &EventTextCmd{ID: id, Text: "fresh title. fresh body"}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	ev, _ := s.Get(context.Background(), id)
@@ -604,14 +604,14 @@ func TestEventCmd_TextVerbResplits(t *testing.T) {
 func TestEventCmd_TextVerbRejectsEmptyTitle(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
 	id, _ := s.Add(context.Background(), event.AddInput{
 		Title: "x",
 		Meta:  []parse.Meta{{Key: "author", Value: "alice"}},
 	})
 	cmd := &EventTextCmd{ID: id, Text: ". body only"}
-	if err := cmd.Run(s, io); err == nil {
+	if err := cmd.Run(s, streams); err == nil {
 		t.Error("expected empty-title error")
 	}
 }

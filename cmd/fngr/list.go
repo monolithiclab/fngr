@@ -24,7 +24,7 @@ type ListCmd struct {
 	Search  string `help:"Filter expression (#tag, @person, key=value, word, word*). Operators by precedence: ! (NOT), & (AND, also implied between adjacent terms), | (OR); no grouping parentheses." short:"S"`
 }
 
-func (c *ListCmd) Run(s eventStore, io ioStreams) (err error) {
+func (c *ListCmd) Run(s eventStore, streams ioStreams) (err error) {
 	ctx := context.Background()
 
 	// Validate before spawning a pager: nothing should start a $PAGER process
@@ -37,11 +37,11 @@ func (c *ListCmd) Run(s eventStore, io ioStreams) (err error) {
 	// returns nothing at exit 0, which is indistinguishable from a journal
 	// that genuinely has no events in the window.
 	if opts.From != nil && opts.To != nil && !opts.From.Before(*opts.To) {
-		fmt.Fprintf(io.Err, "warning: --from %q and --to %q describe an empty range; no events can match\n",
+		fmt.Fprintf(streams.Err, "warning: --from %q and --to %q describe an empty range; no events can match\n",
 			c.From, c.To)
 	}
 
-	closeOut := withPager(io, c.NoPager)
+	closeOut := withPager(streams, c.NoPager)
 	defer func() {
 		// The listing has to reach the pager before its pipe is closed, so this
 		// closer flushes even though run flushes again on the way out. Reporting
@@ -62,9 +62,9 @@ func (c *ListCmd) Run(s eventStore, io ioStreams) (err error) {
 			return withGrammarHint(listErr)
 		}
 		found = len(events) > 0
-		err = render.Events(io.Out, c.Format, events)
+		err = render.Events(streams.Out, c.Format, events)
 	} else {
-		err = render.EventsStream(io.Out, c.Format, noteAny(s.ListSeq(ctx, opts), &found))
+		err = render.EventsStream(streams.Out, c.Format, noteAny(s.ListSeq(ctx, opts), &found))
 	}
 	if err != nil {
 		return withGrammarHint(err)
@@ -78,7 +78,7 @@ func (c *ListCmd) Run(s eventStore, io ioStreams) (err error) {
 	// what makes that free: a script reading stdout sees the same bytes either
 	// way.
 	if !found {
-		reportNone(io.Err, "events")
+		reportNone(streams.Err, "events")
 	}
 	return nil
 }

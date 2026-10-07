@@ -127,13 +127,13 @@ func wireTypeName(t reflect.Type) string {
 	}
 }
 
-func (c *AddCmd) runJSON(s eventStore, io ioStreams, raw string) error {
+func (c *AddCmd) runJSON(s eventStore, streams ioStreams, raw string) error {
 	inputs, err := parseJSONAddInput(raw)
 	if err != nil {
 		return err
 	}
 
-	defaults, err := buildCLIDefaults(c, io)
+	defaults, err := buildCLIDefaults(c, streams)
 	if err != nil {
 		return err
 	}
@@ -155,14 +155,14 @@ func (c *AddCmd) runJSON(s eventStore, io ioStreams, raw string) error {
 		}
 		if !clockExists {
 			if skipped == 0 {
-				warnSkippedClock(io.Err, false, *in.CreatedAt, *ai.CreatedAt)
+				warnSkippedClock(streams.Err, false, *in.CreatedAt, *ai.CreatedAt)
 			}
 			skipped++
 		}
 		addInputs = append(addInputs, ai)
 	}
 	if skipped > 1 {
-		fmt.Fprintf(io.Err, "warning: plus %s in this batch with a clock that does not exist\n",
+		fmt.Fprintf(streams.Err, "warning: plus %s in this batch with a clock that does not exist\n",
 			plural(int64(skipped-1), "record"))
 	}
 
@@ -170,11 +170,11 @@ func (c *AddCmd) runJSON(s eventStore, io ioStreams, raw string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(io.Out, "Imported %s\n", plural(int64(len(ids)), "event"))
+	fmt.Fprintf(streams.Out, "Imported %s\n", plural(int64(len(ids)), "event"))
 	return nil
 }
 
-func buildCLIDefaults(c *AddCmd, io ioStreams) (cliDefaults, error) {
+func buildCLIDefaults(c *AddCmd, streams ioStreams) (cliDefaults, error) {
 	d := cliDefaults{parent: c.Parent}
 	if c.Time != "" {
 		t, _, _, exists, err := timefmt.ParsePartial(c.Time)
@@ -183,7 +183,7 @@ func buildCLIDefaults(c *AddCmd, io ioStreams) (cliDefaults, error) {
 		}
 		// Warned here rather than per record: --time is one value the user
 		// typed once, however many records fall back to it.
-		warnSkippedClock(io.Err, exists, c.Time, t)
+		warnSkippedClock(streams.Err, exists, c.Time, t)
 		d.time = &t
 	}
 	if len(c.Meta) > 0 {

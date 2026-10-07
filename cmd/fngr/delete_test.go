@@ -14,7 +14,7 @@ import (
 func TestDeleteCmd_Confirm(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out := newTestIO("y\n")
+	streams, out := newTestIO("y\n")
 
 	id, err := s.Add(context.Background(), event.AddInput{Title: "doomed"})
 	if err != nil {
@@ -22,7 +22,7 @@ func TestDeleteCmd_Confirm(t *testing.T) {
 	}
 
 	cmd := &DeleteCmd{ID: id}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -37,7 +37,7 @@ func TestDeleteCmd_Confirm(t *testing.T) {
 func TestDeleteCmd_Abort(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out := newTestIO("n\n")
+	streams, out := newTestIO("n\n")
 
 	id, err := s.Add(context.Background(), event.AddInput{Title: "saved by abort"})
 	if err != nil {
@@ -45,7 +45,7 @@ func TestDeleteCmd_Abort(t *testing.T) {
 	}
 
 	cmd := &DeleteCmd{ID: id}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -60,7 +60,7 @@ func TestDeleteCmd_Abort(t *testing.T) {
 func TestDeleteCmd_Force(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
 	id, err := s.Add(context.Background(), event.AddInput{Title: "forced"})
 	if err != nil {
@@ -68,7 +68,7 @@ func TestDeleteCmd_Force(t *testing.T) {
 	}
 
 	cmd := &DeleteCmd{ID: id, Force: true}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if _, err := s.Get(context.Background(), id); !errors.Is(err, event.ErrNotFound) {
@@ -79,7 +79,7 @@ func TestDeleteCmd_Force(t *testing.T) {
 func TestDeleteCmd_HasChildrenWithoutRecursive(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("y\n")
+	streams, _ := newTestIO("y\n")
 
 	parent, err := s.Add(context.Background(), event.AddInput{Title: "parent"})
 	if err != nil {
@@ -90,7 +90,7 @@ func TestDeleteCmd_HasChildrenWithoutRecursive(t *testing.T) {
 	}
 
 	cmd := &DeleteCmd{ID: parent}
-	err = cmd.Run(s, io)
+	err = cmd.Run(s, streams)
 	if err == nil || !strings.Contains(err.Error(), "has child events") {
 		t.Errorf("error = %v, want child-events warning", err)
 	}
@@ -103,7 +103,7 @@ func TestDeleteCmd_HasChildrenWithoutRecursive(t *testing.T) {
 func TestDeleteCmd_Recursive(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out := newTestIO("y\n")
+	streams, out := newTestIO("y\n")
 	ctx := context.Background()
 
 	root, err := s.Add(ctx, event.AddInput{Title: "root", Meta: []parse.Meta{
@@ -122,7 +122,7 @@ func TestDeleteCmd_Recursive(t *testing.T) {
 	}
 
 	cmd := &DeleteCmd{ID: root, Recursive: true}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -149,7 +149,7 @@ func TestDeleteCmd_Recursive(t *testing.T) {
 func TestDeleteCmd_RecursiveOnACorruptTree(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out := newTestIO("y\n")
+	streams, out := newTestIO("y\n")
 	ctx := context.Background()
 
 	for _, title := range []string{"one", "two"} {
@@ -161,7 +161,7 @@ func TestDeleteCmd_RecursiveOnACorruptTree(t *testing.T) {
 	forgeParent(t, s, 2, 1)
 
 	cmd := &DeleteCmd{ID: 1, Recursive: true}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	got := out.String()

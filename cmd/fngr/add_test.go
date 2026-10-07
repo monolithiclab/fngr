@@ -13,10 +13,10 @@ import (
 func TestAddCmd_Success(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out := newTestIO("")
+	streams, out := newTestIO("")
 
 	cmd := &AddCmd{Args: []string{"hello world"}, Author: "alice"}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if got := out.String(); !strings.Contains(got, "Added event 1") {
@@ -35,10 +35,10 @@ func TestAddCmd_Success(t *testing.T) {
 func TestAddCmd_RequiresAuthor(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
 	cmd := &AddCmd{Args: []string{"hi"}}
-	err := cmd.Run(s, io)
+	err := cmd.Run(s, streams)
 	if err == nil || !strings.Contains(err.Error(), "author is required") {
 		t.Errorf("error = %v, want author-required", err)
 	}
@@ -47,10 +47,10 @@ func TestAddCmd_RequiresAuthor(t *testing.T) {
 func TestAddCmd_InvalidTime(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
 	cmd := &AddCmd{Args: []string{"hi"}, Author: "alice", Time: "not-a-time"}
-	err := cmd.Run(s, io)
+	err := cmd.Run(s, streams)
 	if err == nil || !strings.Contains(err.Error(), "invalid --time") {
 		t.Errorf("error = %v, want invalid-time error", err)
 	}
@@ -59,10 +59,10 @@ func TestAddCmd_InvalidTime(t *testing.T) {
 func TestAddCmd_WithMeta(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
 	cmd := &AddCmd{Args: []string{"deploy #ops"}, Author: "alice", Meta: []string{"env=prod"}}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -85,10 +85,10 @@ func TestAddCmd_WithMeta(t *testing.T) {
 func TestAddCmd_BadFlagMeta(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
 	cmd := &AddCmd{Args: []string{"hi"}, Author: "alice", Meta: []string{"noequals"}}
-	err := cmd.Run(s, io)
+	err := cmd.Run(s, streams)
 	if err == nil {
 		t.Fatal("expected error for malformed meta")
 	}
@@ -97,10 +97,10 @@ func TestAddCmd_BadFlagMeta(t *testing.T) {
 func TestAddCmd_EmptyMetaKeyRejected(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
 	cmd := &AddCmd{Args: []string{"hi"}, Author: "alice", Meta: []string{"=value"}}
-	err := cmd.Run(s, io)
+	err := cmd.Run(s, streams)
 	if err == nil || !strings.Contains(err.Error(), "empty key") {
 		t.Fatalf("err = %v, want 'empty key'", err)
 	}
@@ -109,10 +109,10 @@ func TestAddCmd_EmptyMetaKeyRejected(t *testing.T) {
 func TestAddCmd_MultiArgJoinsWithSpace(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out := newTestIO("")
+	streams, out := newTestIO("")
 
 	cmd := &AddCmd{Args: []string{"deploy", "v1.2", "to", "staging"}, Author: "alice"}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if !strings.Contains(out.String(), "Added event 1") {
@@ -128,10 +128,10 @@ func TestAddCmd_MultiArgJoinsWithSpace(t *testing.T) {
 func TestAddCmd_StdinBody(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out, _ := newTestIOFull("piped body content", false) // isTTY=false
+	streams, out, _ := newTestIOFull("piped body content", false) // isTTY=false
 
 	cmd := &AddCmd{Author: "alice"} // no args
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if !strings.Contains(out.String(), "Added event 1") {
@@ -146,7 +146,7 @@ func TestAddCmd_StdinBody(t *testing.T) {
 
 func TestAddCmd_EditorBody(t *testing.T) {
 	s := newTestStore(t)
-	io, out, _ := newTestIOFull("", true) // isTTY=true
+	streams, out, _ := newTestIOFull("", true) // isTTY=true
 
 	stubEditor(t, func(initial string) (string, error) {
 		if initial != "" {
@@ -156,7 +156,7 @@ func TestAddCmd_EditorBody(t *testing.T) {
 	})
 
 	cmd := &AddCmd{Author: "alice"} // no args, no -e — bare TTY auto-launches editor
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if !strings.Contains(out.String(), "Added event 1") {
@@ -170,7 +170,7 @@ func TestAddCmd_EditorBody(t *testing.T) {
 
 func TestAddCmd_ArgsPlusEditorPrefills(t *testing.T) {
 	s := newTestStore(t)
-	io, _, _ := newTestIOFull("", true)
+	streams, _, _ := newTestIOFull("", true)
 
 	var gotInit string
 	stubEditor(t, func(initial string) (string, error) {
@@ -179,7 +179,7 @@ func TestAddCmd_ArgsPlusEditorPrefills(t *testing.T) {
 	})
 
 	cmd := &AddCmd{Args: []string{"x", "y"}, Edit: true, Author: "alice"}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if gotInit != "x y" {
@@ -193,12 +193,12 @@ func TestAddCmd_ArgsPlusEditorPrefills(t *testing.T) {
 
 func TestAddCmd_EditorCancel(t *testing.T) {
 	s := newTestStore(t)
-	io, out, errBuf := newTestIOFull("", true)
+	streams, out, errBuf := newTestIOFull("", true)
 
 	stubEditor(t, func(string) (string, error) { return "", errCancel })
 
 	cmd := &AddCmd{Author: "alice"}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run returned err = %v, want nil (cancel is clean exit)", err)
 	}
 	if out.String() != "" {
@@ -219,10 +219,10 @@ func TestAddCmd_EditorCancel(t *testing.T) {
 func TestAddCmd_ArgsWinOverStdin(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _, _ := newTestIOFull("piped", false) // isTTY=false
+	streams, _, _ := newTestIOFull("piped", false) // isTTY=false
 
 	cmd := &AddCmd{Args: []string{"argbody"}, Author: "alice"}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -238,10 +238,10 @@ func TestAddCmd_ArgsWinOverStdin(t *testing.T) {
 func TestAddCmd_ArgsNonTTYEmptyStdin(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out, _ := newTestIOFull("", false) // isTTY=false, no piped data
+	streams, out, _ := newTestIOFull("", false) // isTTY=false, no piped data
 
 	cmd := &AddCmd{Args: []string{"deploy", "done"}, Author: "alice"}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if !strings.Contains(out.String(), "Added event 1") {
@@ -257,10 +257,10 @@ func TestAddCmd_ArgsNonTTYEmptyStdin(t *testing.T) {
 func TestAddCmd_EmptyArgRejected(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
 	cmd := &AddCmd{Args: []string{""}, Author: "alice"}
-	err := cmd.Run(s, io)
+	err := cmd.Run(s, streams)
 	if err == nil || !strings.Contains(err.Error(), "event title cannot be empty") {
 		t.Errorf("err = %v, want 'event title cannot be empty'", err)
 	}
@@ -277,12 +277,12 @@ func TestAddCmd_EmptyArgRejected(t *testing.T) {
 // piped text on the floor.
 func TestAddCmd_EditFlagRequiresTerminal(t *testing.T) {
 	s := newTestStore(t)
-	io, _, _ := newTestIOFull("piped body that matters", false)
+	streams, _, _ := newTestIOFull("piped body that matters", false)
 
 	forbidEditor(t)
 
 	cmd := &AddCmd{Edit: true, Author: "alice"}
-	if err := cmd.Run(s, io); !errors.Is(err, errEditNeedsTTY) {
+	if err := cmd.Run(s, streams); !errors.Is(err, errEditNeedsTTY) {
 		t.Fatalf("err = %v, want errEditNeedsTTY", err)
 	}
 	assertNoEvents(t, s)
@@ -291,10 +291,10 @@ func TestAddCmd_EditFlagRequiresTerminal(t *testing.T) {
 func TestAddCmd_FormatJSON_Single(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out, _ := newTestIOFull(`{"title":"hi"}`, false) // piped stdin
+	streams, out, _ := newTestIOFull(`{"title":"hi"}`, false) // piped stdin
 
 	cmd := &AddCmd{Format: "json", Author: "alice"}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if !strings.Contains(out.String(), "Imported 1 event") {
@@ -310,10 +310,10 @@ func TestAddCmd_FormatJSON_Single(t *testing.T) {
 func TestAddCmd_FormatJSON_Array(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out, _ := newTestIOFull(`[{"title":"a"},{"title":"b"},{"title":"c"}]`, false)
+	streams, out, _ := newTestIOFull(`[{"title":"a"},{"title":"b"},{"title":"c"}]`, false)
 
 	cmd := &AddCmd{Format: "json", Author: "alice"}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if !strings.Contains(out.String(), "Imported 3 events") {
@@ -329,10 +329,10 @@ func TestAddCmd_FormatJSON_Array(t *testing.T) {
 func TestAddCmd_FormatJSON_EmptyArray(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out, _ := newTestIOFull(`[]`, false)
+	streams, out, _ := newTestIOFull(`[]`, false)
 
 	cmd := &AddCmd{Format: "json", Author: "alice"}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run returned err = %v, want nil for empty array", err)
 	}
 	if !strings.Contains(out.String(), "Imported 0 events") {
@@ -344,10 +344,10 @@ func TestAddCmd_FormatJSON_AtomicRollback(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
 	// Second record references parent_id=9999 which doesn't exist → rollback.
-	io, _, _ := newTestIOFull(`[{"title":"good"},{"title":"bad","parent_id":9999}]`, false)
+	streams, _, _ := newTestIOFull(`[{"title":"good"},{"title":"bad","parent_id":9999}]`, false)
 
 	cmd := &AddCmd{Format: "json", Author: "alice"}
-	err := cmd.Run(s, io)
+	err := cmd.Run(s, streams)
 	if err == nil {
 		t.Fatal("Run returned nil err, want parent-not-found")
 	}
@@ -361,10 +361,10 @@ func TestAddCmd_FormatJSON_AtomicRollback(t *testing.T) {
 func TestAddCmd_FormatJSON_EditConflicts(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _, _ := newTestIOFull("", true)
+	streams, _, _ := newTestIOFull("", true)
 
 	cmd := &AddCmd{Format: "json", Edit: true, Author: "alice"}
-	err := cmd.Run(s, io)
+	err := cmd.Run(s, streams)
 	if err == nil || !strings.Contains(err.Error(), "--edit conflicts with --format=json") {
 		t.Errorf("err = %v, want '--edit conflicts with --format=json'", err)
 	}
@@ -373,10 +373,10 @@ func TestAddCmd_FormatJSON_EditConflicts(t *testing.T) {
 func TestAddCmd_FormatJSON_BareTTYRejects(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _, _ := newTestIOFull("", true) // TTY, no args
+	streams, _, _ := newTestIOFull("", true) // TTY, no args
 
 	cmd := &AddCmd{Format: "json", Author: "alice"}
-	err := cmd.Run(s, io)
+	err := cmd.Run(s, streams)
 	if err == nil || !strings.Contains(err.Error(), "requires JSON via args or piped stdin") {
 		t.Errorf("err = %v, want 'requires JSON via args or piped stdin'", err)
 	}
@@ -385,10 +385,10 @@ func TestAddCmd_FormatJSON_BareTTYRejects(t *testing.T) {
 func TestAddCmd_FormatJSON_FromArgs(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out := newTestIO("")
+	streams, out := newTestIO("")
 
 	cmd := &AddCmd{Format: "json", Args: []string{`{"title":"from arg"}`}, Author: "alice"}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if !strings.Contains(out.String(), "Imported 1 event") {
@@ -403,10 +403,10 @@ func TestAddCmd_FormatJSON_FromArgs(t *testing.T) {
 func TestAddCmd_FormatJSON_TimeFlagFallback(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _, _ := newTestIOFull(`{"title":"hi"}`, false)
+	streams, _, _ := newTestIOFull(`{"title":"hi"}`, false)
 
 	cmd := &AddCmd{Format: "json", Time: "2026-04-01", Author: "alice"}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	ev, _ := s.Get(context.Background(), 1)
@@ -421,10 +421,10 @@ func TestAddCmd_FormatJSON_TimeFlagFallback(t *testing.T) {
 func TestAddCmd_FormatJSON_MalformedJSON(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _, _ := newTestIOFull(`{"title":`, false)
+	streams, _, _ := newTestIOFull(`{"title":`, false)
 
 	cmd := &AddCmd{Format: "json", Author: "alice"}
-	err := cmd.Run(s, io)
+	err := cmd.Run(s, streams)
 	if err == nil || !strings.Contains(err.Error(), "--format=json") {
 		t.Errorf("err = %v, want '--format=json' parse error", err)
 	}
@@ -433,10 +433,10 @@ func TestAddCmd_FormatJSON_MalformedJSON(t *testing.T) {
 func TestAddCmd_FormatJSON_BadCLITimeFallback(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _, _ := newTestIOFull(`{"title":"hi"}`, false)
+	streams, _, _ := newTestIOFull(`{"title":"hi"}`, false)
 
 	cmd := &AddCmd{Format: "json", Time: "not-a-time", Author: "alice"}
-	err := cmd.Run(s, io)
+	err := cmd.Run(s, streams)
 	if err == nil || !strings.Contains(err.Error(), "invalid --time") {
 		t.Errorf("err = %v, want 'invalid --time'", err)
 	}
@@ -445,10 +445,10 @@ func TestAddCmd_FormatJSON_BadCLITimeFallback(t *testing.T) {
 func TestAddCmd_FormatJSON_BadCLIMetaFallback(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _, _ := newTestIOFull(`{"title":"hi"}`, false)
+	streams, _, _ := newTestIOFull(`{"title":"hi"}`, false)
 
 	cmd := &AddCmd{Format: "json", Meta: []string{"noequals"}, Author: "alice"}
-	err := cmd.Run(s, io)
+	err := cmd.Run(s, streams)
 	if err == nil {
 		t.Fatal("expected error for malformed --meta default")
 	}
@@ -458,10 +458,10 @@ func TestAddCmd_FormatJSON_PerRecordError(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
 	// Second record has empty title → jsonInputToAddInput returns an error.
-	io, _, _ := newTestIOFull(`[{"title":"good"},{"title":""}]`, false)
+	streams, _, _ := newTestIOFull(`[{"title":"good"},{"title":""}]`, false)
 
 	cmd := &AddCmd{Format: "json", Author: "alice"}
-	err := cmd.Run(s, io)
+	err := cmd.Run(s, streams)
 	if err == nil || !strings.Contains(err.Error(), "record 1: title is required") {
 		t.Errorf("err = %v, want 'record 1: title is required'", err)
 	}
@@ -475,11 +475,11 @@ func TestAddCmd_FormatJSON_PerRecordError(t *testing.T) {
 func TestAddCmd_FormatJSON_AuthorFromJSONOverride(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out, _ := newTestIOFull(`{"title":"hi","meta":[["author","bob"]]}`, false)
+	streams, out, _ := newTestIOFull(`{"title":"hi","meta":[["author","bob"]]}`, false)
 
 	// Empty CLI author is OK because the JSON record names its own author.
 	cmd := &AddCmd{Format: "json", Author: ""}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if !strings.Contains(out.String(), "Imported 1 event") {
@@ -503,10 +503,10 @@ func TestAddCmd_FormatJSON_AuthorFromJSONOverride(t *testing.T) {
 func TestAddCmd_FormatJSON_NoAuthorAnywhereRejects(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _, _ := newTestIOFull(`{"title":"hi"}`, false)
+	streams, _, _ := newTestIOFull(`{"title":"hi"}`, false)
 
 	cmd := &AddCmd{Format: "json", Author: ""}
-	err := cmd.Run(s, io)
+	err := cmd.Run(s, streams)
 	if err == nil || !strings.Contains(err.Error(), "author is required") {
 		t.Errorf("err = %v, want 'author is required'", err)
 	}
@@ -515,10 +515,10 @@ func TestAddCmd_FormatJSON_NoAuthorAnywhereRejects(t *testing.T) {
 func TestAddCmd_FormatJSON_MetaFlagFallback(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _, _ := newTestIOFull(`{"title":"hi"}`, false)
+	streams, _, _ := newTestIOFull(`{"title":"hi"}`, false)
 
 	cmd := &AddCmd{Format: "json", Meta: []string{"env=prod"}, Author: "alice"}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	ev, _ := s.Get(context.Background(), 1)
@@ -536,13 +536,13 @@ func TestAddCmd_FormatJSON_MetaFlagFallback(t *testing.T) {
 func TestAddCmd_SplitsTitleBody(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
 	cmd := &AddCmd{
 		Args:   []string{"deployed v1.2 to staging. needed a manual restart"},
 		Author: "alice",
 	}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -563,10 +563,10 @@ func TestAddCmd_SplitsTitleBody(t *testing.T) {
 func TestAddCmd_NoSeparator(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
 	cmd := &AddCmd{Args: []string{"v1.2.3 released"}, Author: "alice"}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	events, err := s.List(context.Background(), event.ListOpts{})
@@ -581,10 +581,10 @@ func TestAddCmd_NoSeparator(t *testing.T) {
 func TestAddCmd_TimePrefixSetsTimeAndStripsTitle(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
 	cmd := &AddCmd{Args: []string{"9:30: had coffee"}, Author: "alice"}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -608,11 +608,11 @@ func TestAddCmd_TimePrefixSetsTimeAndStripsTitle(t *testing.T) {
 func TestAddCmd_TimePrefixSkippedWithTimeFlag(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
 	// --time is the explicit override; the title keeps its literal prefix.
 	cmd := &AddCmd{Args: []string{"9:30: had coffee"}, Author: "alice", Time: "2026-04-01 08:00"}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -629,10 +629,10 @@ func TestAddCmd_TimePrefixSkippedWithTimeFlag(t *testing.T) {
 func TestAddCmd_RelativeTimePrefix(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
 	cmd := &AddCmd{Args: []string{"yesterday at 9am: backfilled logs"}, Author: "alice"}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -653,10 +653,10 @@ func TestAddCmd_RelativeTimePrefix(t *testing.T) {
 func TestAddCmd_RelativeTimeFlag(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
 	cmd := &AddCmd{Args: []string{"retro note"}, Author: "alice", Time: "2 days ago"}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -671,10 +671,10 @@ func TestAddCmd_RelativeTimeFlag(t *testing.T) {
 func TestAddCmd_NonTimePrefixStoredVerbatim(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
 	cmd := &AddCmd{Args: []string{"Meeting: discuss roadmap"}, Author: "alice"}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -687,10 +687,10 @@ func TestAddCmd_NonTimePrefixStoredVerbatim(t *testing.T) {
 func TestAddCmd_RejectsEmptyTitle(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
 	cmd := &AddCmd{Args: []string{". body only"}, Author: "alice"}
-	if err := cmd.Run(s, io); err == nil {
+	if err := cmd.Run(s, streams); err == nil {
 		t.Error("expected empty-title error")
 	}
 }

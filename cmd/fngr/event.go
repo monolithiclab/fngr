@@ -33,7 +33,7 @@ type EventShowCmd struct {
 	Format string `help:"Output format: one of ${EVENT_FORMATS}." enum:"${EVENT_FORMATS}" default:"${EVENT_FORMAT_DEFAULT}"`
 }
 
-func (c *EventShowCmd) Run(s eventStore, io ioStreams) error {
+func (c *EventShowCmd) Run(s eventStore, streams ioStreams) error {
 	ctx := context.Background()
 
 	if c.Tree {
@@ -41,14 +41,14 @@ func (c *EventShowCmd) Run(s eventStore, io ioStreams) error {
 		if err != nil {
 			return withRepairHint(err)
 		}
-		return render.Events(io.Out, c.Format, events)
+		return render.Events(streams.Out, c.Format, events)
 	}
 
 	ev, err := s.Get(ctx, c.ID)
 	if err != nil {
 		return err
 	}
-	return render.SingleEvent(io.Out, c.Format, ev)
+	return render.SingleEvent(streams.Out, c.Format, ev)
 }
 
 // EventTextCmd replaces the event's text by re-splitting it into title +
@@ -58,7 +58,7 @@ type EventTextCmd struct {
 	Text string `arg:"" help:"New event text. Re-split on '. ' into title+body."`
 }
 
-func (c *EventTextCmd) Run(s eventStore, io ioStreams) error {
+func (c *EventTextCmd) Run(s eventStore, streams ioStreams) error {
 	ctx := context.Background()
 
 	title, body := parse.SplitTitleBody(c.Text)
@@ -68,7 +68,7 @@ func (c *EventTextCmd) Run(s eventStore, io ioStreams) error {
 	if err := s.Update(ctx, c.ID, &title, &body, nil); err != nil {
 		return err
 	}
-	fmt.Fprintf(io.Out, "Updated event %d\n", c.ID)
+	fmt.Fprintf(streams.Out, "Updated event %d\n", c.ID)
 	return nil
 }
 
@@ -78,7 +78,7 @@ type EventTitleCmd struct {
 	Title string `arg:"" help:"New event title."`
 }
 
-func (c *EventTitleCmd) Run(s eventStore, io ioStreams) error {
+func (c *EventTitleCmd) Run(s eventStore, streams ioStreams) error {
 	ctx := context.Background()
 
 	if c.Title == "" {
@@ -87,7 +87,7 @@ func (c *EventTitleCmd) Run(s eventStore, io ioStreams) error {
 	if err := s.Update(ctx, c.ID, &c.Title, nil, nil); err != nil {
 		return err
 	}
-	fmt.Fprintf(io.Out, "Updated event %d\n", c.ID)
+	fmt.Fprintf(streams.Out, "Updated event %d\n", c.ID)
 	return nil
 }
 
@@ -97,13 +97,13 @@ type EventBodyCmd struct {
 	Body string `arg:"" help:"New event body (empty clears)."`
 }
 
-func (c *EventBodyCmd) Run(s eventStore, io ioStreams) error {
+func (c *EventBodyCmd) Run(s eventStore, streams ioStreams) error {
 	ctx := context.Background()
 
 	if err := s.Update(ctx, c.ID, nil, &c.Body, nil); err != nil {
 		return err
 	}
-	fmt.Fprintf(io.Out, "Updated event %d\n", c.ID)
+	fmt.Fprintf(streams.Out, "Updated event %d\n", c.ID)
 	return nil
 }
 
@@ -121,7 +121,7 @@ type EventTimeCmd struct {
 	Value string `arg:"" help:"New time. A bare clock (${TIME_CLOCK}) keeps the stored date; every other accepted form carries one and replaces it — a full timestamp (${TIME_DATETIME}) or a relative value (${TIME_REL_TIME}), which resolve against now. Date-only values are refused; use 'event date'."`
 }
 
-func (c *EventTimeCmd) Run(s eventStore, io ioStreams) error {
+func (c *EventTimeCmd) Run(s eventStore, streams ioStreams) error {
 	ctx := context.Background()
 
 	parsed, hasDate, hasTime, exists, err := timefmt.ParsePartial(c.Value)
@@ -143,12 +143,12 @@ func (c *EventTimeCmd) Run(s eventStore, io ioStreams) error {
 		}
 		when, exists = timefmt.SpliceTime(ev.CreatedAt.Local(), parsed)
 	}
-	warnSkippedClock(io.Err, exists, c.Value, when)
+	warnSkippedClock(streams.Err, exists, c.Value, when)
 
 	if err := s.Update(ctx, c.ID, nil, nil, &when); err != nil {
 		return err
 	}
-	fmt.Fprintf(io.Out, "Updated event %d\n", c.ID)
+	fmt.Fprintf(streams.Out, "Updated event %d\n", c.ID)
 	return nil
 }
 
@@ -161,7 +161,7 @@ type EventDateCmd struct {
 	Value string `arg:"" help:"New date (${TIME_DATE}), full timestamp (${TIME_DATETIME}), or relative (${TIME_REL_DATE}). The stored time-of-day is kept unless the value carries one."`
 }
 
-func (c *EventDateCmd) Run(s eventStore, io ioStreams) error {
+func (c *EventDateCmd) Run(s eventStore, streams ioStreams) error {
 	ctx := context.Background()
 
 	parsed, hasDate, hasTime, exists, err := timefmt.ParsePartial(c.Value)
@@ -182,12 +182,12 @@ func (c *EventDateCmd) Run(s eventStore, io ioStreams) error {
 		}
 		when, exists = timefmt.SpliceDate(ev.CreatedAt.Local(), parsed)
 	}
-	warnSkippedClock(io.Err, exists, c.Value, when)
+	warnSkippedClock(streams.Err, exists, c.Value, when)
 
 	if err := s.Update(ctx, c.ID, nil, nil, &when); err != nil {
 		return err
 	}
-	fmt.Fprintf(io.Out, "Updated event %d\n", c.ID)
+	fmt.Fprintf(streams.Out, "Updated event %d\n", c.ID)
 	return nil
 }
 
@@ -197,7 +197,7 @@ type EventAttachCmd struct {
 	Parent int64 `arg:"" help:"Parent event ID."`
 }
 
-func (c *EventAttachCmd) Run(s eventStore, io ioStreams) error {
+func (c *EventAttachCmd) Run(s eventStore, streams ioStreams) error {
 	ctx := context.Background()
 	// Read first: attaching an event that already had a parent silently
 	// displaces it, and `Attached event 3 to event 1` is true of the row and
@@ -214,7 +214,7 @@ func (c *EventAttachCmd) Run(s eventStore, io ioStreams) error {
 	if ev.ParentID != nil && *ev.ParentID != c.Parent {
 		moved = fmt.Sprintf(" (was event %d)", *ev.ParentID)
 	}
-	fmt.Fprintf(io.Out, "Attached event %d to event %d%s\n", c.ID, c.Parent, moved)
+	fmt.Fprintf(streams.Out, "Attached event %d to event %d%s\n", c.ID, c.Parent, moved)
 	return nil
 }
 
@@ -234,7 +234,7 @@ type EventDetachCmd struct {
 	ID int64 `arg:"" help:"Event ID."`
 }
 
-func (c *EventDetachCmd) Run(s eventStore, io ioStreams) error {
+func (c *EventDetachCmd) Run(s eventStore, streams ioStreams) error {
 	ctx := context.Background()
 	// Read first, so the result line can name the parent that was cleared and
 	// say so distinctly when there was none — `Detached event 1` on an event
@@ -246,13 +246,13 @@ func (c *EventDetachCmd) Run(s eventStore, io ioStreams) error {
 		return err
 	}
 	if ev.ParentID == nil {
-		fmt.Fprintf(io.Out, "Event %d has no parent; nothing to detach\n", c.ID)
+		fmt.Fprintf(streams.Out, "Event %d has no parent; nothing to detach\n", c.ID)
 		return nil
 	}
 	if err := s.Reparent(ctx, c.ID, nil); err != nil {
 		return err
 	}
-	fmt.Fprintf(io.Out, "Detached event %d from event %d\n", c.ID, *ev.ParentID)
+	fmt.Fprintf(streams.Out, "Detached event %d from event %d\n", c.ID, *ev.ParentID)
 	return nil
 }
 
@@ -262,7 +262,7 @@ type EventTagCmd struct {
 	Args []string `arg:"" help:"Tags to add: @person, #tag, or key=value (one or more)."`
 }
 
-func (c *EventTagCmd) Run(s eventStore, io ioStreams) error {
+func (c *EventTagCmd) Run(s eventStore, streams ioStreams) error {
 	ctx := context.Background()
 
 	if len(c.Args) == 0 {
@@ -279,11 +279,11 @@ func (c *EventTagCmd) Run(s eventStore, io ioStreams) error {
 	requested := int64(len(tags))
 	switch added {
 	case 0:
-		fmt.Fprintf(io.Out, "Tagged event %d (already tagged)\n", c.ID)
+		fmt.Fprintf(streams.Out, "Tagged event %d (already tagged)\n", c.ID)
 	case requested:
-		fmt.Fprintf(io.Out, "Tagged event %d (%d added)\n", c.ID, added)
+		fmt.Fprintf(streams.Out, "Tagged event %d (%d added)\n", c.ID, added)
 	default:
-		fmt.Fprintf(io.Out, "Tagged event %d (%d added, %d already present)\n", c.ID, added, requested-added)
+		fmt.Fprintf(streams.Out, "Tagged event %d (%d added, %d already present)\n", c.ID, added, requested-added)
 	}
 	return nil
 }
@@ -294,7 +294,7 @@ type EventUntagCmd struct {
 	Args []string `arg:"" help:"Tags to remove: @person, #tag, or key=value (one or more)."`
 }
 
-func (c *EventUntagCmd) Run(s eventStore, io ioStreams) error {
+func (c *EventUntagCmd) Run(s eventStore, streams ioStreams) error {
 	ctx := context.Background()
 
 	if len(c.Args) == 0 {
@@ -311,7 +311,7 @@ func (c *EventUntagCmd) Run(s eventStore, io ioStreams) error {
 	if n == 0 {
 		return fmt.Errorf("nothing to untag: %s", strings.Join(c.Args, " "))
 	}
-	fmt.Fprintf(io.Out, "Untagged event %d (%d removed)\n", c.ID, n)
+	fmt.Fprintf(streams.Out, "Untagged event %d (%d removed)\n", c.ID, n)
 	return nil
 }
 

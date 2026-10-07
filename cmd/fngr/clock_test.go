@@ -250,7 +250,7 @@ func TestAddJSON_WarnsOnSkippedClock(t *testing.T) {
 func TestEventTimeCmd_StoresTheShiftedClock(t *testing.T) {
 	loc := useNewYork(t)
 	s := newTestStore(t)
-	io, _, errBuf := newTestIOFull("", true)
+	streams, _, errBuf := newTestIOFull("", true)
 
 	at := time.Date(2026, 3, 8, 12, 0, 0, 0, loc)
 	if _, err := s.Add(context.Background(), event.AddInput{Title: "seeded", CreatedAt: &at, Meta: []parse.Meta{
@@ -260,7 +260,7 @@ func TestEventTimeCmd_StoresTheShiftedClock(t *testing.T) {
 	}
 
 	cmd := &EventTimeCmd{ID: 1, Value: "2:30"}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 

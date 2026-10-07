@@ -21,7 +21,7 @@ type MetaListCmd struct {
 	Search string `help:"Filter: bare key (e.g. 'tag'), key=value, @person, or #tag." short:"S"`
 }
 
-func (c *MetaListCmd) Run(s eventStore, io ioStreams) error {
+func (c *MetaListCmd) Run(s eventStore, streams ioStreams) error {
 	ctx := context.Background()
 
 	// No emptiness test here: parseMetaFilter answers an absent filter with
@@ -39,7 +39,7 @@ func (c *MetaListCmd) Run(s eventStore, io ioStreams) error {
 	}
 
 	if len(counts) == 0 {
-		reportNone(io.Err, "metadata")
+		reportNone(streams.Err, "metadata")
 		return nil
 	}
 
@@ -59,7 +59,7 @@ func (c *MetaListCmd) Run(s eventStore, io ioStreams) error {
 		width = max(width, utf8.RuneCountInString(pairs[i]))
 	}
 	for i, pair := range pairs {
-		fmt.Fprintf(io.Out, "%-*s  (%d)\n", width, pair, counts[i].Count)
+		fmt.Fprintf(streams.Out, "%-*s  (%d)\n", width, pair, counts[i].Count)
 	}
 	return nil
 }
@@ -128,7 +128,7 @@ type MetaRenameCmd struct {
 	Force bool   `help:"Skip confirmation prompt." short:"f"`
 }
 
-func (c *MetaRenameCmd) Run(s eventStore, io ioStreams) error {
+func (c *MetaRenameCmd) Run(s eventStore, streams ioStreams) error {
 	ctx := context.Background()
 
 	oldM, err := parse.MetaArg(c.Old)
@@ -167,12 +167,12 @@ func (c *MetaRenameCmd) Run(s eventStore, io ioStreams) error {
 
 		prompt := fmt.Sprintf("Rename %s of %s=%s to %s=%s%s? [Y/n] ",
 			plural(count, "occurrence"), oldM.Key, oldM.Value, newM.Key, newM.Value, merge)
-		ok, err := confirm(io.In, io.Out, prompt, true)
+		ok, err := confirm(streams.In, streams.Out, prompt, true)
 		if err != nil {
 			return err
 		}
 		if !ok {
-			fmt.Fprintln(io.Out, "Aborted.")
+			fmt.Fprintln(streams.Out, "Aborted.")
 			return nil
 		}
 	}
@@ -181,7 +181,7 @@ func (c *MetaRenameCmd) Run(s eventStore, io ioStreams) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(io.Out, "Renamed %s\n", plural(affected, "occurrence"))
+	fmt.Fprintf(streams.Out, "Renamed %s\n", plural(affected, "occurrence"))
 	return nil
 }
 
@@ -190,7 +190,7 @@ type MetaDeleteCmd struct {
 	Force bool   `help:"Skip confirmation prompt." short:"f"`
 }
 
-func (c *MetaDeleteCmd) Run(s eventStore, io ioStreams) error {
+func (c *MetaDeleteCmd) Run(s eventStore, streams ioStreams) error {
 	ctx := context.Background()
 
 	m, err := parse.MetaArg(c.Meta)
@@ -208,12 +208,12 @@ func (c *MetaDeleteCmd) Run(s eventStore, io ioStreams) error {
 
 	if !c.Force {
 		prompt := fmt.Sprintf("Delete %s of %s=%s? [y/N] ", plural(count, "occurrence"), m.Key, m.Value)
-		ok, err := confirm(io.In, io.Out, prompt, false)
+		ok, err := confirm(streams.In, streams.Out, prompt, false)
 		if err != nil {
 			return err
 		}
 		if !ok {
-			fmt.Fprintln(io.Out, "Aborted.")
+			fmt.Fprintln(streams.Out, "Aborted.")
 			return nil
 		}
 	}
@@ -222,7 +222,7 @@ func (c *MetaDeleteCmd) Run(s eventStore, io ioStreams) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(io.Out, "Deleted %s\n", plural(n, "occurrence"))
+	fmt.Fprintf(streams.Out, "Deleted %s\n", plural(n, "occurrence"))
 	return nil
 }
 

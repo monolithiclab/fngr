@@ -299,10 +299,10 @@ func TestParseJSONAddInput_BatchSizeLimit(t *testing.T) {
 func TestAddJSON_TitleBody(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO(`{"title":"deploy","body":"hotfix #ops"}`)
+	streams, _ := newTestIO(`{"title":"deploy","body":"hotfix #ops"}`)
 
 	cmd := &AddCmd{Args: []string{`{"title":"deploy","body":"hotfix #ops"}`}, Author: "alice", Format: "json"}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	events, err := s.List(context.Background(), event.ListOpts{})
@@ -317,10 +317,10 @@ func TestAddJSON_TitleBody(t *testing.T) {
 func TestAddJSON_BodyOptional(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
 	cmd := &AddCmd{Args: []string{`{"title":"hello"}`}, Author: "alice", Format: "json"}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	events, _ := s.List(context.Background(), event.ListOpts{})
@@ -332,9 +332,9 @@ func TestAddJSON_BodyOptional(t *testing.T) {
 func TestAddJSON_RejectsEmptyTitle(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 	cmd := &AddCmd{Args: []string{`{"title":""}`}, Author: "alice", Format: "json"}
-	if err := cmd.Run(s, io); err == nil {
+	if err := cmd.Run(s, streams); err == nil {
 		t.Error("expected empty-title error")
 	}
 }
@@ -342,9 +342,9 @@ func TestAddJSON_RejectsEmptyTitle(t *testing.T) {
 func TestAddJSON_RejectsTextField(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 	cmd := &AddCmd{Args: []string{`{"text":"old"}`}, Author: "alice", Format: "json"}
-	err := cmd.Run(s, io)
+	err := cmd.Run(s, streams)
 	if err == nil || !strings.Contains(err.Error(), "unknown field") {
 		t.Errorf("expected unknown-field error on `text`, got %v", err)
 	}
@@ -472,9 +472,9 @@ func TestAddJSON_ParentIDResolution(t *testing.T) {
 				}
 			}
 
-			io, _ := newTestIO("")
+			streams, _ := newTestIO("")
 			cmd := &AddCmd{Args: []string{tt.batch}, Author: "alice", Format: "json"}
-			err := cmd.Run(s, io)
+			err := cmd.Run(s, streams)
 
 			if tt.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
@@ -515,13 +515,13 @@ func TestAddJSON_ParentIDResolution(t *testing.T) {
 func TestAddJSON_FailedBatchWritesNothing(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
 	cmd := &AddCmd{
 		Args:   []string{`[{"title":"good"},{"id":1,"title":"a","parent_id":2},{"id":2,"title":"b","parent_id":1}]`},
 		Author: "alice", Format: "json",
 	}
-	if err := cmd.Run(s, io); err == nil {
+	if err := cmd.Run(s, streams); err == nil {
 		t.Fatal("Run succeeded, want a cycle error")
 	}
 
@@ -555,12 +555,12 @@ func TestAddJSON_CreatedAtAcceptsCLILayouts(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			s := newTestStore(t)
-			io, _ := newTestIO("")
+			streams, _ := newTestIO("")
 			cmd := &AddCmd{
 				Args:   []string{fmt.Sprintf(`{"title":"x","created_at":%q}`, tt.stamp)},
 				Author: "alice", Format: "json",
 			}
-			if err := cmd.Run(s, io); err != nil {
+			if err := cmd.Run(s, streams); err != nil {
 				t.Fatalf("Run with created_at %q: %v", tt.stamp, err)
 			}
 			events, err := s.List(context.Background(), event.ListOpts{})

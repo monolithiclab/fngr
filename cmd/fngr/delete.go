@@ -11,7 +11,7 @@ type DeleteCmd struct {
 	Recursive bool  `help:"Delete event and all children." short:"r"`
 }
 
-func (c *DeleteCmd) Run(s eventStore, io ioStreams) error {
+func (c *DeleteCmd) Run(s eventStore, streams ioStreams) error {
 	ctx := context.Background()
 
 	if _, err := s.Get(ctx, c.ID); err != nil {
@@ -30,12 +30,12 @@ func (c *DeleteCmd) Run(s eventStore, io ioStreams) error {
 	subject := deleteSubject(ctx, s, c.ID, hasChildren)
 
 	if !c.Force {
-		ok, err := confirm(io.In, io.Out, fmt.Sprintf("Delete %s? [y/N] ", subject), false)
+		ok, err := confirm(streams.In, streams.Out, fmt.Sprintf("Delete %s? [y/N] ", subject), false)
 		if err != nil {
 			return err
 		}
 		if !ok {
-			fmt.Fprintln(io.Out, "Aborted.")
+			fmt.Fprintln(streams.Out, "Aborted.")
 			return nil
 		}
 	}
@@ -43,7 +43,7 @@ func (c *DeleteCmd) Run(s eventStore, io ioStreams) error {
 	if err := s.Delete(ctx, c.ID); err != nil {
 		return err
 	}
-	fmt.Fprintf(io.Out, "Deleted %s\n", subject)
+	fmt.Fprintf(streams.Out, "Deleted %s\n", subject)
 	return nil
 }
 

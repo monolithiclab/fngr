@@ -14,10 +14,10 @@ import (
 func TestMetaListCmd_Empty(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out, errBuf := newTestIOFull("", true)
+	streams, out, errBuf := newTestIOFull("", true)
 
 	cmd := &MetaListCmd{}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if !strings.Contains(errBuf.String(), "No metadata") {
@@ -49,9 +49,9 @@ func TestMetaListCmd_EntryReadsTheSameFilteredOrNot(t *testing.T) {
 	}
 
 	for _, search := range []string{"", "tag"} {
-		io, out := newTestIO("")
+		streams, out := newTestIO("")
 		cmd := &MetaListCmd{Search: search}
-		if err := cmd.Run(s, io); err != nil {
+		if err := cmd.Run(s, streams); err != nil {
 			t.Fatalf("Run(-S %q): %v", search, err)
 		}
 		// The count is the other half of the row: one padded `key=value`
@@ -68,7 +68,7 @@ func TestMetaListCmd_EntryReadsTheSameFilteredOrNot(t *testing.T) {
 func TestMetaListCmd_ClampsWideColumns(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out := newTestIO("")
+	streams, out := newTestIO("")
 
 	huge := strings.Repeat("x", 5000)
 	if _, err := s.Add(context.Background(), event.AddInput{Title: "x", Meta: []parse.Meta{
@@ -79,7 +79,7 @@ func TestMetaListCmd_ClampsWideColumns(t *testing.T) {
 	}
 
 	cmd := &MetaListCmd{}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	got := out.String()
@@ -205,7 +205,7 @@ func TestDisplayCell_PreCutMatchesTheFullWalk(t *testing.T) {
 func TestMetaListCmd_AlignsByRunesNotBytes(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out := newTestIO("")
+	streams, out := newTestIO("")
 
 	// "josé" is 4 runes in 5 bytes, "josie" 5 in 5: measured in bytes the two
 	// look equally wide, and the é then buys an extra column of padding.
@@ -217,7 +217,7 @@ func TestMetaListCmd_AlignsByRunesNotBytes(t *testing.T) {
 	}
 
 	cmd := &MetaListCmd{}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -241,7 +241,7 @@ func TestMetaListCmd_AlignsByRunesNotBytes(t *testing.T) {
 func TestMetaListCmd_SearchByKey(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out := newTestIO("")
+	streams, out := newTestIO("")
 
 	if _, err := s.Add(context.Background(), event.AddInput{Title: "x", Meta: []parse.Meta{
 		{Key: "tag", Value: "ops"},
@@ -251,7 +251,7 @@ func TestMetaListCmd_SearchByKey(t *testing.T) {
 	}
 
 	cmd := &MetaListCmd{Search: "tag"}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	got := out.String()
@@ -266,7 +266,7 @@ func TestMetaListCmd_SearchByKey(t *testing.T) {
 func TestMetaListCmd_SearchByKeyValue(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out := newTestIO("")
+	streams, out := newTestIO("")
 
 	for range 2 {
 		if _, err := s.Add(context.Background(), event.AddInput{Title: "x", Meta: []parse.Meta{
@@ -282,7 +282,7 @@ func TestMetaListCmd_SearchByKeyValue(t *testing.T) {
 	}
 
 	cmd := &MetaListCmd{Search: "tag=ops"}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	got := out.String()
@@ -297,7 +297,7 @@ func TestMetaListCmd_SearchByKeyValue(t *testing.T) {
 func TestMetaListCmd_SearchPeopleShorthand(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out := newTestIO("")
+	streams, out := newTestIO("")
 
 	if _, err := s.Add(context.Background(), event.AddInput{Title: "x", Meta: []parse.Meta{
 		{Key: "people", Value: "sarah"},
@@ -306,7 +306,7 @@ func TestMetaListCmd_SearchPeopleShorthand(t *testing.T) {
 	}
 
 	cmd := &MetaListCmd{Search: "@sarah"}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if !strings.Contains(out.String(), "people=sarah") {
@@ -317,7 +317,7 @@ func TestMetaListCmd_SearchPeopleShorthand(t *testing.T) {
 func TestMetaListCmd_SearchTagShorthand(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out := newTestIO("")
+	streams, out := newTestIO("")
 
 	if _, err := s.Add(context.Background(), event.AddInput{Title: "x", Meta: []parse.Meta{
 		{Key: "tag", Value: "urgent"},
@@ -326,7 +326,7 @@ func TestMetaListCmd_SearchTagShorthand(t *testing.T) {
 	}
 
 	cmd := &MetaListCmd{Search: "#urgent"}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if !strings.Contains(out.String(), "tag=urgent") {
@@ -341,10 +341,10 @@ func TestMetaListCmd_SearchTagShorthand(t *testing.T) {
 func TestMetaListCmd_InvalidSearch(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
 	cmd := &MetaListCmd{Search: "@bad name"}
-	err := cmd.Run(s, io)
+	err := cmd.Run(s, streams)
 	if err == nil {
 		t.Fatal("expected error for invalid filter")
 	}
@@ -353,10 +353,10 @@ func TestMetaListCmd_InvalidSearch(t *testing.T) {
 func TestMetaRenameCmd_BadOldFormat(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
 	cmd := &MetaRenameCmd{Old: "bad name", New: "tag=new"}
-	err := cmd.Run(s, io)
+	err := cmd.Run(s, streams)
 	if err == nil {
 		t.Fatal("expected error for malformed old key")
 	}
@@ -365,10 +365,10 @@ func TestMetaRenameCmd_BadOldFormat(t *testing.T) {
 func TestMetaRenameCmd_NoMatch(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
 	cmd := &MetaRenameCmd{Old: "tag=missing", New: "tag=new"}
-	err := cmd.Run(s, io)
+	err := cmd.Run(s, streams)
 	if err == nil || !strings.Contains(err.Error(), "no metadata") {
 		t.Errorf("error = %v, want no-metadata error", err)
 	}
@@ -377,7 +377,7 @@ func TestMetaRenameCmd_NoMatch(t *testing.T) {
 func TestMetaRenameCmd_AbortDoesNotMutate(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out := newTestIO("n\n")
+	streams, out := newTestIO("n\n")
 
 	if _, err := s.Add(context.Background(), event.AddInput{Title: "x", Meta: []parse.Meta{
 		{Key: "tag", Value: "ops"},
@@ -386,7 +386,7 @@ func TestMetaRenameCmd_AbortDoesNotMutate(t *testing.T) {
 	}
 
 	cmd := &MetaRenameCmd{Old: "tag=ops", New: "tag=new"}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -405,7 +405,7 @@ func TestMetaRenameCmd_AbortDoesNotMutate(t *testing.T) {
 func TestMetaRenameCmd_ConfirmAppliesOnce(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out := newTestIO("y\n")
+	streams, out := newTestIO("y\n")
 
 	for range 3 {
 		if _, err := s.Add(context.Background(), event.AddInput{Title: "x", Meta: []parse.Meta{
@@ -416,7 +416,7 @@ func TestMetaRenameCmd_ConfirmAppliesOnce(t *testing.T) {
 	}
 
 	cmd := &MetaRenameCmd{Old: "tag=old", New: "tag=new"}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -443,7 +443,7 @@ func TestMetaRenameCmd_ConfirmAppliesOnce(t *testing.T) {
 func TestMetaRenameCmd_AcceptsShorthand(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
 	if _, err := s.Add(context.Background(), event.AddInput{Title: "x", Meta: []parse.Meta{
 		{Key: "tag", Value: "wip"},
@@ -452,7 +452,7 @@ func TestMetaRenameCmd_AcceptsShorthand(t *testing.T) {
 	}
 
 	cmd := &MetaRenameCmd{Old: "#wip", New: "#done", Force: true}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -488,7 +488,7 @@ func TestMetaRenameCmd_PromptWarnsAboutMerge(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			s := newTestStore(t)
-			io, out := newTestIO("y\n")
+			streams, out := newTestIO("y\n")
 
 			if _, err := s.Add(context.Background(), event.AddInput{Title: "x", Meta: []parse.Meta{
 				{Key: "tag", Value: "wip"},
@@ -498,7 +498,7 @@ func TestMetaRenameCmd_PromptWarnsAboutMerge(t *testing.T) {
 			}
 
 			cmd := &MetaRenameCmd{Old: "#wip", New: tt.newTag}
-			if err := cmd.Run(s, io); err != nil {
+			if err := cmd.Run(s, streams); err != nil {
 				t.Fatalf("Run: %v", err)
 			}
 
@@ -513,10 +513,10 @@ func TestMetaRenameCmd_PromptWarnsAboutMerge(t *testing.T) {
 func TestMetaDeleteCmd_NoMatch(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
 	cmd := &MetaDeleteCmd{Meta: "tag=ghost"}
-	err := cmd.Run(s, io)
+	err := cmd.Run(s, streams)
 	if err == nil || !strings.Contains(err.Error(), "no metadata") {
 		t.Errorf("error = %v, want no-metadata error", err)
 	}
@@ -525,7 +525,7 @@ func TestMetaDeleteCmd_NoMatch(t *testing.T) {
 func TestMetaDeleteCmd_AbortDoesNotMutate(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out := newTestIO("n\n")
+	streams, out := newTestIO("n\n")
 
 	if _, err := s.Add(context.Background(), event.AddInput{Title: "x", Meta: []parse.Meta{
 		{Key: "tag", Value: "keep"},
@@ -534,7 +534,7 @@ func TestMetaDeleteCmd_AbortDoesNotMutate(t *testing.T) {
 	}
 
 	cmd := &MetaDeleteCmd{Meta: "tag=keep"}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -550,7 +550,7 @@ func TestMetaDeleteCmd_AbortDoesNotMutate(t *testing.T) {
 func TestMetaDeleteCmd_Force(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, out := newTestIO("")
+	streams, out := newTestIO("")
 
 	if _, err := s.Add(context.Background(), event.AddInput{Title: "x", Meta: []parse.Meta{
 		{Key: "tag", Value: "obsolete"},
@@ -559,7 +559,7 @@ func TestMetaDeleteCmd_Force(t *testing.T) {
 	}
 
 	cmd := &MetaDeleteCmd{Meta: "tag=obsolete", Force: true}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	if !strings.Contains(out.String(), "Deleted 1 occurrence\n") {
@@ -570,7 +570,7 @@ func TestMetaDeleteCmd_Force(t *testing.T) {
 func TestMetaDeleteCmd_AcceptsShorthand(t *testing.T) {
 	t.Parallel()
 	s := newTestStore(t)
-	io, _ := newTestIO("")
+	streams, _ := newTestIO("")
 
 	if _, err := s.Add(context.Background(), event.AddInput{Title: "x", Meta: []parse.Meta{
 		{Key: "tag", Value: "obsolete"},
@@ -579,7 +579,7 @@ func TestMetaDeleteCmd_AcceptsShorthand(t *testing.T) {
 	}
 
 	cmd := &MetaDeleteCmd{Meta: "#obsolete", Force: true}
-	if err := cmd.Run(s, io); err != nil {
+	if err := cmd.Run(s, streams); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 	count, _ := s.CountMeta(context.Background(), "tag", "obsolete")

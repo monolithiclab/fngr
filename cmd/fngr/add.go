@@ -28,7 +28,7 @@ type AddCmd struct {
 // journal.
 func (*AddCmd) createsDB() bool { return true }
 
-func (c *AddCmd) Run(s eventStore, io ioStreams) error {
+func (c *AddCmd) Run(s eventStore, streams ioStreams) error {
 	// Canonical, not raw equality, for the reason withAliases exists: an alias
 	// resolving to json would pass the enum and then miss this test, sending a
 	// 10 000-record batch down the text path to be stored as one event titled
@@ -40,14 +40,14 @@ func (c *AddCmd) Run(s eventStore, io ioStreams) error {
 		if c.Edit {
 			return fmt.Errorf("--edit conflicts with --format=json")
 		}
-		if io.IsTTY && len(c.Args) == 0 {
+		if streams.IsTTY && len(c.Args) == 0 {
 			return fmt.Errorf("--format=json requires JSON via args or piped stdin")
 		}
 	}
 
-	text, err := resolveBody(c.Args, c.Edit, io)
+	text, err := resolveBody(c.Args, c.Edit, streams)
 	if errors.Is(err, errCancel) {
-		fmt.Fprintln(io.Err, "cancelled (empty body)")
+		fmt.Fprintln(streams.Err, "cancelled (empty body)")
 		return nil
 	}
 	if err != nil {
@@ -55,12 +55,12 @@ func (c *AddCmd) Run(s eventStore, io ioStreams) error {
 	}
 
 	if format == render.FormatJSON {
-		return c.runJSON(s, io, text)
+		return c.runJSON(s, streams, text)
 	}
-	return c.runText(s, io, text)
+	return c.runText(s, streams, text)
 }
 
-func (c *AddCmd) runText(s eventStore, io ioStreams, text string) error {
+func (c *AddCmd) runText(s eventStore, streams ioStreams, text string) error {
 	if c.Author == "" {
 		return fmt.Errorf("author is required: use --author, FNGR_AUTHOR, or ensure $USER is set")
 	}
@@ -76,11 +76,11 @@ func (c *AddCmd) runText(s eventStore, io ioStreams, text string) error {
 		if err != nil {
 			return fmt.Errorf("invalid --time value: %w", err)
 		}
-		warnSkippedClock(io.Err, exists, c.Time, t)
+		warnSkippedClock(streams.Err, exists, c.Time, t)
 		createdAt = &t
 	default:
 		if t, prefix, rest, exists, ok := timefmt.SplitTimePrefix(title); ok {
-			warnSkippedClock(io.Err, exists, prefix, t)
+			warnSkippedClock(streams.Err, exists, prefix, t)
 			createdAt = &t
 			title = rest
 		}
@@ -104,6 +104,6 @@ func (c *AddCmd) runText(s eventStore, io ioStreams, text string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(io.Out, "Added event %d\n", id)
+	fmt.Fprintf(streams.Out, "Added event %d\n", id)
 	return nil
 }
