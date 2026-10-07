@@ -434,6 +434,16 @@ commands above all use `--bundle`. A future installer major gets the
 same check before it is taken: the signing args, then every
 `verify-blob` example.
 
+To verify a release from before the bundle (v0.0.4 and earlier):
+
+```bash
+cosign verify-blob \
+  --signature SHA256SUMS.sig --certificate SHA256SUMS.pem \
+  --certificate-identity-regexp 'https://github.com/monolithiclab/fngr' \
+  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+  SHA256SUMS
+```
+
 ### The `nonroot` base needs a directory mount, not a file mount
 
 The distroless `nonroot` variant runs as UID 65532. A CLI storing its

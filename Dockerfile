@@ -3,7 +3,7 @@
 #
 # `nonroot` (UID 65532), so a `docker run` that forgets `--user` is not root
 # on the volume the user mounted. The cost is that the database has to be
-# bind-mounted as a directory rather than a single file; README's container
+# bind-mounted as a directory rather than a single file; docs/usage.md's container
 # section documents that form and why.
 #
 # Pinned by digest, because the tag moves; the tag is kept beside it for

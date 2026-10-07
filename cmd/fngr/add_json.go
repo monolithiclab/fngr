@@ -104,7 +104,7 @@ func wireTypeError(err error) error {
 }
 
 // wireTypeName names a Go type the way JSON spells it. Kind-level only: the
-// message says which JSON *shape* was wanted, and the exact one is the README's
+// message says which JSON *shape* was wanted, and the exact one is docs/usage.md's
 // job — "array of 2-element array of string" describes `meta` no better than
 // "array" does, and reads worse.
 //

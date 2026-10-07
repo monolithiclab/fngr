@@ -91,7 +91,7 @@ const (
 	// The whole exit vocabulary: 0 for success (--help and --version included,
 	// being successful requests for help), exitError for an error fngr
 	// diagnosed and reported, exitUsage for a command line it would not parse.
-	// See "Exit codes" in the README.
+	// See "Exit codes" in docs/usage.md.
 	//
 	// It is a closed set because run returns one of these three and nothing
 	// else — not because anything maps onto them. The version that mapped was

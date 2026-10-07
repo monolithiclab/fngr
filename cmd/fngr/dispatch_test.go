@@ -921,7 +921,7 @@ func TestKongDispatch_SingleEventJSONIsAnObject(t *testing.T) {
 	}
 }
 
-// TestKongDispatch_JSONRoundTrip exercises the recipe the README promises —
+// TestKongDispatch_JSONRoundTrip exercises the recipe docs/usage.md promises —
 // `fngr --format=json | fngr add --format=json` — end to end through Kong,
 // against two separate databases whose id counters have nothing in common.
 //
