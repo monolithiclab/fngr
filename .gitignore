@@ -1,5 +1,9 @@
-.claude/
 .DS_Store
+.build/
+.claude/settings.local.json
+.claude/worktrees/
+.superpowers/
+.worktrees/
 *.log
 build/
 cover.out
