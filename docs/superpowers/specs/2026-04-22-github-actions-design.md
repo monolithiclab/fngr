@@ -3,7 +3,7 @@
 **Status:** Draft
 **Date:** 2026-04-22
 **Roadmap items:** "Project infrastructure — GitHub Actions CI" + "GitHub Actions release"
-(`docs/superpowers/roadmap.md`)
+(`ROADMAP.md`)
 
 ## Goal
 

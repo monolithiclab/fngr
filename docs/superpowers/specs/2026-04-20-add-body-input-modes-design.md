@@ -1,6 +1,6 @@
 # `add` body-input modes
 
-Sub-project of the [roadmap](../roadmap.md) "Add command ergonomics" epic.
+Sub-project of the [roadmap](../../../ROADMAP.md) "Add command ergonomics" epic.
 Three of the four bulleted items land here: multi-arg body, stdin body,
 and `$EDITOR` support. The fourth (`--format=json` import) is deliberately
 deferred to its own spec — different design surface (record schema, batch
@@ -377,7 +377,7 @@ Confirms Kong wiring stays consistent end-to-end:
 - `README.md` — Add command examples refresh: pipe usage
   (`echo done | fngr add`), editor usage (`fngr add -e`), multi-arg
   (`fngr add deployed v1.2 to staging #ops`).
-- `docs/superpowers/roadmap.md` — once shipped, mark three of the four
+- `ROADMAP.md` — once shipped, mark three of the four
   Add ergonomics items done; `--format=json` stays open under its own
   bullet.
 

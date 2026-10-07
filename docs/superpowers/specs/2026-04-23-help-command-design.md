@@ -3,7 +3,7 @@
 **Status:** Draft
 **Date:** 2026-04-23
 **Roadmap items:** "CLI surface alignment — Compact help" + "CLI surface
-alignment — `help` alias" (`docs/superpowers/roadmap.md`)
+alignment — `help` alias" (`ROADMAP.md`)
 
 ## Goal
 

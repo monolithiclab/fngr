@@ -2,7 +2,7 @@
 
 **Status:** Spec, awaiting plan.
 **Date:** 2026-04-23.
-**Roadmap entry:** `docs/superpowers/roadmap.md` → "Data model" → "Title + body
+**Roadmap entry:** `ROADMAP.md` → "Data model" → "Title + body
 split".
 
 ## Goal

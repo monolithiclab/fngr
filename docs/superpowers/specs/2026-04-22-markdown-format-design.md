@@ -2,7 +2,7 @@
 
 **Status:** Draft
 **Date:** 2026-04-22
-**Roadmap item:** "Output format polish — Markdown format" (`docs/superpowers/roadmap.md`)
+**Roadmap item:** "Output format polish — Markdown format" (`ROADMAP.md`)
 
 ## Goal
 

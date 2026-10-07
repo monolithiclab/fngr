@@ -1,6 +1,6 @@
 # `list` UX overhaul — design
 
-Sub-project **S1** of the [roadmap](../roadmap.md). Scope is the listing
+Sub-project **S1** of the [roadmap](../../../ROADMAP.md). Scope is the listing
 experience: default command, default sort, time display, pagination, and
 streaming.
 

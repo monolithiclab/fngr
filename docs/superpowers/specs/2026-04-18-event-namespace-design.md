@@ -1,6 +1,6 @@
 # `event` namespace + subcommands — design
 
-Sub-project **S2** of the [roadmap](../roadmap.md). Replaces today's `fngr
+Sub-project **S2** of the [roadmap](../../../ROADMAP.md). Replaces today's `fngr
 show` (read) and `fngr edit` (write) with a single `fngr event <id>`
 namespace. Bare `fngr event N` reads; sub-verbs mutate.
 

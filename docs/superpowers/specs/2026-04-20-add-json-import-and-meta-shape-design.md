@@ -1,6 +1,6 @@
 # `add --format=json` import + meta JSON shape flip
 
-Sub-project of the [roadmap](../roadmap.md). Closes the last
+Sub-project of the [roadmap](../../../ROADMAP.md). Closes the last
 "Add command ergonomics" item (`--format=json` import) plus pulls forward
 the "JSON tag shape" item from "Output format polish" so the input shape
 matches the output shape on day one — no transient state where

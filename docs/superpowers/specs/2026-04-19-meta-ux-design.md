@@ -1,6 +1,6 @@
 # `meta` UX + `list` filter harmonization
 
-Sub-project **S3** of the [roadmap](../roadmap.md). Originally three small
+Sub-project **S3** of the [roadmap](../../../ROADMAP.md). Originally three small
 wins in the metadata namespace; expanded to also harmonize the existing
 `list` filter onto the same `-S` / `--search` shape so the two commands
 stay consistent.
