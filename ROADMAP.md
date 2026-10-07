@@ -292,6 +292,18 @@ before it is worth the CLI surface.
   a snippet column is a listing affordance, and `json`/`csv` already
   carry the whole body.
 
+- **`-e` on `event body` / `event text`**: edit an existing event's body
+  in `$EDITOR` instead of retyping it as a shell argument; `launchEditor`
+  and `errCancel` already exist
+  ([review 2026-07-27, recommendation 9](docs/reviews/2026-07-27-deep-audit.md#feature-recommendations)).
+- **`fngr init`**: the honest way to start a project-local `.fngr.db`
+  (today `touch .fngr.db`); auto-creating one on `add` was rejected
+  ([review 2026-07-27, M11](docs/reviews/2026-07-27-deep-audit.md#m11)).
+- **`--title` / `--body` on `add`**: an escape from the `". "` split for
+  titles that open with an abbreviation, if daily use shows the
+  `event title` repair is real friction
+  ([review 2026-07-27, M10](docs/reviews/2026-07-27-deep-audit.md#m10)).
+
 ## Publishing pipeline polish
 
 Follow-ups from the v0.0.1 release rollout (full context in
