@@ -322,10 +322,10 @@ func chain(n int) []event.Event {
 }
 
 // TestTree_DeepChainAllocationIsLinear is the H2 regression guard (see
-// REVIEW.md#h2). The depths are 8× apart so the two regimes are far apart:
-// linear predicts ~8×, quadratic ~60×. The 16× ceiling sits between them,
-// clear of allocator noise in either direction — reverting to per-node string
-// concatenation measures 45.9×.
+// docs/reviews/2026-07-27-deep-audit.md#h2). The depths are 8× apart so the
+// two regimes are far apart: linear predicts ~8×, quadratic ~60×. The 16×
+// ceiling sits between them, clear of allocator noise in either direction —
+// reverting to per-node string concatenation measures 45.9×.
 //
 // Not parallel: it measures process-wide allocation.
 func TestTree_DeepChainAllocationIsLinear(t *testing.T) {

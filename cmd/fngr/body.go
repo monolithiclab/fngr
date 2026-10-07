@@ -33,8 +33,8 @@ func resolveBody(args []string, useEditor bool, io ioStreams) (string, error) {
 	switch {
 	case useEditor && !io.IsTTY:
 		// A capability check, not a content one: IsTTY is already known, so
-		// asking it costs no read. See REVIEW.md H7 for what launching an
-		// editor without a terminal did instead.
+		// asking it costs no read. See docs/reviews/2026-07-27-deep-audit.md
+		// H7 for what launching an editor without a terminal did instead.
 		return "", errEditNeedsTTY
 	case len(args) > 0 && useEditor:
 		return editBody(strings.Join(args, " "), io.Out)
