@@ -1302,3 +1302,19 @@ After all tasks land:
    - `echo '[{"text":"a"},{"parent_id":9999,"text":"b"}]' | fngr add --format=json` → errors, no rows created
 3. **`fngr list --format=json`** output now shows `meta: [["k","v"]]` not `meta: {"k":["v"]}`.
 4. **CLAUDE.md / README / roadmap** all reflect the new state.
+
+## Execution notes
+
+Reconstructed on 2026-10-07 from git history; rulings taken during execution were not recorded.
+
+**Built.** All four tasks landed on 2026-04-22: 963881a (meta JSON shape becomes `[[k,v],...]`), aa0a4d1
+(`event.AddMany`, atomic batch insert), a9376ae (`add --format=json` for single events and arrays) and ff5d0f0 (README,
+CLAUDE.md, roadmap). `AddMany`, `cmd/fngr/add_json.go` and the tuple meta shape still exist.
+
+**Diverged from the plan.** Follow-ups not in the plan: 1760d1e (per-record `author` from JSON is honoured) and
+4c108c4 (bounded stdin and JSON import inputs, also adding the 10000-record batch cap `maxJSONBatchSize`). The wire
+shape was later changed by 8b93922 (2026-04-24) and 44e1406 (2026-05-03), which replaced `text` with `title` plus
+`body`. `jsonAddInput` also accepts `id`, and 9c6e7d4 (2026-07-29) remaps `parent_id` on import so a round-trip keeps
+the tree. `AddInput` has a `ParentIndex` field, which the plan did not mention.
+
+**Deferred.** Nothing found.

@@ -808,3 +808,31 @@ Expected: `["test (ubuntu-latest)", "test (macos-latest)"]`
 - [ ] Branch protection requires both CI cells green before merging to `main`.
 - [ ] README documents `brew install` and `docker run` paths plus container caveats.
 - [ ] Roadmap entries moved to Done; "Project infrastructure" section removed.
+
+## Execution notes
+
+Reconstructed on 2026-10-07 from git history; rulings taken during execution were not recorded.
+
+**Built.** Tasks 1-4, 6 and 7 landed on 2026-04-22 as one commit each: `LICENSE` (b229295), the distroless `Dockerfile`
+(53c5f5f), `.goreleaser.yaml` (f212607), the CI workflow (7238a54), the release workflow (8f6bf48) and the README and
+roadmap update (6869e10). Task 8 left tags `v0.0.1-rc1` and `v0.0.1-rc2` (2026-04-22) and the stable `v0.0.1`
+(2026-04-23); later tags run to `v0.0.4`. Release fixes followed during the rollout: 289245c (replace existing artifacts
+on partial-release reruns), 0d2b96c and 4e06cb8 (a temporary `HOMEBREW_TAP_TOKEN` debug step, added then removed). Task
+5 (tap repo, PAT, secret) is external setup with no commit; the release and `docs/publishing.md` assume it exists.
+
+**Diverged from the plan.**
+- 753a0b4 (same day) bumped the action majors and set `changelog.abbrev: 7`; bdc3d24 pinned cosign-installer to v4.1.1,
+  1b2c08f reverted it to v3, and 5b14443 dropped the SHA from the changelog.
+- It deliberately kept `dockers:` and `brews:` instead of moving to `dockers_v2:` and `homebrew_casks:`; the reasons are
+  inline in `.goreleaser.yaml`.
+- e9dc1dd (2026-08-07) pinned every network dependency (actions to SHAs, images to digests).
+- e0f02c5 (2026-10-07) made CI run exactly `make ci` rather than `make lint test`, and added Dependabot.
+- 599f9fd (2026-10-07) replaced the detached `SHA256SUMS.sig`/`.pem` pair with one `SHA256SUMS.sigstore.json` bundle
+  (cosign v3), added a Homebrew token preflight and bumped GoReleaser to v2.18.2.
+- The roadmap the plan edits moved to the root `ROADMAP.md` (6e6a488), and `PUBLISHING.md` became
+  `docs/publishing.md`.
+- c7952d4 changed the licence holder to Monolithic Lab.
+
+**Deferred.** The `dockers_v2:` and `homebrew_formulas:` migrations and the `Formula/` tap directory went to the
+"Publishing pipeline polish" section of `ROADMAP.md`. Whether branch protection (self-review checklist) was enabled is
+not found in git history; `docs/publishing.md` documents it as a step.

@@ -956,3 +956,19 @@ EOF
 - [ ] `CLAUDE.md` render bullet mentions markdown.
 - [ ] `README.md` Quick start has a markdown example.
 - [ ] No regression in existing format tests (tree/flat/json/csv/text).
+
+## Execution notes
+
+Reconstructed on 2026-10-07 from git history; rulings taken during execution were not recorded.
+
+**Built.** All four tasks landed on 2026-04-22: 94e19ce (buffered `Markdown` renderer), 34e93ff (`MarkdownStream`),
+f389170 (`--format=md` wired into `list` and `event N`) and 9eea9f4 (README, CLAUDE.md, roadmap). Two cleanups followed
+the same day: 6233d5f (final-review nits) and 596cb02 (post-simplify cleanups). `internal/render/markdown.go` still
+holds both functions, and `ROADMAP.md` ("Done") lists Markdown output as shipped.
+
+**Diverged from the plan.** Later commits changed the output: 8b93922 (2026-04-24, title plus body schema), 632d740
+(2026-06-11, the body renders as continuation lines) and e4aa747 (2026-08-07, one writer per format, aliases and an
+empty-result note, which reworked the dispatchers wired in Task 3). 06d6ad4 (2026-08-03) bounded and escaped the
+renderer output.
+
+**Deferred.** Nothing found.

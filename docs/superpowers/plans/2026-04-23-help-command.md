@@ -402,3 +402,22 @@ EOF
 - [ ] `make lint` passes; no new warnings.
 - [ ] `README.md` mentions `fngr help` in Quick start.
 - [ ] `docs/superpowers/roadmap.md` `Done` section has the new bullet; the old `CLI surface alignment` section is gone.
+
+## Execution notes
+
+Reconstructed on 2026-10-07 from git history; rulings taken during execution were not recorded.
+
+**Built.** Both tasks landed on 2026-04-23. Task 1 is e4d6d6d (`cmd/fngr/help.go`, `help_test.go`, the `Help` field and
+Compact help in `main.go`, three `dispatch_test.go` rows). Task 2 is 06a7aaa (README Quick start examples and the
+roadmap move to Done).
+
+**Diverged from the plan.**
+- `HelpCmd.Run` gained `checkCommandPath` (3591e19, 2026-08-07), so `fngr help bogus` names the valid commands instead
+  of printing `list`'s usage block.
+- The plan's `db.Open` skip for help paths was superseded by 50e52d1 (2026-08-10): `main` binds the store lazily, so a
+  command whose `Run` does not ask for one opens no database. `HelpCmd.Run` still takes no store for that reason.
+- The compact layout now lives in `var helpOptions = kong.HelpOptions{Compact: true}` in `main.go`.
+- The roadmap edited by Task 2 is now the root `ROADMAP.md` (6e6a488); its Done entry for "CLI surface alignment" is
+  intact.
+
+**Deferred.** Nothing found.

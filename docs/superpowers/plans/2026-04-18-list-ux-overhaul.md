@@ -1905,3 +1905,21 @@ Plan complete and saved to `docs/superpowers/plans/2026-04-18-list-ux-overhaul.m
 2. **Inline Execution** — Execute tasks in this session using executing-plans, batch execution with checkpoints.
 
 Which approach?
+
+## Execution notes
+
+Reconstructed on 2026-10-07 from git history; rulings taken during execution were not recorded.
+
+**Built.** Tasks 1 to 10 landed on 2026-04-22 in order: `timefmt.FormatRelative` (3e762fc), render using it (097e8f3),
+newest-first default with `-r`/`--reverse` (43682ac), `event.ListSeq` (de0fed6), `Store.ListSeq` (152e534), streaming
+Flat/CSV/JSON renderers and `EventsStream` (8e7bc52), `list` streaming through them (df32930), `withPager` and
+`newPagerCmd` (59a8e7e), the pager wired into `list` with `--no-pager` (db92d03) and the default command (d397251).
+Spec and plan are 1db631d and f84db25. Today's code still has `ListCmd.Reverse`, `ListCmd.NoPager`, `withPager` and
+`ListSeq`, and `List` carries `default:"withargs"`.
+
+**Diverged from the plan.** Two fixes followed their tasks: 678482a (dropped the `nowFunc` mutex, fixtures pinned to
+local midnight) and 9280d2b (made `ListSeq` actually stream, test DB moved to a temp file). ecf0056 added tests for
+the `ListSeq` error path and pager tokenization. `ListOpts.Desc` became `Ascending` as planned in Task 3. Task 11
+(README and CLAUDE.md, uncommitted) has no dedicated commit.
+
+**Deferred.** Nothing found.

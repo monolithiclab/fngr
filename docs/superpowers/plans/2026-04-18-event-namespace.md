@@ -2556,3 +2556,22 @@ Plan complete and saved to `docs/superpowers/plans/2026-04-18-event-namespace.md
 2. **Inline Execution** — Execute tasks in this session using executing-plans, batch execution with checkpoints.
 
 Which approach?
+
+## Execution notes
+
+Reconstructed on 2026-10-07 from git history; rulings taken during execution were not recorded.
+
+**Built.** Tasks 1 to 12 landed on 2026-04-22, one commit each: migration 2 with the UNIQUE index (b3b3265),
+`timefmt.ParsePartial` (f82d073), `parse.MetaArg` (0ae769f), the `rebuildEventFTS` helper (9058b12), `Reparent` and
+`ErrCycle` (b757288), `AddTags` (48cd7fd), `RemoveTags` (0773a6f), body-tag sync in `Update` (7779aa2), the extended
+`eventStore` interface (ff4e419), `fngr event show` replacing `show` (08ae505), the `text`/`time`/`date` verbs replacing
+`edit` (bf13572) and `attach`/`detach`/`tag`/`untag` (6b5b444). Spec and plan commits are 3108150, 44f3f3d, 95f5a5d and
+77d7f77. ROADMAP.md lists the namespace under "Done" and notes `edit` and `show` were removed.
+
+**Diverged from the plan.** d9eae2d amended the spec for Kong's verb-before-ID constraint, after the read path
+landed. Two follow-ups were not in the plan: 7df72e1 (error prefix for `time`/`date`) and 5ebee19 (a
+`requireEventExists` helper shared by the mutation paths). Task 13 (README and CLAUDE.md, uncommitted) has no
+dedicated commit; documentation went in 1f141bd and f11258b. Today's `cmd/fngr/event.go` also has `title` and `body`
+verbs, added by a later plan (title-body split).
+
+**Deferred.** Nothing found.

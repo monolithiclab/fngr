@@ -2152,3 +2152,25 @@ After every task is complete and `make ci` is green, verify:
 - [ ] `fngr event body <id> ""` clears the body.
 - [ ] `fngr --format=json | fngr add --format=json` round-trips.
 - [ ] `fngr -S '#ops'` still matches events tagged `ops`.
+
+## Execution notes
+
+Reconstructed on 2026-10-07 from git history; rulings taken during execution were not recorded.
+
+**Built.** All ten tasks landed, one commit each, in order: 2ada4b8 (`SplitTitleBody`), 620c1fc (`FTSContent` takes
+title, body, meta), 4788528 (migration 3), 8b93922 (data layer), b0c3e90 (`add` split), 44e1406 (JSON wire shape),
+0f7e89f (`event title`/`body`/`text` verbs), 57fe2b5 (renderers), 632d740 (Markdown continuation lines) and e4ee83d
+(README and roadmap). They span 2026-04-23 to 2026-06-11; the plan and spec commits are 7f63888 and 7069651.
+
+**Diverged from the plan.**
+- Migration 3's SQL split could not reproduce `SplitTitleBody` for tabs, newlines and Unicode spaces; 7d9ce21
+  (2026-07-29) added migration 4, which re-derives titles and bodies in Go.
+- `parse.FTSContent` no longer exists. 1ed5ab9 (2026-08-05) split `events_fts` into content and meta columns (migration
+  6) behind `parse.FTSColumns`.
+- Other follow-ups to the same surface: 2cd7d4c (FTS resync on meta rename/delete), 9225441 (empty-title error
+  wording) and 5c88ad1 (inline time prefix in `add` titles).
+- `SplitTitleBody` and the `event title`/`body`/`text` verbs are still in the code.
+
+**Deferred.** The spec's out-of-scope items (`title:`/`body:` filter operators, a body-presence marker, a CHECK
+constraint) have no commit and no `ROADMAP.md` entry of their own. `ROADMAP.md` does carry a `--title` / `--body` flags
+idea on `add`, as an escape from the `". "` split.

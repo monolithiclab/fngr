@@ -1267,3 +1267,20 @@ After all tasks land:
    - `echo body | fngr add foo` → errors with "ambiguous"
 3. **`go.mod`**: `golang.org/x/term` listed as direct require.
 4. **CLAUDE.md / README / roadmap**: all reflect the new state.
+
+## Execution notes
+
+Reconstructed on 2026-10-07 from git history; rulings taken during execution were not recorded.
+
+**Built.** Tasks 1 to 6 landed on 2026-04-22: e7d1e05 (`ioStreams` gains `Err` and `IsTTY`), 2e5633c (`body.go`
+dispatch), 29af981 (`realLaunchEditor`), cfd97d4 (`AddCmd` uses `resolveBody`), 27b0f91 (dispatch tests) and 85ae3fb
+(docs and `golang.org/x/term` as a direct dependency). `resolveBody`, `readStdin`, `realLaunchEditor` and `errCancel`
+still exist in `cmd/fngr/body.go`, and `go.mod` lists `x/term` directly.
+
+**Diverged from the plan.** Follow-up fixes not in the plan: 74d70dd (reject `fngr add ""`), e37049a (pager keeps
+`Err` and `IsTTY`) and 4c108c4 (bound stdin input). Task 7 has no commit of its own ("docs: mark add body-input modes
+done in roadmap" is not in the log); the roadmap edit is part of 85ae3fb. Later changes reshaped the dispatch:
+b99f55f (2026-06-16, detect piped stdin by data), 071c77e (2026-08-04, `-e` requires a terminal, adding
+`errEditNeedsTTY`) and db19d05 (2026-08-07, `$EDITOR` tokenized like `$PAGER`).
+
+**Deferred.** Nothing found.

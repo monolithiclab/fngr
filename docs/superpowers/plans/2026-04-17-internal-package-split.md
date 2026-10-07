@@ -3066,3 +3066,19 @@ Replace the Architecture section with:
 git add CLAUDE.md
 git commit -m "docs: update CLAUDE.md architecture for new package structure"
 ```
+
+## Execution notes
+
+Reconstructed on 2026-10-07 from git history; rulings taken during execution were not recorded.
+
+**Built.** All seven tasks landed on 2026-04-22, one commit each, with the plan's subjects: `internal/parse`
+(3e3aed1), `internal/db` (986273d), `internal/event` (6a4683e), `internal/render` (931fe0d), `cmd/fngr` updated to the
+new packages (8e7edcf), the old flat files removed (82f8571) and the CLAUDE.md architecture section updated (30a8e1b).
+The spec and plan are e77bbfd and 129ca25. Today's tree still has `internal/db`, `event`, `parse` and `render`.
+
+**Diverged from the plan.** `internal/timefmt` now sits beside the four packages (c5c7df6, centralised time parsing),
+which the plan does not name. `internal/event` has since grown beyond the plan's files (`mutate.go`, `query.go`,
+`tx.go`, `meta.go`, `filter.go`) and `internal/render` gained Markdown output (`markdown.go`). Beyond these, nothing
+found in the commit stream contradicts the plan.
+
+**Deferred.** Nothing found.
