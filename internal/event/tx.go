@@ -5,7 +5,7 @@
 // event's rows, and they stay there because they are about metadata. The rule
 // is what the name buys: internal.go, which this file started out as, named a
 // visibility every declaration in a package under internal/ already has, so
-// nothing could fail it. See CLAUDE.md for the longer version.
+// nothing could fail it. See AGENTS.md for the longer version.
 
 package event
 

@@ -2,7 +2,7 @@
 
 A file-by-file walkthrough of fngr: what each file owns and, above all, why it is shaped the way it is. Most entries
 record the bug or review finding that forced the shape, so read the entry before "simplifying" the code it describes.
-Moved out of `CLAUDE.md` on 2026-10-07; identifiers were checked against the code then.
+Moved out of `AGENTS.md` on 2026-10-07; identifiers were checked against the code then.
 
 fngr is a Kong CLI (`cmd/fngr`) over a pure-Go SQLite store (`modernc.org/sqlite`, no CGo). `internal/db` opens and
 migrates the database, `internal/event` is the data-access layer, `internal/parse` the metadata and text rules,

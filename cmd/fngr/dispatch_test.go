@@ -806,7 +806,7 @@ func TestKongDispatch_UnstorableMetaRefusedEverywhere(t *testing.T) {
 }
 
 // TestKongDispatch_LegacyMetaStaysRemovable is the other half of the rule
-// above. Every released build could write `k=` rows, and CLAUDE.md names
+// above. Every released build could write `k=` rows, and AGENTS.md names
 // `event untag 'k='` as the only verb that can name one — so gating the
 // *naming* verbs on the same rule would make exactly the rows this change
 // stops creating into rows nothing can remove.

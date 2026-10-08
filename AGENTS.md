@@ -1,4 +1,4 @@
-# CLAUDE.md
+# AGENTS.md
 
 fngr is a Go command-line journal: Kong for parsing (`cmd/fngr`), pure-Go SQLite (`modernc.org/sqlite`, no CGo) for
 storage, with event trees, `key=value` metadata and FTS5 search (`internal/*`). It is released through GoReleaser to
