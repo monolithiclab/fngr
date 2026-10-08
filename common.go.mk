@@ -1,5 +1,5 @@
 # Monolithic Lab shared Makefile machinery — Go layer, included after common.mk.
-# Canonical copy: ~/.claude/skills/go-cli-development/go.mk. Never edit a repo's copy in place: change the
+# Canonical copy: ~/.claude/skills/go-cli-development/common.go.mk. Never edit a repo's copy in place: change the
 # canonical file, then re-copy it into every repo that includes it (they must stay byte-identical).
 # Repo-specific values go in the repo Makefile, as plain `VAR = value` lines after the includes.
 

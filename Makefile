@@ -1,7 +1,7 @@
 include common.mk
-include go.mk
+include common.go.mk
 
-# Set explicitly: go.mk derives it from the directory name, which is not fngr in a worktree.
+# Set explicitly: common.go.mk derives it from the directory name, which is not fngr in a worktree.
 BINARY = fngr
 
 .PHONY: run

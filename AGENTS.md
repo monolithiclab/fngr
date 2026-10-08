@@ -23,7 +23,7 @@ below) for the reasoning, and `make help` for every command.
 - **The exit status is a closed set**: `exitOK` (0), `exitError` (1), `exitUsage` (2). `run` returns one of them, and
   nothing calls `os.Exit` but `main`, nor `kong.Parse` or `FatalIfErrorf` at all. Both skip the deferred `Close`, and
   `FatalIfErrorf` leaked a child's exit code (an `$EDITOR` exiting 3) as fngr's own.
-- **`common.mk`, `go.mk` and `.golangci.yml` are byte-identical copies** of the lab skills' canonical files. Change
+- **`common.mk`, `common.go.mk` and `.golangci.yml` are byte-identical copies** of the lab skills' canonical files. Change
   them there and re-sync (`lab-standards`: `make sync REPO=...`), never in place.
 
 ## Constraints that look like bugs
@@ -53,7 +53,7 @@ below) for the reasoning, and `make help` for every command.
 
 ## Traps `make ci` won't explain
 
-- **Go is pinned by go.mod's `toolchain` line**, which `go.mk` exports as `GOTOOLCHAIN`, so `make` and CI run the same
+- **Go is pinned by go.mod's `toolchain` line**, which `common.go.mk` exports as `GOTOOLCHAIN`, so `make` and CI run the same
   patch. A plain `go test` uses your local Go; `GOTOOLCHAIN=local make test` is how to try a newer one on purpose.
   Encoding/json error text changed between 1.26 and 1.27, so assert the facts, not the std-lib wording.
 - **Tests use per-test temp-file databases**, never bare `:memory:`: each pooled connection would see its own empty

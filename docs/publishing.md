@@ -305,7 +305,7 @@ an OIDC signing identity handed to whoever can move it — but it also
 means the pins go stale silently. Refresh them on purpose, in their
 own commit, and let CI prove the new set works.
 
-The lab's shared `go.mk` carries a `lint-pins` step, part of `lint` so
+The lab's shared `common.go.mk` carries a `lint-pins` step, part of `lint` so
 `make ci` and CI both run it, that fails on an action without a
 `@<40-hex> # vX.Y.Z` suffix, on a `FROM` without a digest, and on the
 same action pinned to two different SHAs across the workflows — it is
@@ -358,7 +358,7 @@ same versions with nothing installed into `GOPATH/bin`. Bump one with
 `go get -tool -modfile=tools/go.mod <module>@<version>` — never `go mod
 tidy -modfile=tools/go.mod`, which pulls this module's own dependencies
 into the tools module. Go itself is pinned by `go.mod`'s `toolchain`
-line, which `go.mk` exports as `GOTOOLCHAIN` and CI reads through
+line, which `common.go.mk` exports as `GOTOOLCHAIN` and CI reads through
 `go-version-file`.
 
 ---
