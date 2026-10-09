@@ -1,5 +1,5 @@
 # Monolithic Lab golangci-lint v2 config: the one Go linter run. It absorbs gofmt -s, go vet, staticcheck (ST1000
-# on), gosec and gocritic's shadow checks. Canonical copy: ~/.claude/skills/go-cli-development/golangci.yml.
+# on), gosec and gocritic's shadow checks. Canonical copy: ~/.claude/skills/lab-go-app/golangci.yml.
 version: "2"
 linters:
   enable:
