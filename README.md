@@ -89,7 +89,7 @@ make ci           # the gate CI runs: golangci-lint, govulncheck, go mod tidy -d
 | [docs/architecture.md](docs/architecture.md) | File-by-file design and the reasons behind it |
 | [docs/publishing.md](docs/publishing.md) | The release pipeline, pin refreshes, and its gotchas |
 | [docs/decisions.md](docs/decisions.md) | Decision log |
-| [docs/superpowers/](docs/superpowers/) | Dated design specs and implementation plans |
+| [docs/](docs/) | Dated design specs and implementation plans |
 | [docs/reviews/](docs/reviews/) | Review rounds |
 | [ROADMAP.md](ROADMAP.md) | Ideas, parked follow-ups and open review findings |
 

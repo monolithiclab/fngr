@@ -26,14 +26,14 @@ var errEditNeedsTTY = errors.New("--edit needs a terminal; stdin is not a TTY")
 var launchEditor = realLaunchEditor
 
 // resolveBody applies the body-source dispatch table from the spec
-// (docs/superpowers/specs/2026-04-20-add-body-input-modes-design.md).
+// (docs/specs/20260420.add-body-input-modes-design.md).
 // Returns the body string or an error. errCancel signals a deliberate
 // editor cancel.
 func resolveBody(args []string, useEditor bool, streams ioStreams) (string, error) {
 	switch {
 	case useEditor && !streams.IsTTY:
 		// A capability check, not a content one: IsTTY is already known, so
-		// asking it costs no read. See docs/reviews/2026-07-27-deep-audit.md
+		// asking it costs no read. See docs/reviews/20260727.deep-audit.md
 		// H7 for what launching an editor without a terminal did instead.
 		return "", errEditNeedsTTY
 	case len(args) > 0 && useEditor:

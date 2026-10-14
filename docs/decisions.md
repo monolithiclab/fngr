@@ -8,16 +8,16 @@ records what changed, the evidence for it, and what it costs if it proves wrong.
 Before this log existed, fngr recorded its decisions beside the work they shaped. They stay there, and this entry
 indexes them rather than copying them:
 
-- **Each design spec** under `docs/superpowers/specs/`, in its "Goals", "Non-goals" / "Out of scope" and
-  "Architecture" sections. The most load-bearing are in `2026-04-16-cli-design.md` (SQLite via modernc, Kong, the
-  data model), `2026-04-18-list-ux-overhaul-design.md` (`fngr` ≡ `fngr list`, streaming renderers, the pager),
-  `2026-04-20-add-json-import-and-meta-shape-design.md` (the `[[key, value], ...]` meta wire shape),
-  `2026-04-22-github-actions-design.md` "Why GoReleaser", and `2026-04-23-title-body-split-design.md` "Split rule".
+- **Each design spec** under `docs/specs/`, in its "Goals", "Non-goals" / "Out of scope" and
+  "Architecture" sections. The most load-bearing are in `20260416.cli-design.md` (SQLite via modernc, Kong, the
+  data model), `20260418.list-ux-overhaul-design.md` (`fngr` ≡ `fngr list`, streaming renderers, the pager),
+  `20260420.add-json-import-and-meta-shape-design.md` (the `[[key, value], ...]` meta wire shape),
+  `20260422.github-actions-design.md` "Why GoReleaser", and `20260423.title-body-split-design.md` "Split rule".
 - **`docs/architecture.md`**: every file's entry records why its code has the shape it has, usually naming the bug or
   review finding that forced it. Read the entry before changing the code it describes.
 - **`docs/publishing.md`** "Gotchas": the release-pipeline decisions (repo-level tap secret, the `nonroot` image and
   directory mounts, keeping GoReleaser's deprecated `dockers:` and `brews:` keys).
-- **`docs/reviews/2026-07-27-deep-audit.md`**: the won't-fix and documented-not-fixed rulings on each finding.
+- **`docs/reviews/20260727.deep-audit.md`**: the won't-fix and documented-not-fixed rulings on each finding.
 
 ## D2 — 2026-10-07: golangci-lint is the only Go linter
 

@@ -93,7 +93,7 @@ below) for the reasoning, and `make help` for every command.
 | [docs/architecture.md](docs/architecture.md) | File by file: what each owns and why it is shaped that way |
 | [docs/publishing.md](docs/publishing.md) | The release pipeline, refreshing the pins, release gotchas |
 | [docs/decisions.md](docs/decisions.md) | Decision log (D-numbered, append-only) |
-| `docs/superpowers/specs/`, `plans/` | Dated design specs and their plans, each ending in execution notes |
+| `docs/specs/`, `plans/` | Dated design specs and their plans, each ending in execution notes |
 | `docs/reviews/` | Review rounds; their open findings live in ROADMAP.md |
 | [ROADMAP.md](ROADMAP.md) | Ideas, parked follow-ups, open review findings |
 
