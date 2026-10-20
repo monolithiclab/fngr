@@ -11,6 +11,14 @@ VULNCHECK_PACKAGES ?= ./...
 COVERAGE_MIN ?=
 BENCH_COUNT ?= 6
 TOOLS ?= go tool -modfile=tools/go.mod
+# make test's flags. A repo whose suite the race detector slows past its budget sets TEST_FLAGS = and runs -race in
+# a separate target and CI job instead.
+TEST_FLAGS ?= -race
+# Extra golangci-lint arguments, e.g. GOLANGCI_ARGS = --build-tags e2e to lint tagged test files too.
+GOLANGCI_ARGS ?=
+
+# A race-built binary sleeps 1 s at exit by default (atexit_sleep_ms): a second per tested package.
+export GORACE ?= atexit_sleep_ms=0
 
 # go.mod's toolchain line (else a full x.y.z go directive) is only a minimum: a newer local Go would still win, so
 # pin it exactly. `go mod tidy` drops a toolchain line equal to the go directive, hence the fallback.
@@ -31,8 +39,8 @@ install: ## Install the binary into $GOBIN
 	@go install -ldflags '$(LDFLAGS)' $(MAIN)
 
 .PHONY: test
-test: ## Run the tests with -race and coverage (.covignore filters the profile, COVERAGE_MIN=<pct> sets a floor)
-	@go test -race -coverprofile=cover.out ./...
+test: ## Run the tests (TEST_FLAGS, default -race) with coverage (.covignore filters the profile, COVERAGE_MIN=<pct> sets a floor)
+	@go test $(TEST_FLAGS) -coverprofile=cover.out ./...
 	@if [ -f .covignore ]; then \
 		patterns=$$(grep -vE '^[[:space:]]*(#|$$)' .covignore || true); \
 		if [ -n "$$patterns" ]; then \
@@ -66,7 +74,7 @@ lint: lint-golangci lint-vulncheck lint-mod lint-pins ## Run every non-mutating 
 # One .golangci.yml runs gofmt -s, govet, staticcheck (ST1000 on), gosec and gocritic's shadow checks.
 .PHONY: lint-golangci
 lint-golangci:
-	@$(TOOLS) golangci-lint run --allow-serial-runners ./...
+	@$(TOOLS) golangci-lint run --allow-serial-runners $(GOLANGCI_ARGS) ./...
 
 .PHONY: lint-vulncheck
 lint-vulncheck:
