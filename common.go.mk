@@ -3,7 +3,8 @@
 # canonical file, then re-copy it into every repo that includes it (they must stay byte-identical).
 # Repo-specific values go in the repo Makefile, as plain `VAR = value` lines after the includes.
 
-BINARY ?= $(notdir $(CURDIR))
+# From the module path, not the directory name, which is the branch name in a worktree.
+BINARY ?= $(notdir $(shell sed -n 's/^module //p' go.mod))
 MAIN ?= ./cmd/$(BINARY)
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS ?= -s -w -X main.version=$(VERSION)
