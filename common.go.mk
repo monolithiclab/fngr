@@ -16,7 +16,8 @@ TOOLS ?= go tool -modfile=tools/go.mod
 TEST_FLAGS ?= -race
 # Extra golangci-lint arguments, e.g. GOLANGCI_ARGS = --build-tags e2e to lint tagged test files too.
 GOLANGCI_ARGS ?=
-# Extra targets the gate runs after lint and test, e.g. CI_EXTRA = test-js for a front-end suite.
+# Extra targets the gate runs after lint and test, e.g. CI_EXTRA = test-js for a front-end suite. Set it anywhere
+# (the recipe expands it at run time); `make ci CI_EXTRA=` skips them.
 CI_EXTRA ?=
 
 # A race-built binary sleeps 1 s at exit by default (atexit_sleep_ms): a second per tested package.
@@ -114,7 +115,8 @@ lint-fix: ## Apply every auto-fix: go fix, then gofmt -s
 	@$(GO_FILES) | xargs -0 gofmt -s -w
 
 .PHONY: ci
-ci: lint test $(CI_EXTRA) ## The gate: lint and test, never mutating (what CI runs)
+ci: lint test ## The gate: lint, test and any CI_EXTRA targets, never mutating (what CI runs)
+	@$(if $(strip $(CI_EXTRA)),$(MAKE) --no-print-directory $(CI_EXTRA))
 
 .PHONY: update-deps
 update-deps: ## Update every dependency, tidy, then show the go.mod diff (go get rewrites the go directive)
