@@ -102,4 +102,4 @@ below) for the reasoning, and `make help` for every command.
 1. Minimal change, with tests, plus the owning doc in the same commit (`docs/usage.md` for behaviour,
    `docs/architecture.md` for structure or the reason behind it).
 2. `make ci` green.
-3. Commit `type(scope): summary` with the session's trailers; push only when asked.
+3. Commit `type(scope): summary` with the session's trailers, then push.
