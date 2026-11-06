@@ -1,9 +1,10 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
+  workflow_dispatch:
+  # release.yml runs this on a tag, before it publishes.
+  workflow_call:
 
 concurrency:
   group: ci-${{ github.ref }}
